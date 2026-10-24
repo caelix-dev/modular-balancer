@@ -1,0 +1,28 @@
+F6 save/load check (Task 5, save_load_keeps_items), Factorio 2.1.23, vanilla preset, express tier.
+This is a hand-written transcript of the MCP calls and of the exec_lua results (the JSON
+fields restated as text), not raw tool output. The numbers are copied from the results.
+MCP fdev instance "mb-t5": server_start with dev_mods = modular-balancer, portal_mods = factorio-test
+(mb-spikes off: spikes/local-enable.lua absent). Script: tests/game/remote.lua (remote interface "mb-test").
+Rig: a 3:5 network placed by builder.place on mb-hidden (138 hidden entities: 28 splitters,
+110 linked belts), 3 finite sources of 1000 iron plates each, 5 counting sink chests on nauvis.
+"count" sums: sources (chests), visible (harness belts, edges, loaders), network (all hidden
+entities' transport lines), delivered (sink chests). linked = network inputs/outputs whose
+linked_belt_neighbour is on nauvis (8 expected).
+
+exec_lua remote.call("mb-test", "build")  -> built, 138 entities, region {0, 0}
+run_ticks 900
+count, tick 918: sources 972, visible 234, network 586, delivered 1208 (outputs 240 242 242 243 241),
+  total 3000 of 3000, linked 8, hidden_for_player true
+game.server_save("t5-flow"); server_stop; server_start save = E:\factorio-dev\instances\mb-t5\saves\t5-flow.zip
+count, tick 918 after load: identical (sources 972, visible 234, network 586, delivered 1208,
+  outputs 240 242 242 243 241, total 3000, linked 8, hidden_for_player true)
+run_ticks 600 (tick 1518): sources 0, visible 115, network 328, delivered 2557
+  (outputs 510 512 512 512 511), total 3000: flow continued after the load
+remote.call("mb-test", "block", true)  (all 5 sink loaders disabled_by_script)
+run_ticks 300, count, tick 1818: sources 0, visible 200, network 243, delivered 2557, total 3000
+game.server_save("t5-blocked"); server_stop; server_start save = ...\mb-t5\saves\t5-blocked.zip
+count, tick 1818 after load: identical (visible 200, network 243, delivered 2557, total 3000, linked 8)
+remote.call("mb-test", "block", false); run_ticks 1200
+count, tick 3018: sources 0, visible 0, network 0, delivered 3000 (outputs 606 595 598 594 607),
+  total 3000: every item left the network after release, nothing circulates or is stuck in
+  the loops (the per-output spread at the end is the tail of a finite batch, not a steady state)

@@ -1,0 +1,67 @@
+S2 tier belt turbo-transport-belt, full belt 60 items/s; hidden surface hidden for player: true
+F2 throughput over 3600 ticks: across surfaces 60.000, one surface 60.000 items/s (full belt 60)
+F3 proxy target on mb-spike-hidden; proxy shows 100 items; inserter pickup_target nil
+F3 after 300 ticks: 100 moved to the nauvis chest, 0 left in the hidden chest
+F3 chest1 free: A 30.000, inserters 30.000 items/s (half 30.0); per inserter chest 340 / 340 / 1354
+F3 chest1 slow (one inserter, hand size 1): A 57.500, inserter 2.500, sum 60.000 items/s
+F3 chest1 restarted: A 30.000, inserters 30.000 items/s
+F3 chest1 output A blocked: A 0.000, inserters 60.000 items/s; per inserter chest 1609 / 2114 / 4860
+F3 belt free: A 30.000, inserters 30.000 items/s (half 30.0); per inserter chest 453 / 1056 / 516
+F3 belt slow (one inserter, hand size 1): A 57.267, inserter 2.717, sum 59.983 items/s
+F3 belt restarted: A 30.000, inserters 30.000 items/s
+F3 belt output A blocked: A 0.000, inserters 47.000 items/s; per inserter chest 2206 / 3264 / 2132
+F3 mixed lanes chest1: iron A 15.000 B 15.000, cable A 25.000 B 5.000 items/s; buffer and filters at the end {{{count = 5, name = "iron-plate", quality = "normal"}}, "none"}
+F3 mixed lanes chest2: iron A 15.000 B 15.000, cable A 15.000 B 15.000 items/s; buffer and filters at the end {{{count = 95, name = "iron-plate", quality = "normal"}, {count = 4, name = "copper-cable", quality = "normal"}}, "none"}
+F3 mixed lanes filtered: iron A 30.000 B 0.000, cable A 15.000 B 15.000 items/s; buffer and filters at the end {{{count = 100, name = "iron-plate", quality = "normal"}, {count = 4, name = "copper-cable", quality = "normal"}}, {{name = "iron-plate"}, {name = "copper-cable"}}}
+F3 mixed lanes belt: iron A 15.000 B 15.033, cable A 15.000 B 15.000 items/s; buffer and filters at the end -
+F3 mixed mixed chest1: iron A 8.833 B 8.867, cable A 6.167 B 6.183 items/s; buffer and filters at the end {{{count = 2, name = "copper-cable", quality = "normal"}}, "none"}
+F3 mixed mixed chest2: iron A 8.833 B 8.833, cable A 6.167 B 6.167 items/s; buffer and filters at the end {{{count = 2, name = "copper-cable", quality = "normal"}}, "none"}
+F3 mixed mixed filtered: iron A 8.833 B 8.833, cable A 6.167 B 6.167 items/s; buffer and filters at the end {{{count = 3, name = "iron-plate", quality = "normal"}, {count = 2, name = "copper-cable", quality = "normal"}}, {{name = "iron-plate"}, {name = "copper-cable"}}}
+F3 mixed mixed belt: iron A 8.833 B 8.833, cable A 6.167 B 6.167 items/s; buffer and filters at the end -
+F3 mixed alternating belt: iron A 7.500 B 0.000, cable A 0.000 B 7.500 items/s; buffer and filters at the end -
+F3 assembler lanes chest1: 0.000 circuits/s over 3600 ticks (max 1.5); buffer {{count = 100, name = "iron-plate", quality = "normal"}}; assembler status item_ingredient_shortage
+F3 assembler lanes chest2: 1.500 circuits/s over 3600 ticks (max 1.5); buffer {{count = 100, name = "iron-plate", quality = "normal"}, {count = 200, name = "copper-cable", quality = "normal"}}; assembler status working
+F3 assembler lanes filtered: 1.500 circuits/s over 3600 ticks (max 1.5); buffer {{count = 100, name = "iron-plate", quality = "normal"}, {count = 200, name = "copper-cable", quality = "normal"}}; assembler status working
+F3 assembler lanes belt: 1.500 circuits/s over 3600 ticks (max 1.5); buffer -; assembler status working
+F3 assembler lanes plain: 1.500 circuits/s over 3600 ticks (max 1.5); buffer -; assembler status working
+F3 assembler lanes_late chest1: 0.000 circuits/s over 3600 ticks (max 1.5); buffer {{count = 100, name = "iron-plate", quality = "normal"}}; assembler status item_ingredient_shortage
+F3 assembler lanes_late chest2: 0.000 circuits/s over 3600 ticks (max 1.5); buffer {{count = 200, name = "iron-plate", quality = "normal"}}; assembler status item_ingredient_shortage
+F3 assembler lanes_late filtered: 1.500 circuits/s over 3600 ticks (max 1.5); buffer {{count = 100, name = "iron-plate", quality = "normal"}, {count = 200, name = "copper-cable", quality = "normal"}}; assembler status working
+F3 assembler lanes_late belt: 1.500 circuits/s over 3600 ticks (max 1.5); buffer -; assembler status working
+F3 assembler lanes_late plain: 1.500 circuits/s over 3600 ticks (max 1.5); buffer -; assembler status working
+F3 assembler mixed chest1: 0.000 circuits/s over 3600 ticks (max 1.5); buffer {{count = 5, name = "iron-plate", quality = "normal"}}; assembler status item_ingredient_shortage
+F3 assembler mixed chest2: 0.117 circuits/s over 3600 ticks (max 1.5); buffer {{count = 93, name = "iron-plate", quality = "normal"}}; assembler status item_ingredient_shortage
+F3 assembler mixed filtered: 0.167 circuits/s over 3600 ticks (max 1.5); buffer {{count = 100, name = "iron-plate", quality = "normal"}}; assembler status item_ingredient_shortage
+F3 assembler mixed belt: 0.000 circuits/s over 3600 ticks (max 1.5); buffer -; assembler status item_ingredient_shortage
+F3 assembler mixed plain: 0.000 circuits/s over 3600 ticks (max 1.5); buffer -; assembler status item_ingredient_shortage
+F3 assembler alternating belt: 0.000 circuits/s over 3600 ticks (max 1.5); buffer -; assembler status item_ingredient_shortage
+F3 assembler alternating plain: 0.000 circuits/s over 3600 ticks (max 1.5); buffer -; assembler status item_ingredient_shortage
+F3 tile with proxy + linked belt: pickup_target at build nil, after 60 ticks mb-spike-lb / control mb-spike-lb; taken so far: 0 iron (proxy), 1 copper (belt)
+F3 tile with proxy + linked belt: pickup_target after writing mb-spike-proxy
+F3 tile with proxy + linked belt: written inserter took 100 iron (proxy); control took 0 iron, pickup_target mb-spike-lb
+F3 drop onto proxy + linked belt: default drop_target mb-spike-proxy; after 300 ticks 0 on the belt side, 144 in the proxy target
+F3 drop onto proxy + linked belt: after writing, drop_target mb-spike-lb, 60 more items on the belt side
+F3 positions at build (relative to the inserter, facing west): inserter pickup (-1.00, +0.00) drop (+1.20, +0.00) pickup_target nil; long-handed-inserter pickup (-2.00, +0.00) drop (+2.20, +0.00) pickup_target nil; bulk-inserter pickup (-1.00, +0.00) drop (+1.20, +0.00) pickup_target nil
+F4 inserter drop_target after 5 ticks: mb-spike-proxy
+F4 after 2400 ticks: 200 of 200 reached the network-side sink; 0 left in the source, 0 in the buffer
+F4 belt port: 200 of 200 reached the network-side sink; 0 left in the source
+F3 output port among output edges: port 0 inputs 0 outputs, edges 0 belt neighbours in total
+F3 input port among input edges: port 0 inputs 0 outputs, edges 0 belt neighbours in total
+F3 output port among input edges: port 0 inputs 0 outputs, edges 0 belt neighbours in total
+F3 input port among output edges: port 0 inputs 0 outputs, edges 0 belt neighbours in total
+N1 output port facing nothing: leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing passing belt (perpendicular, going north): leaked 16 items in 600 ticks; port belt_neighbours.outputs {turbo-transport-belt}
+N1 output port facing belt pointing at the port (head-on): leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing next block's input port, back to the port: leaked 32 items in 600 ticks; port belt_neighbours.outputs {mb-spike-lb}
+N1 output port facing next block's input port, side to the port: leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing next block's output port, side to the port: leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing underground entrance: leaked 32 items in 600 ticks; port belt_neighbours.outputs {turbo-underground-belt}
+N1 output port facing underground exit facing away: leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing splitter: leaked 30 items in 600 ticks; port belt_neighbours.outputs {turbo-splitter}
+N1 output port facing loader into a chest: leaked 560 items in 600 ticks; port belt_neighbours.outputs {mb-spike-io-loader}
+N1 port placement: chose west with belts on two sides and an underground on the third; leaked 0 items in 600 ticks; surrounded block: refused
+N1 port re-check: after building a belt in front, belt_neighbours.outputs has 1 entries
+F4 put and take on one proxy: 100 of 100 went straight from the putting to the taking inserter
+F5 splitter only: out1 left 0.000 right 15.000, out2 left 0.000 right 15.000 items/s (input one lane, 30.0)
+F5 lane splitter before: out1 left 7.500 right 7.500, out2 left 7.500 right 7.500 items/s (input one lane, 30.0)
+F5 lane splitter after: out1 left 7.500 right 7.500, out2 left 7.500 right 7.500 items/s (input one lane, 30.0)

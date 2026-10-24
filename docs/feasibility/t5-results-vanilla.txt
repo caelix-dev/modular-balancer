@@ -1,0 +1,95 @@
+Task 5 in-game suites, Factorio 2.1.23, vanilla preset (fdev test modular-balancer). MB-TEST lines from factorio-current.log, then the test summary.
+MB-TEST conservation 3:5: 988 inside the network (0 on 0 dead-end splitters), 988 returned, 2012 outside (of 3000)
+MB-TEST conservation 8:3: 844 inside the network (100 on 5 dead-end splitters), 844 returned, 7156 outside (of 8000)
+MB-TEST tier basic 2:3: outputs 10.000 10.000 10.000, total 30.000 (2 belts = 30.000)
+MB-TEST tier fast 2:3: outputs 20.000 20.000 20.000, total 60.000 (2 belts = 60.000)
+MB-TEST tier express 2:3: outputs 30.000 30.000 30.000, total 90.000 (2 belts = 90.000)
+MB-TEST outputs_equal 2:3: outputs 30.000 30.000 30.000 items/s
+MB-TEST inputs_drawn_equally 2:3 (outputs at half speed): inputs 33.750 33.750, outputs 22.500 22.500 22.500 items/s
+MB-TEST throughput 2:3: total 90.000 items/s (min(n, m) belts = 90.000)
+MB-TEST outputs_equal 3:5: outputs 26.950 26.933 26.933 26.967 26.933 items/s
+MB-TEST inputs_drawn_equally 3:5 (outputs at half speed): inputs 37.500 37.500 37.500, outputs 22.500 22.500 22.500 22.500 22.500 items/s
+MB-TEST throughput 3:5: total 134.733 items/s (min(n, m) belts = 135.000)
+MB-TEST outputs_equal 8:3: outputs 45.000 45.000 45.000 items/s
+MB-TEST inputs_drawn_equally 8:3 (outputs at half speed): inputs 8.433 8.433 8.450 8.433 8.433 8.450 8.433 8.433, outputs 22.500 22.500 22.500 items/s
+MB-TEST throughput 8:3: total 135.000 items/s (min(n, m) belts = 135.000)
+MB-TEST outputs_equal 1:5: outputs 9.000 9.000 8.967 8.967 9.000 items/s
+MB-TEST inputs_drawn_equally 1:5 (outputs at half speed): inputs 45.000, outputs 9.000 9.033 9.033 9.000 8.967 items/s
+MB-TEST throughput 1:5: total 44.933 items/s (min(n, m) belts = 45.000)
+MB-TEST outputs_equal 5:1: outputs 45.000 items/s
+MB-TEST inputs_drawn_equally 5:1 (outputs at half speed): inputs 4.500 4.517 4.500 4.500 4.483, outputs 22.500 items/s
+MB-TEST throughput 5:1: total 45.000 items/s (min(n, m) belts = 45.000)
+MB-TEST outputs_equal 1:1: outputs 45.000 items/s
+MB-TEST inputs_drawn_equally 1:1 (outputs at half speed): inputs 22.500, outputs 22.500 items/s
+MB-TEST throughput 1:1: total 45.000 items/s (min(n, m) belts = 45.000)
+MB-TEST outputs_equal_unequal_inputs 2:4 (input 1 at a third): outputs 15.000 15.000 15.000 15.000 items/s, total 60.000 (supply 60.000)
+MB-TEST outputs_equal_unequal_inputs 3:5 (input 1 at a third): outputs 20.950 20.933 20.967 20.967 20.967 items/s, total 104.783 (supply 105.000)
+MB-TEST mixed_items_keep_lanes 2:3: iron (left) 15.000 15.000 15.000, copper (right) 15.000 15.000 15.000 items/s
+MB-TEST backpressure_then_release 3:5: after release, outputs 28.500 28.500 28.500 28.500 28.500 items/s, total 142.500
+MB-TEST inserter_share 2:3: belt outputs 22.500 22.500 22.500, port 22.500 items/s
+MB-TEST inserter_share 2:3 throttled: belt outputs 22.500 42.283 22.500, port 2.717 items/s; flow model 22.500 42.283 22.500 2.717
+MB-TEST inserter_share_lanes 2:3: iron 11.250 11.250 11.250 11.250, copper 11.250 11.250 11.250 11.250 items/s (last = port)
+MB-TEST inserter_share 3:5: belt outputs 22.500 22.467 22.483 22.500 22.467, port 22.467 items/s
+MB-TEST inserter_share 3:5 throttled: belt outputs 22.517 42.283 22.500 22.500 22.500, port 2.717 items/s; flow model 22.500 42.283 22.500 22.500 22.500 2.717
+MB-TEST inserter_share_lanes 3:5: iron 11.250 11.250 11.250 11.250 11.250 11.250, copper 11.250 11.250 11.250 11.250 11.250 11.233 items/s (last = port)
+MB-TEST lane_balance 2:3 (left lanes only): lanes (left right per output) 7.500 7.500 7.500 7.500 7.500 7.500 items/s, total 45.000 (expected 45.000)
+MB-TEST lane_balance 8:3 (left lanes only): lanes (left right per output) 22.500 22.500 22.500 22.500 22.500 22.500 items/s, total 135.000 (expected 135.000)
+MB-TEST F8 free 2:3: outputs 30.000 30.000 30.000, total 90.000 (plain network: 90.000)
+MB-TEST F8 unequal inputs 2:3 (input 1 at a third): outputs 20.000 20.000 20.000, total 60.000 (supply 60.000)
+MB-TEST F8 slow belt 2:3 (output 1 at 15): output 1 15.000, others 37.500 37.500 (expected 37.500 each), total 90.000
+MB-TEST F8 slow port 2:3: belt outputs 29.100 29.100 29.100 (expected 29.089 each), port 2.733, total 90.033
+MB-TEST F8 blocked outputs 2:3 (only 1 and 2 open): outputs 45.000 45.000 0.000, inputs drawn 45.000 45.000
+MB-TEST F8 free 3:5: outputs 27.000 26.967 26.983 27.000 27.000, total 134.950 (plain network: 135.000)
+MB-TEST F8 unequal inputs 3:5 (input 1 at a third): outputs 21.000 21.000 21.000 21.017 21.000, total 105.017 (supply 105.000)
+MB-TEST F8 slow belt 3:5 (output 1 at 15): output 1 15.000, others 30.000 30.000 30.000 30.000 (expected 30.000 each), total 135.000
+MB-TEST F8 slow port 3:5: belt outputs 26.450 26.450 26.450 26.450 26.450 (expected 26.453 each), port 2.733, total 134.983
+MB-TEST F8 blocked outputs 3:5 (only 1 and 2 open): outputs 45.000 45.000 0.000 0.000 0.000, inputs drawn 45.000 22.500 22.483
+
+PASSED: tests/game/smoke > modular-balancer smoke > nauvis exists
+PASSED: tests/game/placement > placement > place_then_destroy_leaves_nothing
+PASSED: tests/game/placement > placement > destroy_returns_items
+PASSED: tests/game/placement > placement > regions_do_not_overlap
+PASSED: tests/game/placement > placement > destroy_returns_all_items_of_a_running_network_3_5
+PASSED: tests/game/placement > placement > destroy_returns_all_items_of_a_running_network_8_3
+PASSED: tests/game/placement > placement > tier_throughput_basic
+PASSED: tests/game/placement > placement > tier_throughput_fast
+PASSED: tests/game/placement > placement > tier_throughput_express
+PASSED: tests/game/exactness > exactness > outputs_equal_2_3
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_2_3
+PASSED: tests/game/exactness > exactness > throughput_2_3
+PASSED: tests/game/exactness > exactness > outputs_equal_3_5
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_3_5
+PASSED: tests/game/exactness > exactness > throughput_3_5
+PASSED: tests/game/exactness > exactness > outputs_equal_8_3
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_8_3
+PASSED: tests/game/exactness > exactness > throughput_8_3
+PASSED: tests/game/exactness > exactness > outputs_equal_1_5
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_1_5
+PASSED: tests/game/exactness > exactness > throughput_1_5
+PASSED: tests/game/exactness > exactness > outputs_equal_5_1
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_5_1
+PASSED: tests/game/exactness > exactness > throughput_5_1
+PASSED: tests/game/exactness > exactness > outputs_equal_1_1
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_1_1
+PASSED: tests/game/exactness > exactness > throughput_1_1
+PASSED: tests/game/exactness > exactness > outputs_equal_unequal_inputs_2_4
+PASSED: tests/game/exactness > exactness > outputs_equal_unequal_inputs_3_5
+PASSED: tests/game/exactness > exactness > mixed_items_keep_lanes
+PASSED: tests/game/exactness > exactness > backpressure_then_release_moves_again
+PASSED: tests/game/exactness > exactness > inserter_share_2_3
+PASSED: tests/game/exactness > exactness > inserter_share_lanes_2_3
+PASSED: tests/game/exactness > exactness > inserter_share_3_5
+PASSED: tests/game/exactness > exactness > inserter_share_lanes_3_5
+PASSED: tests/game/exactness > exactness > lane_balance_2_3
+PASSED: tests/game/exactness > exactness > lane_balance_8_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_free_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_unequal_inputs_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_slow_belt_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_slow_port_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_blocked_outputs_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_free_3_5
+PASSED: tests/game/recirculation > F8 recirculation > f8_unequal_inputs_3_5
+PASSED: tests/game/recirculation > F8 recirculation > f8_slow_belt_3_5
+PASSED: tests/game/recirculation > F8 recirculation > f8_slow_port_3_5
+PASSED: tests/game/recirculation > F8 recirculation > f8_blocked_outputs_3_5
+47 passed, 0 failed, 0 skipped (47 total)

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/EmmyLuaLs/emmylua-analyzer-rust/refs/tags/0.25.1/crates/emmylua_code_analysis/resources/schema.json",
+  "runtime": { "version": "Lua5.2" },
+  "workspace": {
+    "library": ["C:/Users/shimj/Documents/factorio/factorio-dev/types/factorio/library"],
+    "moduleMap": [{ "pattern": "^__[A-Za-z0-9_-]+?__[./](.*)$", "replace": "$1" }]
+  },
+  "diagnostics": {
+    "globals": ["describe", "test", "it", "tags", "before_all", "after_all", "before_each", "after_each", "after_test", "async", "done", "on_tick", "after_ticks", "ticks_between_tests"],
+    "severity": { "undefined-global": "error", "undefined-field": "error", "unresolved-require": "error" }
+  }
+}

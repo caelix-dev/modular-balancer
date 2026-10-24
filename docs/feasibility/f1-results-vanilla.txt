@@ -1,0 +1,23 @@
+tier belt express-transport-belt, full belt 45 items/s
+(a) on a tile with a linked belt: create_entity refused, clone refused, teleport refused
+(b) second loader on a loader tile: refused
+(c) east belt items after 600 ticks: 0; block outputs: 0
+(e) first item on the east belt after 84 ticks
+(e) west->east throughput 45.00 items/s (full belt 45)
+(e) four sides: east 45.00, south 45.00 items/s (full belt 45)
+(e) 1x8 row, 8 input edges and 3 output edges placed; outputs 45.00, 45.00, 45.00 items/s
+(hybrid) block-tile linked belt: 1 inputs, 0 outputs
+(hybrid) four sides: east 45.00, south 45.00 items/s (full belt 45)
+(hybrid) side-fed block-tile interface: 1 inputs; sink got 410 iron, 0 copper
+(e) side-fed output edge: no side loading -> 0 foreign items, 0 inputs; side loading -> 208 foreign items, 1 inputs
+(e) shared tile, internal link: 45.00 items/s; shared tile has 1 items, 0 inputs, 0 outputs
+(e) two-tile gap, A output edge -> B input edge: 45.00 items/s; A out has 1 outputs
+(e) swap of a full belt tile, partner with room: 4 on the edge (line length 0.500), 4 on the partner, 0 forced
+(e) swap with a full partner: tile 10 (edge 4, partner 0, forced 6), network side 30, total now 40 of 40
+(e) after draining: chest 40, left on belts 0 (expected 40, 0)
+(e) swap in a backed-up line: source chest 372 left, tile had 8 (edge 4, partner 4, forced 0)
+(e) backed-up line after draining: chest 400 of 400, source 0
+(e) belt stack: insert of 4 as one stack true; stacks before {4}, after {4}
+(e) mining an edge: true, inventory {{count = 1, name = "express-transport-belt", quality = "normal"}, {count = 1, name = "copper-plate", quality = "normal"}}
+(e) blueprint of an edge records {"express-transport-belt", "mb-spike-edge"}; rewritten by script: {"express-transport-belt", "express-transport-belt"}
+(e) fast-replace a belt over an edge: linked-belts group -> can false, refused; transport-belt group -> can false, express-transport-belt (edge valid false)

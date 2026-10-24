@@ -1,0 +1,10 @@
+== custom-layers (fdev test exit 2)
+Error Util.cpp:81: entity prototype "mb-spike-var-lb-e" (linked-belt) collision_mask(Modifications: Modular Balancer) must collide with entity prototype "transport-belt" (transport-belt) collision_mask.
+== belt-layer-subsets (fdev test exit 2)
+Error Util.cpp:81: entity prototype "mb-spike-var-lb-n" (linked-belt) collision_mask(Modifications: Modular Balancer) must collide with entity prototype "mb-spike-var-lb-e" (linked-belt) collision_mask(Modifications: Modular Balancer).
+== not-colliding-with-itself (fdev test exit 2)
+Error Util.cpp:81: entity prototype "mb-spike-var-lb-e" (linked-belt) collision_mask(Modifications: Modular Balancer) must collide with entity prototype "mb-spike-var-lb-e" (linked-belt) collision_mask(Modifications: Modular Balancer).
+== tiles-only (fdev test exit 2)
+Error Util.cpp:81: entity prototype "mb-spike-var-lb-e" (linked-belt) collision_mask(Modifications: Modular Balancer) must collide with entity prototype "transport-belt" (transport-belt) collision_mask.
+== loader-custom-layers (fdev test exit 2)
+Error Util.cpp:81: entity prototype "mb-spike-var-ld-e" (loader-1x1) collision_mask(Modifications: Modular Balancer) must collide with entity prototype "transport-belt" (transport-belt) collision_mask.

@@ -25,12 +25,16 @@ Run from the repo root unless noted.
 
 Unit test contract: each `tests/unit/*_test.lua` returns `{ [name] = function() ... end }`; `run.lua` runs them in sorted order and exits non-zero on any failure.
 
+## Releases
+
+Build a release zip from `git archive` (committed files only), never from the working tree, so the git-ignored `spikes/local-enable.lua` cannot ship. Even if it did, it does nothing without `factorio-test`. Consider leaving `spikes/` out of release zips entirely.
+
 ## File map
 
 - `info.json`, `settings.lua`, `data.lua`, `control.lua` - mod entry points. `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
 - `tests/unit/` - offline tests and `run.lua` runner.
 - `tests/game/` - FactorioTest suites run by `fdev test`.
-- `spikes/` - throwaway research spikes, loaded (prototypes and test suites) only when the hidden startup setting `mb-spikes` is on. It is forced on by creating the git-ignored `spikes/local-enable.lua` containing `return true`, and forced off without it.
+- `spikes/` - throwaway research spikes, loaded (prototypes and test suites) only when the hidden startup setting `mb-spikes` is on. It is forced on only when the git-ignored `spikes/local-enable.lua` exists (`return true`, or `return { variant = "<name>" }` for a prototype variant) and the `factorio-test` mod is enabled; otherwise forced off. An MCP `server_start` instance without `factorio-test` therefore has no spike prototypes. `spikes/multi_belt/repro-load-errors.sh` reproduces the prototype-stage errors of F1.
 - `docs/feasibility.md` - spike findings (F1..), screenshots in `docs/feasibility/`.
 - `.emmyrc.json` - editor config (FactorioTest globals whitelisted). `fdev lua check` ignores it and generates its own.
 - `.superpowers/` - local planning notes, git-ignored.

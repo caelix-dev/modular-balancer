@@ -146,12 +146,14 @@ local function robots(o, dx, dy)
 end
 
 -- Calls `check()` every 30 ticks until it returns true, at most `tries` times, then `k()`.
+-- `check` may return false and a description of the state, shown on a timeout.
 local function wait_for(what, tries, check, k)
   after_ticks(30, function()
-    if check() then
+    local ok, state = check()
+    if ok then
       k()
     else
-      assert(tries > 0, what .. ": timed out")
+      assert(tries > 0, what .. ": timed out" .. (state and (" (" .. state .. ")") or ""))
       wait_for(what, tries - 1, check, k)
     end
   end)
@@ -629,7 +631,13 @@ describe("lifecycle", function()
     assert(H.items_on(belt) == 1, "the stray edge's item was lost")
     assert(claimed.valid and claimed.linked_belt_neighbour, "the edge into the block was not claimed")
     assert(nm(rec_of(b)) == "1:1", "network " .. nm(rec_of(b)))
-    assert(not balancer.pending(storage.balancer), "work left after the flush")
+    -- the swaps re-check their neighbours once more (F3), then nothing is left
+    for _ = 1, 3 do
+      if balancer.pending(storage.balancer) then
+        balancer.flush()
+      end
+    end
+    assert(not balancer.pending(storage.balancer), "work left after the flushes")
   end)
 
   -- Fix round 1, I2: a backed-up group killed (biters, here LuaEntity::die) with ghosts on death
@@ -641,8 +649,9 @@ describe("lifecycle", function()
     local o, box = area(14, 12)
     local s = game.surfaces.nauvis
     local force = game.forces.player
-    local saved = force.create_ghost_on_entity_death
+    local saved, saved_cargo = force.create_ghost_on_entity_death, force.worker_robots_storage_bonus
     force.create_ghost_on_entity_death = true
+    force.worker_robots_storage_bonus = 10 -- researched cargo, so the pick-up does not take minutes
     local stock = 600
     local b1 = H.block(o, 4, 4, H.TIER)
     local b2 = H.block(o, 4, 5, H.TIER)
@@ -689,9 +698,19 @@ describe("lifecycle", function()
       wait_for("robots rebuilding the blocks and collecting the items", 140, function()
         local blocks = s.find_entities_filtered({ area = box, name = "mb-balancer-" .. H.TIER })
         local ground = s.find_entities_filtered({ area = box, type = "item-entity" })
-        return #blocks == 2 and #ground == 0 and robot_items() == 0
+        return #blocks == 2 and #ground == 0 and robot_items() == 0,
+          string.format("%d blocks, %d ground stacks, %d in robots, %d ghosts, chest %d; ground %s; block at %s", #blocks, #ground, robot_items(),
+            #s.find_entities_filtered({ area = box, type = "entity-ghost" }), chest.get_item_count(ITEM),
+            serpent.line((function()
+              local l = {}
+              for _, g in ipairs(ground) do
+                l[#l + 1] = { g.stack.name, g.stack.count, g.position.x - o.x, g.position.y - o.y, g.to_be_deconstructed() }
+              end
+              return l
+            end)()), serpent.line({ b1.valid }))
       end, function()
         force.create_ghost_on_entity_death = saved
+        force.worker_robots_storage_bonus = saved_cargo
         balancer.flush()
         local list = blocks_in(box)
         local rec = rec_of(list[1])

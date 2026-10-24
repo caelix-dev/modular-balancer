@@ -27,7 +27,7 @@ Unit test contract: each `tests/unit/*_test.lua` returns `{ [name] = function() 
 
 ## Releases
 
-Build a release zip from `git archive` (committed files only), never from the working tree. `.gitattributes` export-ignores `spikes/`, `tests/`, `docs/`, `.emmyrc.json` and `.superpowers/`, so a release has no test code, no spikes and no dev marker (`tests/dev.lua`): the dev gate `mb-dev` is then off even for a player who has `factorio-test` enabled. Check with `git archive HEAD | tar -t` before shipping.
+Build a release zip from `git archive` (committed files only), never from the working tree. `.gitattributes` export-ignores `spikes/`, `tests/`, `docs/`, `.emmyrc.json`, `.superpowers/`, `scripts/flow.lua` (test-only) and this file, so a release has no test code, no spikes and no dev marker (`tests/dev.lua`): the dev gate `mb-dev` is then off even for a player who has `factorio-test` enabled. Check with `git archive HEAD | tar -t` before shipping.
 
 ## File map
 

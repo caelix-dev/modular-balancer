@@ -29,6 +29,7 @@ local BELTS = {
 H.BELTS = BELTS
 
 local next_area = 0
+local live = {} -- rigs built and not torn down yet
 
 local function ce(s, t)
   t.force = t.force or "player"
@@ -39,7 +40,7 @@ end
 H.ce = ce
 
 -- A fresh, cleared, lab-tiled area of nauvis (w x h tiles), far from the others. Returns its
--- top-left tile centre.
+-- top-left tile centre and the cleared box (with an 8-tile margin).
 function H.area(w, h)
   next_area = next_area + 1
   local s = game.surfaces.nauvis
@@ -59,7 +60,7 @@ function H.area(w, h)
     end
   end
   s.set_tiles(tiles)
-  return o
+  return o, box
 end
 
 function H.items_on(e)
@@ -109,10 +110,11 @@ function H.rig(opts)
   for j = 1, M do
     targets[j] = placed.outputs[j]
   end
-  local extra = {}
+  local extra, extra_origin = {}, nil
   if opts.recirc then
     local hs = surface.get()
     local lo = surface.reserve(4, 3 * M)
+    extra_origin = lo
     local lb = "mb-hidden-linked-belt-" .. tier
     for j = 1, M do
       local x, y = lo.x, lo.y + 3 * (j - 1)
@@ -130,13 +132,15 @@ function H.rig(opts)
   end
   local s = game.surfaces.nauvis
   local rows = math.max(n, m + ports)
-  local o = H.area(24, rows * H.ROW)
+  local o, box = H.area(24, rows * H.ROW)
   local stock = opts.stock or H.SOURCE_STOCK
   local rig = {
-    net = net, origin = origin, placed = placed, extra = extra, o = o, n = n, m = m, stock = stock,
+    net = net, origin = origin, placed = placed, extra = extra, extra_origin = extra_origin, o = o, box = box,
+    n = n, m = m, stock = stock,
     sources = {}, feeders = {}, sinks = {}, sink_loaders = {}, last_belts = {}, visible = {},
     port_chests = {}, inserters = {},
   }
+  live[#live + 1] = rig
 
   for i = 1, n do
     local y = o.y + H.ROW * (i - 1)
@@ -267,11 +271,39 @@ function H.total_items(rig)
   return t
 end
 
--- Removes the rig's network; returns the list builder.destroy returned.
+-- Removes the rig: its network (returning the list builder.destroy returned), the F8
+-- recirculation entities, both hidden regions, and everything in its nauvis area. Count what is
+-- outside the network before calling it. A second call returns an empty list.
 function H.teardown(rig)
+  if rig.torn then
+    return {}
+  end
+  rig.torn = true
   local items = builder.destroy(rig.placed)
   surface.release(rig.origin)
+  for _, e in ipairs(rig.extra) do
+    if e.valid then
+      e.destroy()
+    end
+  end
+  if rig.extra_origin then
+    surface.release(rig.extra_origin)
+  end
+  for _, e in ipairs(game.surfaces.nauvis.find_entities_filtered({ area = rig.box })) do
+    if e.valid and e.type ~= "character" then
+      e.destroy()
+    end
+  end
   return items
+end
+
+-- Tears down every rig not torn down yet (each suite calls it in after_each, so a test's rig
+-- does not keep running through the rest of the suite).
+function H.teardown_all()
+  for _, rig in ipairs(live) do
+    H.teardown(rig)
+  end
+  live = {}
 end
 
 -- Starts a per-tick lane counter on each output's last belt (test only): every tick, it adds the

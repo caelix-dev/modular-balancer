@@ -9,9 +9,14 @@ local H = require("tests.game.harness")
 local flow = require("scripts.flow")
 
 local WARMUP, WINDOW = 600, 3600
+-- inputs_drawn_equally only: behind half-speed outputs the network and harness fill up for a
+-- while (3:5: about 1 300 items at a 22.5/s surplus, roughly 3 500 ticks), and the claim is
+-- about the backed-up steady state, so that test warms up for DRAW_WARMUP ticks (a deviation
+-- from the brief's 600, review I1) and checks that the draw equals what is delivered.
+local DRAW_WARMUP = 6000
 local RATE = H.RATE
 ---@type {[1]: integer, [2]: integer}[]
-local RATIOS = { { 2, 3 }, { 3, 5 }, { 8, 3 }, { 1, 5 }, { 5, 1 } }
+local RATIOS = { { 2, 3 }, { 3, 5 }, { 8, 3 }, { 1, 5 }, { 5, 1 }, { 1, 1 } }
 
 ---@return fun(): number[]
 local function sink_counts(rig, item)
@@ -40,6 +45,10 @@ end
 local saved_bonus = 0
 
 describe("exactness", function()
+  after_each(function()
+    H.teardown_all()
+  end)
+
   before_all(function()
     saved_bonus = game.forces.player.bulk_inserter_capacity_bonus
     -- the belt port's three bulk inserters must keep up with one output's share (F3)
@@ -65,7 +74,7 @@ describe("exactness", function()
     end)
 
     test("inputs_drawn_equally_" .. tag, function()
-      async(WARMUP + WINDOW + 300)
+      async(DRAW_WARMUP + WINDOW + 300)
       local rig = H.rig({ n = n, m = m, sink = "half" })
       H.measure(function()
         local c = sink_counts(rig)()
@@ -73,14 +82,13 @@ describe("exactness", function()
           c[m + i] = H.drawn(rig, i)
         end
         return c
-      end, WARMUP, WINDOW, function(rates)
+      end, DRAW_WARMUP, WINDOW, function(rates)
         local outs, ins = { table.unpack(rates, 1, m) }, { table.unpack(rates, m + 1, m + n) }
         H.report("inputs_drawn_equally %d:%d (outputs at half speed): inputs %s, outputs %s items/s", n, m, fmt(ins), fmt(outs))
         H.assert_equal(ins, "input")
-        -- The outputs really run at half speed. The draw can exceed what is delivered while the
-        -- network still fills up behind the throttled outputs (a transient), so it is not
-        -- compared with the delivered total.
+        -- steady state: the outputs run at half speed and the inputs give exactly that
         near(H.sum(outs), math.min(n * RATE, m * RATE / 2), "total delivered")
+        near(H.sum(ins), H.sum(outs), "draw against delivered")
         done()
       end)
     end)

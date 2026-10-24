@@ -33,7 +33,7 @@ Build a release zip from `git archive` (committed files only), never from the wo
 
 - `info.json`, `settings.lua`, `data.lua`, `control.lua` - mod entry points. `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
 - `prototypes/hidden.lua` - hidden per-tier entities of the balancing network (`mb-hidden-splitter-<tier>`, `mb-hidden-linked-belt-<tier>`, `mb-hidden-lane-splitter-<tier>`).
-- `scripts/network.lua` - network generator (pure Lua). `scripts/flow.lua` - offline flow model, never required at runtime.
+- `scripts/network.lua` - network generator (pure Lua). `scripts/flow.lua` - offline flow model, never required by product code (only test code: `tests/unit`, and `tests/game/exactness.lua` for Ruling 6).
 - `scripts/surface.lua` - the hidden surface `mb-hidden` and its region allocator. `scripts/builder.lua` - places a network on it (`place`, `size`, `destroy`).
 - `tests/unit/` - offline tests and `run.lua` runner.
 - `tests/game/` - FactorioTest suites run by `fdev test` (`placement.lua`, `exactness.lua`, `recirculation.lua` for the experimental F8 design, shared rig `harness.lua`). Loaded only with `factorio-test`: `data.lua` (harness prototypes `mb-test-*`) and `remote.lua` (remote interface `mb-test` for the F6 save/load check and the F7 benchmark saves on an MCP instance).

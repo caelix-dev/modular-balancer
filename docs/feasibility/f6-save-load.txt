@@ -1,4 +1,6 @@
 F6 save/load check (Task 5, save_load_keeps_items), Factorio 2.1.23, vanilla preset, express tier.
+This is a hand-written transcript of the MCP calls and of the exec_lua results (the JSON
+fields restated as text), not raw tool output. The numbers are copied from the results.
 MCP fdev instance "mb-t5": server_start with dev_mods = modular-balancer, portal_mods = factorio-test
 (mb-spikes off: spikes/local-enable.lua absent). Script: tests/game/remote.lua (remote interface "mb-test").
 Rig: a 3:5 network placed by builder.place on mb-hidden (138 hidden entities: 28 splitters,

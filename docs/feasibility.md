@@ -604,12 +604,24 @@ saving, so everything is saturated):
 | hidden | 50 x 8:3 on `mb-hidden` (1 200 splitters, 4 550 linked belts), each with 8 endless sources and 3 sinks on nauvis; 150 belts of output | 0.528 | 0.137 | 0.221 |
 | vanilla | 50 x 24 = 1 200 vanilla express splitters on nauvis, 8 rows of 3 splitters in series per copy, 400 sources and 400 sinks; 400 belts of output | 0.671 | 0.142 | 0.369 |
 
-- Most of `entityUpdate` is the harness, not the network: loaders 0.076 (hidden) vs 0.154
-  (vanilla) and infinity containers 0.087 vs 0.161; the vanilla save has more sources and sinks.
-  Splitters and linked belts are transport lines, so the network's own cost is in
-  `transportLinesUpdate`: +0.066 ms over the empty map for 50 saturated 8:3 networks plus their
-  harness belts, about the same as 1 200 vanilla splitters in series (+0.071).
-- Numbers only. The gate is Plan 3's comparison with Better Belt Balancer.
+- **Do not compare the two saves directly.** They differ in throughput and in topology:
+  - the vanilla save moves about 2.7 times as many items (400 rows at 45/s, against
+    50 x 135/s);
+  - it has 2.7 times as many sinks;
+  - its splitters have a dead-end output, so once filled they act like straight belts.
+
+  So no ratio between the `wholeUpdate` columns (or the deltas below) means anything about
+  hidden networks against vanilla balancers.
+- What the numbers do show, per save:
+  - `entityUpdate` is mostly harness: loaders 0.076 (hidden) and 0.154 (vanilla), infinity
+    containers 0.087 and 0.161.
+  - About 0.055 ms of `entityUpdate` remains in both saves after those are subtracted. That
+    is probably the splitters' own entity update (1 200 splitters in each save), so the
+    network's cost is that remainder plus its share of `transportLinesUpdate`.
+  - `transportLinesUpdate` rises 0.066 ms over the empty map for 50 saturated 8:3 networks
+    plus their harness belts.
+- Numbers only. The gate is Plan 3's comparison with Better Belt Balancer, which should use a
+  real vanilla 8:3 balancer blueprint as the vanilla reference.
 
 ## F8: equal redistribution option, recirculation (Task 5, experimental)
 
@@ -691,7 +703,26 @@ splitters + 4 entities per output):
 | 8:3 | 24 / 115 | 66 / 319 |
 | 8:8 | 24 / 120 | 60 / 284 |
 
-The (n + M):M network must fit `network.MAX_SIDE` = 16 inputs, so with recirculation the largest
-ratios shrink to n + M ≤ 16 (8:8 fits, 9:8 and 16:16 do not). Raising MAX_SIDE, or merging
-several overflows into fewer loop inputs, is a Plan 2 design question. Merging changes when the
-overflow backs up and needs its own measurement.
+In Plan 1 the (n + M):M network must fit `network.MAX_SIDE` = 16 inputs, so with recirculation
+the largest ratios shrink to n + M ≤ 16 (8:8 fits, 9:8 and 16:16 do not). The spec's Update
+2026-10-24 (2) already removes MAX_SIDE in Plan 2 (any size, exhaustive offline checks up to
+16:16), so the limit itself goes away. What stays is the cost: the recirculation network is
+(n + M):M. Merging several overflows into fewer loop inputs would make it smaller, but that
+changes when the overflow backs up and needs its own measurement.
+
+## Concerns for Plan 2 from Task 5 (parked review minors)
+
+- **A failed `builder.place` leaves a half-built network.** If a `create_entity` fails, the
+  builder asserts after earlier entities already exist, and they are never destroyed. Review
+  Focus 5 says "never a half-built network". Plan 2 must, for example, wrap the build in
+  `pcall`, destroy `placed.entities` on failure and then rethrow, or check the whole rectangle
+  first.
+- **The region allocator never splits or merges free regions.** `surface.reserve` reuses a
+  released region whole, first fit, so a 10x10 request can take a released 256x256 region. That
+  is correct and has no overlap, but fragmentation grows with churn, and Plan 2 rebuilds
+  networks often.
+  - `Placed` does not record its `origin` or tier, so the caller must keep both to release and
+    rebuild. Consider storing them in `placed`.
+- **The `force` argument of `builder.place` is untested across forces.** Plan 2 should check
+  that a hidden linked belt of the owner's force links to the visible edge belts, and what
+  happens when a block changes force.

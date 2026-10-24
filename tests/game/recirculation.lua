@@ -51,6 +51,10 @@ end
 local saved_bonus = 0
 
 describe("F8 recirculation", function()
+  after_each(function()
+    H.teardown_all()
+  end)
+
   before_all(function()
     saved_bonus = game.forces.player.bulk_inserter_capacity_bonus
     game.forces.player.bulk_inserter_capacity_bonus = 11

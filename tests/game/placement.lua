@@ -18,6 +18,10 @@ local function count_in(s, origin, w, h)
 end
 
 describe("placement", function()
+  after_each(function()
+    H.teardown_all()
+  end)
+
   test("place_then_destroy_leaves_nothing", function()
     local s = surface.get()
     assert(game.forces.player.get_surface_hidden(s), "hidden surface is visible to the player force")
@@ -131,44 +135,73 @@ describe("placement", function()
     end
   end)
 
-  -- No loss and no duplication: a finite stock through a running 3:5 whose outputs are then
-  -- blocked, so the network is full of items when it is destroyed.
-  test("destroy_returns_all_items_of_a_running_network", function()
-    async(1500)
-    local rig = H.rig({ n = 3, m = 5, stock = 1000 })
-    after_ticks(300, function()
-      for _, l in ipairs(rig.sink_loaders) do
-        l.disabled_by_script = true
+  -- No loss and no duplication: a finite stock (1 000 per input) through a running network whose
+  -- outputs are then blocked, so it is full of items when it is destroyed. 8:3 (N > M) has
+  -- splitters with an unconnected output (Ruling 5): a dead end that holds items on the
+  -- splitter itself; the test checks that those hold items before the teardown.
+  ---@type {[1]: integer, [2]: integer}[]
+  local CONSERVATION = { { 3, 5 }, { 8, 3 } }
+  for _, r in ipairs(CONSERVATION) do
+    local n, m = r[1], r[2]
+    test("destroy_returns_all_items_of_a_running_network_" .. n .. "_" .. m, function()
+      async(1500)
+      local rig = H.rig({ n = n, m = m, stock = 1000 })
+      -- splitters with an output port no edge leaves from (placed.entities starts with the
+      -- splitters, in net.splitters order)
+      local used = {}
+      for _, ed in ipairs(rig.net.edges) do
+        if ed.from.kind == "splitter" then
+          used[ed.from.id .. ":" .. ed.from.port] = true
+        end
       end
-      after_ticks(900, function()
-        local inside = 0
-        for _, e in ipairs(rig.placed.entities) do
-          inside = inside + H.items_on(e)
+      local dead = {}
+      for k, sp in ipairs(rig.net.splitters) do
+        if not used[sp.id .. ":1"] or not used[sp.id .. ":2"] then
+          dead[#dead + 1] = rig.placed.entities[k]
         end
-        local returned = 0
-        for _, it in ipairs(H.teardown(rig)) do
-          returned = returned + it.count
+      end
+      after_ticks(300, function()
+        for _, l in ipairs(rig.sink_loaders) do
+          l.disabled_by_script = true
         end
-        local outside = 0
-        for i = 1, 3 do
-          outside = outside + rig.sources[i][1].get_item_count()
-        end
-        for _, e in ipairs(rig.visible) do
-          outside = outside + H.items_on(e)
-        end
-        for _, e in ipairs(rig.feeders) do
-          outside = outside + H.items_on(e)
-        end
-        for j = 1, 5 do
-          outside = outside + rig.sinks[j].get_item_count() + H.items_on(rig.sink_loaders[j])
-        end
-        H.report("conservation 3:5: %d inside the network, %d returned, %d outside (of 3000)", inside, returned, outside)
-        assert(inside > 0 and returned == inside, "destroy returned " .. returned .. " of " .. inside)
-        assert(returned + outside == 3000, "items lost or duplicated: " .. (returned + outside) .. " of 3000")
-        done()
+        after_ticks(900, function()
+          local inside, on_dead = 0, 0
+          for _, e in ipairs(rig.placed.entities) do
+            inside = inside + H.items_on(e)
+          end
+          for _, e in ipairs(dead) do
+            assert(e.type == "splitter", "dead-end lookup did not find a splitter")
+            on_dead = on_dead + H.items_on(e)
+          end
+          local outside = 0
+          for i = 1, n do
+            outside = outside + rig.sources[i][1].get_item_count()
+          end
+          for _, group in ipairs({ rig.visible, rig.feeders, rig.sink_loaders }) do
+            for _, e in ipairs(group) do
+              outside = outside + H.items_on(e)
+            end
+          end
+          for j = 1, m do
+            outside = outside + rig.sinks[j].get_item_count()
+          end
+          local returned = 0
+          for _, it in ipairs(H.teardown(rig)) do
+            returned = returned + it.count
+          end
+          local stock = n * 1000
+          H.report("conservation %d:%d: %d inside the network (%d on %d dead-end splitters), %d returned, %d outside (of %d)",
+            n, m, inside, on_dead, #dead, returned, outside, stock)
+          if n > m then
+            assert(#dead > 0 and on_dead > 0, "no dead-end splitter holds items (" .. #dead .. " dead ends)")
+          end
+          assert(inside > 0 and returned == inside, "destroy returned " .. returned .. " of " .. inside)
+          assert(returned + outside == stock, "items lost or duplicated: " .. (returned + outside) .. " of " .. stock)
+          done()
+        end)
       end)
     end)
-  end)
+  end
 
   -- Each tier runs at its own belt speed: a 2:3 delivers two full belts of that tier.
   for _, tier in ipairs(TIERS) do

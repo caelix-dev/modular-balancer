@@ -1,0 +1,15 @@
+S2 tier belt express-transport-belt, full belt 45 items/s; hidden surface hidden for player: true
+F2 throughput over 3600 ticks: across surfaces 45.000, one surface 45.000 items/s (full belt 45)
+F3 proxy target on mb-spike-hidden; proxy shows 100 items; inserter pickup_target nil
+F3 after 300 ticks: 100 moved to the nauvis chest, 0 left in the hidden chest
+F3 share, inserters free: belt output 22.500, inserter output 22.500 items/s (half belt 22.5)
+F3 share, inserters stopped: belt output 45.000, inserter output 0.000 items/s; buffer holds 100
+F3 tile with proxy + linked belt: pickup_target at build nil, after 60 ticks mb-spike-lb; taken so far: 0 iron (proxy), 1 copper (belt)
+F3 tile with proxy + linked belt: pickup_target after writing mb-spike-proxy
+F3 tile with proxy + linked belt: 100 iron (proxy) and 1 copper (belt) taken
+F4 inserter drop_target after 5 ticks: mb-spike-proxy
+F4 after 2400 ticks: 200 of 200 reached the network-side sink; 0 left in the source, 0 in the buffer
+F4 put and take on one proxy: 100 of 100 went straight from the putting to the taking inserter
+F5 splitter only: out1 left 0.000 right 11.250, out2 left 0.000 right 11.250 items/s (input one lane, 22.5)
+F5 lane splitter before: out1 left 5.633 right 5.633, out2 left 5.617 right 5.617 items/s (input one lane, 22.5)
+F5 lane splitter after: out1 left 5.633 right 5.617, out2 left 5.633 right 5.617 items/s (input one lane, 22.5)

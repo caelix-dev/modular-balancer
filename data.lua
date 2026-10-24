@@ -2,4 +2,5 @@
 
 if settings.startup["mb-spikes"].value then
   require("spikes.multi_belt.data")
+  require("spikes.hidden_surface.data")
 end

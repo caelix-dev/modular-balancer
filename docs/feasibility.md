@@ -247,3 +247,150 @@ A block takes up to four belts (all edges), with any mix of inputs and outputs.
   sit closer together than normal until they move.
 - **Shorter buffer.** An edge line is half a tile, so the belt line holds half a tile less than
   with a plain belt there. No throughput effect was measured.
+
+## F2-F5: hidden surface, inserter access, inserter input, lane balancing (spike S2)
+
+Code: `spikes/hidden_surface/` (`data.lua`, `test.lua`), same gating as S1. Logs of the runs
+behind this section: `feasibility/f2-f5-results-vanilla.txt` (express, 45 items/s) and
+`feasibility/f2-f5-results-space-age.txt` (turbo, 60 items/s). The save/load check is in
+`feasibility/f2-save-load.txt`. Where a cell shows two numbers, they are express / turbo.
+
+Setup used by every test: the player's side is `nauvis` (a cleared area with lab tiles). The
+network side is a surface made with `game.create_surface`, `LuaSurface::generate_with_lab_tiles`
+and `LuaForce::set_surface_hidden(surface, true)` for the player force
+(`LuaForce::get_surface_hidden` reads back true).
+
+F1's interface does not change any answer here. Edges are ordinary linked belts (F2 covers
+them), and the block tile stays free for a non-belt entity, which F3 fills with the proxy.
+
+### F2: linked belts across surfaces
+
+**Result: no throughput cost, and they survive save and load.**
+
+- `linked_belt_cross_surface_throughput`: the same chain (source, input linked belt, output
+  linked belt, 6 belts, input linked belt, output linked belt, sink) built once with its middle
+  on the hidden surface and once all on nauvis. Over 3 600 ticks after a 600-tick warm-up:
+  45.000 vs 45.000 items/s (express), 60.000 vs 60.000 (turbo). 0 % difference.
+- Save and load (MCP `server_start` with `factorio-test` in `portal_mods`, `exec_lua`,
+  `game.server_save`, `server_stop`, `server_start` from the save): a ring of 4 linked belts
+  and 8 belts across nauvis and the hidden surface, with 32 plates on it.
+  - After the load, all four links point at the same partners, all 32 items are there with
+    identical per-entity counts, and the surface is still hidden for the player.
+  - After 1 000 more ticks the ring still circulates (13 + 19 = 32 items, positions changed).
+- For the restart, `server_start`'s `save` needs the absolute path
+  `E:\factorio-dev\instances\<name>\saves\<save>.zip`.
+
+### F3: inserter access
+
+**Result: exact, through a proxy container on the block tile whose target is a hidden buffer
+chest fed by one network output. The stop rule does not apply.**
+
+- `inserter_takes_from_proxy_of_hidden_chest`: the vanilla `proxy-container` on nauvis
+  accepts `proxy_target_entity` set to a chest on the hidden surface
+  (`proxy_target_inventory = defines.inventory.chest`). It then reports the chest's items, and
+  an inserter took all 100 plates through it in 300 ticks (100 moved, 0 left).
+  Cross-surface targets are allowed, so the fallback tests (`inserter_takes_from_linked_belt`
+  and the same-surface alternatives) were not needed and were not written.
+- The proxy can be the visible block. `mb-spike-proxy` is the vanilla proxy-container with the
+  F1 block mask (`item`, `player`, `is_object`), so it shares its tile with one hidden linked
+  belt (F1's block-tile interface). The vanilla proxy-container mask includes `object`, which
+  collides with belts, so the product needs its own mask.
+- **Exactness** (`inserter_share_is_exact`): a splitter on the hidden surface, fed by a full
+  belt. Output A goes to a belt sink. Output B goes through a loader into a one-slot buffer
+  chest (`mb-spike-buffer`), which the proxy block on nauvis exposes to three bulk inserters.
+  Measured over 3 600 ticks per phase (items/s):
+
+  | phase | belt output A | inserter output B |
+  | --- | --- | --- |
+  | inserters free | 22.500 / 30.000 | 22.500 / 30.000 (exactly half) |
+  | inserters stopped (`disabled_by_script`) | 45.000 / 60.000 (the whole flow) | 0 |
+
+  So the inserters behave exactly like one more splitter output. The network decides the
+  share, and the inserters can never take more than it. When they stop, the buffer fills, the
+  loader backs up, and the share goes to the others (the splitter's own behaviour). Several
+  inserters on one block share one buffer, so they split that block's share, as the spec
+  asks.
+- **Pickup target on a shared tile** (`proxy_block_shares_tile_with_linked_belt`): on a tile
+  with both the proxy and a linked belt, an inserter picks from the **linked belt** by
+  default. `pickup_target` is nil right after building and the linked belt after the first
+  update, and the inserter took the copper plate from the belt and nothing from the proxy.
+  Writing `LuaEntity::pickup_target` to the proxy works, sticks (still the proxy 300 ticks
+  later, 100 iron taken), and survives save and load (`f2-save-load.txt`). Taking from the
+  linked belt would be an inexact share (it reaches into the network), so Plan 2 must either
+  set `pickup_target` on every inserter next to a block that has a block-tile linked belt, or
+  not combine the two.
+
+Also measured:
+
+- `pickup_target` and `drop_target` read nil until the inserter's first update. Read them a
+  tick later.
+- Up to one stack waits in the buffer when the inserters stop (100 plates here). It is part of
+  the network's contents: a rebuild must carry it over.
+
+**Recommended design.** For each block with at least one taking inserter, one network output
+(the block counts as one output of the N:M) ends in a loader into a one-slot buffer chest on
+the hidden surface, and the block entity itself is a proxy container targeting that chest.
+Blocks without taking inserters have no such output.
+
+### F4: inserter input
+
+**Result: works and loses nothing, but one block can take inserter input or give inserter
+output, not both. Cheap enough if each block's proxy has one role at a time.**
+
+- `inserter_puts_into_proxy`: an inserter drops into the proxy block (`drop_target` is the
+  proxy after its first update). The proxy's target is a hidden buffer chest drained by a
+  loader onto a belt (the stand-in for a network input). From a finite chest of 200 plates,
+  all 200 arrived on the network side in 2 400 ticks (0 left in the source, 0 in the buffer).
+  It is one more network input. When the network backs up, the buffer fills and the inserters
+  wait, like a backed-up belt input.
+- `put_and_take_on_one_proxy_bypass_the_network`: with one proxy on an output buffer, an
+  inserter dropping into the block puts items straight into the buffer that a taking inserter
+  empties. 100 of 100 plates went from one inserter to the other without passing the network.
+  A proxy exposes exactly one inventory, so one block cannot do both exactly.
+- Cost for Plan 2: decide each block's role from the inserters next to it (`drop_target` /
+  `pickup_target`) on build, rotate and mine events, and rebuild the block's network port when
+  the role changes. A block with inserters in both directions needs a rule. My suggestion:
+  allow inserter input, and refuse "both directions on one block" with a message.
+
+### F5: lane balancing ("balance lanes" mode)
+
+**Result: exact with lane splitters. Smallest 1:2 construction: one lane splitter before the
+splitter (2 entities).**
+
+`lane_mode_balances_lanes`: 1:2 with only the right lane of the input fed (side-loaded; one
+full lane is 22.5 / 30 items/s). Each output's lanes are counted on its last belt tile, which
+the test empties every tick. Expected per lane: a quarter of the input, 5.625 / 7.5 items/s.
+
+| construction | out1 left | out1 right | out2 left | out2 right |
+| --- | --- | --- | --- | --- |
+| splitter only (control) | 0 | 11.250 / 15.000 | 0 | 11.250 / 15.000 |
+| lane splitter, then splitter | 5.633 / 7.500 | 5.633 / 7.500 | 5.617 / 7.500 | 5.617 / 7.500 |
+| splitter, then a lane splitter on each output | 5.633 / 7.500 | 5.617 / 7.500 | 5.633 / 7.500 | 5.617 / 7.500 |
+
+The express deviations (5.633 vs 5.617) are one item out of about 338 per lane in the
+3 600-tick window: the discrete item boundary of the count, not a drift.
+
+The vanilla `lane-splitter` exists in base 2.1.23 but runs at yellow speed (0.03125). The
+spike uses a copy at the tier speed (`mb-spike-lane-splitter`), so the product needs one lane
+splitter prototype per tier.
+
+**Recommended design for N:M.** Build the keep-lanes network and add a lane splitter on each
+output (M lane splitters). The keep-lanes network gives every output the same left share and
+the same right share, so each output lane gets (left + right) / 2 of an equal share. A lane
+splitter on each input (N of them) is also exact. Both placements were measured equal, in the
+1:2 case only; Task 5 should measure the chosen one in a real N:M network.
+
+### Concerns for Plan 2
+
+- **An inserter next to a block with a block-tile linked belt picks from the belt by
+  default.** Fix it by script (`pickup_target`) on every relevant build, or avoid the layout.
+- **Block roles.** A block's proxy targets one buffer, so its inserter role (take, put or
+  none) must be tracked and the network rebuilt when it changes (F4).
+- **Buffer contents.** Up to one stack per inserter block sits in its buffer chest. Rebuilds
+  and removal must move it (no loss).
+- **Short-window lag.** When stopped inserters start again, they first empty the buffer, so
+  over a short window they take up to one stack more than their share. In steady state the
+  share is exact (measured above).
+- **Not measured here:** an N:M network with an inserter output (Task 5 measures exactness in
+  real networks), long-handed and filter inserters, and save/load at turbo speed (the
+  save/load check ran at express; F2 throughput was measured at both tiers).

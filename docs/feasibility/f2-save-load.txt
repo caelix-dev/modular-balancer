@@ -1,0 +1,31 @@
+F2 save/load check, Factorio 2.1.23, vanilla preset, MCP fdev instance "mb-t3"
+(server_start with dev_mods = modular-balancer, portal_mods = factorio-test, so mb-spikes is on).
+Built with exec_lua calls (create_entity, connect_linked_belts, insert_at), no test file.
+
+Ring: nauvis output linked belt (x 0.5) -> 4 express belts -> nauvis input linked belt (x 5.5)
+  => mb-hidden output linked belt (x 0.5) -> 4 express belts -> mb-hidden input linked belt (x 5.5)
+  => back to the nauvis output linked belt. mb-hidden is hidden for the player force.
+32 iron plates inserted on the nauvis belts.
+
+Before save, tick 151:
+  links: nauvis input -> mb-hidden@0.5, nauvis output -> mb-hidden@5.5,
+         mb-hidden input -> nauvis@0.5, mb-hidden output -> nauvis@5.5
+  items: nauvis 12, mb-hidden 20 (total 32); hidden_for_player true
+game.server_save("mb-t3-f2")  -> E:\factorio-dev\instances\mb-t3\saves\mb-t3-f2.zip
+server_stop, server_start with save = that zip (the mod's prototypes had changed in between,
+so the load also ran on_configuration_changed)
+
+After load, tick 151:
+  links: identical to the above
+  items: nauvis 12, mb-hidden 20 (total 32), per-entity counts identical; hidden_for_player true
+After 1 000 more ticks (tick 1151):
+  items: nauvis 13, mb-hidden 19 (total 32), positions changed: the ring still circulates.
+
+Second save (proxy and inserter state):
+  nauvis tile (0.5, 4.5): mb-spike-lb (output, north) + mb-spike-proxy targeting a steel chest
+  with 100 plates on mb-hidden; inserter east of it with pickup_target written to the proxy
+  (by default it picks from the linked belt, see F3), disabled_by_script = true.
+  server_save "mb-t3-f2b", restart from it:
+  pickup_target after load: mb-spike-proxy; proxy target surface: mb-hidden; proxy shows 100.
+  Enabled the inserter, 300 ticks: 12 moved, 1 in the inserter's hand, 87 left (100 total),
+  pickup_target still mb-spike-proxy.

@@ -27,8 +27,10 @@ Unit test contract: each `tests/unit/*_test.lua` returns `{ [name] = function() 
 
 ## File map
 
-- `info.json`, `data.lua`, `control.lua` - mod entry points. `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
+- `info.json`, `settings.lua`, `data.lua`, `control.lua` - mod entry points. `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
 - `tests/unit/` - offline tests and `run.lua` runner.
 - `tests/game/` - FactorioTest suites run by `fdev test`.
+- `spikes/` - throwaway research spikes, loaded (prototypes and test suites) only when the hidden startup setting `mb-spikes` is on. It is forced on by creating the git-ignored `spikes/local-enable.lua` containing `return true`, and forced off without it.
+- `docs/feasibility.md` - spike findings (F1..), screenshots in `docs/feasibility/`.
 - `.emmyrc.json` - editor config (FactorioTest globals whitelisted). `fdev lua check` ignores it and generates its own.
 - `.superpowers/` - local planning notes, git-ignored.

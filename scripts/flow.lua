@@ -1,7 +1,7 @@
 -- Steady-state flow model of a splitter network (scripts/network.lua format). Pure Lua,
 -- no game API, deterministic.
 --
--- Model (vanilla splitters, no priority):
+-- Model (vanilla splitters, plus splitters with output priority):
 -- - Flow is measured in belts: every edge carries at most 1.0.
 -- - A splitter moves T = min(supply in, demand out) and splits T equally between its
 --   outputs, except that an output that cannot take its half (blocked) gets what it can
@@ -11,6 +11,11 @@
 -- - An unconnected splitter input supplies nothing. An unconnected splitter output takes
 --   nothing (in the game it is a dead end that fills with a few items and then blocks).
 -- - A lane splitter passes belt totals through unchanged. flow.solve_lanes models lanes.
+-- - A priority splitter (kind "priority", splitter_output_priority on output port 1) sends
+--   what port 1 can take to port 1 and only the rest to port 2. It draws its inputs like
+--   a plain splitter (no input priority):
+--     s(out 1) = min(a1 + a2, 1)
+--     s(out 2) = min(max(0, a1 + a2 - b1), 1)
 --
 -- Every edge e has a supply s[e] (what its upstream node could push into it if the edge
 -- took everything) and a demand d[e] (what its downstream node could take from it if the
@@ -25,7 +30,8 @@
 -- does not load it at runtime (Plan 2 runs only scripts/network.lua in game). If it is ever
 -- used in game, call it only from build events and handle its error.
 --
--- Loops are solved by Gauss-Seidel fixed-point iteration, sweeping all nodes until the
+-- Loops are solved by Gauss-Seidel fixed-point iteration (sweeps alternate between the
+-- node order and its reverse), sweeping all nodes until the
 -- largest change in one sweep is at most TOLERANCE (1e-13, below the 1e-12 the plan asks
 -- for). That is a step size, not a residual: with geometric convergence at rate r the
 -- remaining error is about TOLERANCE * r / (1 - r), so 1e-13 keeps it far below the tests'
@@ -73,6 +79,9 @@ local function index(net)
   for _, s in ipairs(net.splitters) do
     node("splitter", s.id)
   end
+  for _, p in ipairs(net.priority or {}) do
+    node("priority", p.id)
+  end
   for _, l in ipairs(net.lane_splitters or {}) do
     node("lane_splitter", l.id)
   end
@@ -92,19 +101,14 @@ local function index(net)
   return idx
 end
 
-local function waterfill_cap(total, other)
-  local t = total / 2
-  local rest = total - other
-  if rest > t then
-    return rest
-  end
-  return t
-end
-
 -- supply[i]: what input i offers (0..1). demand[j]: what output j takes (0..1).
 -- init: an earlier state of the same network to start from.
 -- Returns { s = {}, d = {}, f = {}, sweeps = n }, indexed by edge.
+-- Also accepts flow.solve(net, { supply = , demand = , init = }).
 function flow.solve(net, supply, demand, init)
+  if demand == nil and type(supply) == "table" and supply.supply then
+    supply, demand, init = supply.supply, supply.demand, supply.init
+  end
   local idx = index(net)
   ---@type number[]
   local s = {}
@@ -121,11 +125,16 @@ function flow.solve(net, supply, demand, init)
     d[e] = math.min(1, demand[j] or 0)
   end
 
-  local function set(tbl, e, v)
-    local delta = math.abs(tbl[e] - v)
-    tbl[e] = v
-    return delta
+  -- Flat per-node arrays for the inner loop: kind code (1 splitter, 2 priority, 3 lane
+  -- splitter) and the edge on each port (false when unconnected).
+  local nodes = idx.nodes
+  local count = #nodes
+  local K, I1, I2, O1, O2 = {}, {}, {}, {}, {}
+  for ni, n in ipairs(nodes) do
+    K[ni] = n.kind == "splitter" and 1 or n.kind == "priority" and 2 or 3
+    I1[ni], I2[ni], O1[ni], O2[ni] = n.ins[1] or false, n.ins[2] or false, n.outs[1] or false, n.outs[2] or false
   end
+  local min, abs = math.min, math.abs
 
   local sweeps = 0
   while true do
@@ -135,31 +144,70 @@ function flow.solve(net, supply, demand, init)
     end
     ---@type number
     local change = 0
-    for _, n in ipairs(idx.nodes) do
-      if n.kind == "lane_splitter" then
-        local i, o = n.ins[1], n.outs[1]
-        if o then
-          change = math.max(change, set(s, o, (i and s[i] or 0) --[[@as number]]))
-        end
-        if i then
-          change = math.max(change, set(d, i, (o and d[o] or 0) --[[@as number]]))
-        end
+    -- Alternate the sweep direction: supply travels forward and demand backward through
+    -- the node order, so each reaches across the network in one sweep.
+    local first, last, step = 1, count, 1
+    if sweeps % 2 == 0 then
+      first, last, step = count, 1, -1
+    end
+    for ni = first, last, step do
+      local i1, i2, o1, o2 = I1[ni], I2[ni], O1[ni], O2[ni]
+      local a1, a2 = i1 and s[i1] or 0, i2 and s[i2] or 0
+      local b1, b2 = o1 and d[o1] or 0, o2 and d[o2] or 0
+      local v1, v2, w1, w2 -- new s on outputs 1, 2 and new d on inputs 1, 2
+      local kind = K[ni]
+      if kind == 3 then
+        v1, w1 = a1, b1
       else
-        local i1, i2, o1, o2 = n.ins[1], n.ins[2], n.outs[1], n.outs[2]
-        local a1, a2 = i1 and s[i1] or 0, i2 and s[i2] or 0
-        local b1, b2 = o1 and d[o1] or 0, o2 and d[o2] or 0
-        if o1 then
-          change = math.max(change, set(s, o1, waterfill_cap(math.min(a1 + a2, 1 + b2), b2)))
+        if kind == 2 then
+          local a = a1 + a2
+          v1 = min(a, 1)
+          v2 = a - b1
+          v2 = v2 < 0 and 0 or (v2 > 1 and 1 or v2)
+        else
+          local T, r
+          T = min(a1 + a2, 1 + b2)
+          r = T - b2
+          v1 = r > T / 2 and r or T / 2
+          T = min(a1 + a2, 1 + b1)
+          r = T - b1
+          v2 = r > T / 2 and r or T / 2
         end
-        if o2 then
-          change = math.max(change, set(s, o2, waterfill_cap(math.min(a1 + a2, 1 + b1), b1)))
+        local T, r
+        T = min(1 + a2, b1 + b2)
+        r = T - a2
+        w1 = r > T / 2 and r or T / 2
+        T = min(1 + a1, b1 + b2)
+        r = T - a1
+        w2 = r > T / 2 and r or T / 2
+      end
+      if o1 then
+        local delta = abs(s[o1] - v1)
+        if delta > change then
+          change = delta
         end
-        if i1 then
-          change = math.max(change, set(d, i1, waterfill_cap(math.min(1 + a2, b1 + b2), a2)))
+        s[o1] = v1
+      end
+      if o2 and v2 then
+        local delta = abs(s[o2] - v2)
+        if delta > change then
+          change = delta
         end
-        if i2 then
-          change = math.max(change, set(d, i2, waterfill_cap(math.min(1 + a1, b1 + b2), a1)))
+        s[o2] = v2
+      end
+      if i1 then
+        local delta = abs(d[i1] - w1)
+        if delta > change then
+          change = delta
         end
+        d[i1] = w1
+      end
+      if i2 and w2 then
+        local delta = abs(d[i2] - w2)
+        if delta > change then
+          change = delta
+        end
+        d[i2] = w2
       end
     end
     if change <= flow.TOLERANCE then
@@ -208,8 +256,9 @@ end
 -- becomes a splitter between the two lanes (equal split and equal draw, as above). The
 -- lane network is solved by flow.solve in half-belt units (capacity 1 per lane).
 -- left[i], right[i]: supply of input i's lanes in belts (0..0.5). out_capacity: what each
--- output takes in belts, half per lane. Returns { out = { [j] = {left, right} },
--- draw = { [i] = belts }, state } in belts.
+-- output takes in belts, half per lane (a number, or a table by output index). A priority
+-- splitter becomes two per-lane priority splitters. Returns
+-- { out = { [j] = {left, right} }, draw = { [i] = belts }, state } in belts.
 ---@return { out: { left: number, right: number }[], draw: number[], state: table }
 function flow.solve_lanes(net, left, right, out_capacity)
   local n_splitters = 0
@@ -219,13 +268,17 @@ function flow.solve_lanes(net, left, right, out_capacity)
   local function lane_port(p, lane)
     if p.kind == "in" or p.kind == "out" then
       return { kind = p.kind, id = 2 * p.id - 2 + lane, port = 1 }
-    elseif p.kind == "splitter" then
-      return { kind = "splitter", id = 2 * p.id - 2 + lane, port = p.port }
+    elseif p.kind == "splitter" or p.kind == "priority" then
+      return { kind = p.kind, id = 2 * p.id - 2 + lane, port = p.port }
     end
     -- Lane splitter: lane 1 on port 1, lane 2 on port 2.
     return { kind = "splitter", id = 2 * n_splitters + p.id, port = lane }
   end
-  local lnet = { n_in = 2 * net.n_in, n_out = 2 * net.n_out, splitters = {}, edges = {} }
+  local lnet = { n_in = 2 * net.n_in, n_out = 2 * net.n_out, splitters = {}, priority = {}, edges = {} }
+  for _, p in ipairs(net.priority or {}) do
+    lnet.priority[#lnet.priority + 1] = { kind = "priority", id = 2 * p.id - 1 }
+    lnet.priority[#lnet.priority + 1] = { kind = "priority", id = 2 * p.id }
+  end
   for _, s in ipairs(net.splitters) do
     lnet.splitters[#lnet.splitters + 1] = { id = 2 * s.id - 1 }
     lnet.splitters[#lnet.splitters + 1] = { id = 2 * s.id }
@@ -243,8 +296,9 @@ function flow.solve_lanes(net, left, right, out_capacity)
   for i = 1, net.n_in do
     supply[2 * i - 1], supply[2 * i] = 2 * (left[i] or 0), 2 * (right[i] or 0)
   end
-  for j = 1, 2 * net.n_out do
-    demand[j] = out_capacity
+  for j = 1, net.n_out do
+    local cap = type(out_capacity) == "table" and out_capacity[j] or out_capacity
+    demand[2 * j - 1], demand[2 * j] = cap, cap
   end
   local state = flow.solve(lnet, supply, demand)
   local result = { out = {}, draw = {}, state = state }

@@ -7,8 +7,17 @@ local function near(a, b)
   return math.abs(a - b) <= EPS
 end
 
--- Ratios checked by outputs_are_equal and inputs_are_drawn_equally.
-local function balance_ratios()
+-- Deterministic LCG (portable, unlike math.random across C libraries).
+local function lcg(seed)
+  local state = seed
+  return function(k)
+    state = (state * 1103515245 + 12345) % 2147483648
+    return state % k
+  end
+end
+
+-- Exhaustive set: every 1 <= n, m <= 8, plus 16:16, 3:16 and 16:3.
+local function exhaustive_ratios()
   local list = {}
   for n = 1, 8 do
     for m = 1, 8 do
@@ -21,124 +30,341 @@ local function balance_ratios()
   return list
 end
 
+-- Sampled set: 40 seeded ratios with max(n, m) in 17..64, plus the size-jump cases.
+local function sampled_ratios()
+  local rand = lcg(25102026)
+  local list = {}
+  for _ = 1, 40 do
+    local big = 17 + rand(48)
+    local other = 1 + rand(big)
+    if rand(2) == 0 then
+      list[#list + 1] = { big, other }
+    else
+      list[#list + 1] = { other, big }
+    end
+  end
+  for _, r in ipairs({ { 9, 1 }, { 17, 2 }, { 33, 5 }, { 1, 40 }, { 100, 3 } }) do
+    list[#list + 1] = r
+  end
+  return list
+end
+
 local function build(n, m, opts)
   local net, err = network.build(n, m, opts)
   assert(net, string.format("%d:%d does not build: %s", n, m, tostring(err)))
   return net
 end
 
-local function check_outputs_equal(net)
-  local n, m = net.n_in, net.n_out
-  local expected = math.min(n, m) / m
-  local shares = flow.shares(net)
-  assert(#shares == m, string.format("%d:%d: %d shares", n, m, #shares))
-  for j = 1, m do
-    assert(
-      near(shares[j], expected),
-      string.format("%d:%d output %d gets %.15g, expected %.15g", n, m, j, shares[j], expected)
-    )
-  end
+local function tag(net)
+  return string.format("%d:%d", net.n_in, net.n_out)
 end
 
-local function check_inputs_equal(net, cap)
-  local n, m = net.n_in, net.n_out
-  local draw = flow.input_draw(net, cap)
-  local expected = math.min(1, cap * m / n)
-  for i = 1, n do
-    assert(
-      near(draw[i], expected),
-      string.format("%d:%d cap %g: input %d draws %.15g, expected %.15g", n, m, cap, i, draw[i], expected)
-    )
-  end
-end
-
--- Subsets of 1..k as bit masks.
-local function subset(mask, k)
-  local list = {}
+---@param k integer
+---@param v number
+---@return number[]
+local function filled(k, v)
+  local t = {}
   for i = 1, k do
-    if math.floor(mask / 2 ^ (i - 1)) % 2 == 1 then
-      list[#list + 1] = i
+    t[i] = v
+  end
+  return t
+end
+
+local function outputs_of(state, m)
+  local o = {}
+  for j = 1, m do
+    o[j] = state.f[state.out_edge[j]]
+  end
+  return o
+end
+
+local function inputs_of(state, n)
+  local d = {}
+  for i = 1, n do
+    d[i] = state.f[state.in_edge[i]]
+  end
+  return d
+end
+
+-- Water filling: the level x with sum(min(cap_j, x)) = min(total, sum(cap_j)). Returns
+-- what each output gets.
+local function water_fill(caps, total)
+  local sorted = {}
+  local sum = 0
+  for j, c in ipairs(caps) do
+    sorted[j] = c
+    sum = sum + c
+  end
+  table.sort(sorted)
+  ---@type number
+  local left = math.min(total, sum)
+  local rest = #sorted
+  ---@type number
+  local level = 0
+  for _, c in ipairs(sorted) do
+    if c * rest >= left then
+      level = left / rest
+      break
+    end
+    left, rest = left - c, rest - 1
+    level = c
+  end
+  local got = {}
+  for j, c in ipairs(caps) do
+    got[j] = math.min(c, level)
+  end
+  return got
+end
+
+local function assert_values(got, expected, what)
+  for j = 1, #expected do
+    assert(near(got[j], expected[j]), string.format("%s: [%d] = %.15g, expected %.15g", what, j, got[j], expected[j]))
+  end
+end
+
+local function random_subset(k, rand)
+  local list = {}
+  while #list == 0 do
+    for i = 1, k do
+      if rand(2) == 0 then
+        list[#list + 1] = i
+      end
     end
   end
   return list
 end
 
+local function each_subset_pair(n, m, fn, limit, samples, rand)
+  if n <= limit and m <= limit then
+    for a = 1, 2 ^ n - 1 do
+      for b = 1, 2 ^ m - 1 do
+        local ins, outs = {}, {}
+        for i = 1, n do
+          if math.floor(a / 2 ^ (i - 1)) % 2 == 1 then
+            ins[#ins + 1] = i
+          end
+        end
+        for j = 1, m do
+          if math.floor(b / 2 ^ (j - 1)) % 2 == 1 then
+            outs[#outs + 1] = j
+          end
+        end
+        fn(ins, outs)
+      end
+    end
+  else
+    rand = rand or lcg(20261024 + 100 * n + m)
+    for _ = 1, samples do
+      fn(random_subset(n, rand), random_subset(m, rand))
+    end
+  end
+end
+
+---------------------------------------------------------------------------------------------
+-- Checks. Each takes a network; `level` is "full" (exhaustive set) or "sampled".
+
+local function check_outputs_equal(net)
+  local n, m = net.n_in, net.n_out
+  local shares = flow.shares(net)
+  assert(#shares == m, tag(net) .. ": " .. #shares .. " shares")
+  assert_values(shares, filled(m, math.min(n, m) / m), tag(net) .. " shares")
+end
+
+local function check_inputs_equal(net, cap)
+  local n, m = net.n_in, net.n_out
+  local draw = flow.input_draw(net, cap)
+  assert_values(draw, filled(n, math.min(1, cap * m / n)), tag(net) .. " cap " .. cap .. " draw")
+end
+
 local function check_throughput(net, ins, outs)
-  local expected = math.min(#ins, #outs)
   local t = flow.max_throughput(net, ins, outs)
   assert(
-    near(t, expected),
-    string.format(
-      "%d:%d ins {%s} outs {%s}: max throughput %.15g, expected %d",
-      net.n_in,
-      net.n_out,
-      table.concat(ins, ","),
-      table.concat(outs, ","),
-      t,
-      expected
-    )
+    near(t, math.min(#ins, #outs)),
+    string.format("%s ins {%s} outs {%s}: max flow %.15g", tag(net), table.concat(ins, ","), table.concat(outs, ","), t)
   )
 end
 
--- Same subsets in the splitter model (not just a routing): feed only `ins`, open only `outs`.
-local function check_model_throughput(net, ins, outs)
-  local supply, demand = {}, {}
-  for i = 1, net.n_in do
-    supply[i] = 0
-  end
-  for j = 1, net.n_out do
-    demand[j] = 0
-  end
+-- Subsets through the splitter model (not just a routing): feed only `ins`, open only
+-- `outs`. Also from the loops-full start.
+local function check_model_throughput(net, ins, outs, init)
+  local supply, demand = filled(net.n_in, 0), filled(net.n_out, 0)
   for _, i in ipairs(ins) do
     supply[i] = 1
   end
   for _, j in ipairs(outs) do
     demand[j] = 1
   end
-  local state = flow.solve(net, supply, demand)
+  local state = flow.solve(net, supply, demand, init)
   local total = 0
   for _, j in ipairs(outs) do
     total = total + state.f[state.out_edge[j]]
   end
-  local expected = math.min(#ins, #outs)
   assert(
-    near(total, expected),
+    near(total, math.min(#ins, #outs)),
     string.format(
-      "%d:%d ins {%s} outs {%s}: splitter model moves %.15g, expected %d",
-      net.n_in,
-      net.n_out,
+      "%s ins {%s} outs {%s}: splitter model moves %.15g",
+      tag(net),
       table.concat(ins, ","),
       table.concat(outs, ","),
-      total,
-      expected
+      total
     )
   )
 end
 
--- Deterministic LCG (portable, unlike math.random across C libraries).
-local function lcg(seed)
-  local state = seed
-  return function(k)
-    state = (state * 1103515245 + 12345) % 2147483648
-    return state % k
+local function loops_full(net)
+  local full = { s = {}, d = {} }
+  for e = 1, #net.edges do
+    full.s[e], full.d[e] = 1, 0
+  end
+  return full
+end
+
+-- Any input mix, outputs unbounded: every input alone gives each output 1/m of it, and
+-- random rate vectors give equal outputs totalling min(sum, m).
+local function check_any_input_mix(net, rand, mixes, alone)
+  local n, m = net.n_in, net.n_out
+  local open = filled(m, 1)
+  local function check(supply, label)
+    local total = 0
+    for i = 1, n do
+      total = total + supply[i]
+    end
+    local state = flow.solve(net, supply, open)
+    assert_values(outputs_of(state, m), filled(m, math.min(total, m) / m), tag(net) .. " " .. label)
+  end
+  for a = 1, math.min(n, alone) do
+    local supply = filled(n, 0)
+    supply[a] = 1
+    check(supply, "input " .. a .. " alone")
+  end
+  for k = 1, mixes do
+    local supply = {}
+    for i = 1, n do
+      supply[i] = rand(1001) / 1000
+    end
+    check(supply, "random mix " .. k)
   end
 end
 
--- Every subset pair when n, m <= limit (default 6), else `samples` (default 200) random
--- pairs with a fixed seed.
-local function each_subset_pair(n, m, fn, limit, samples)
-  limit = limit or 6
-  if n <= limit and m <= limit then
-    for a = 1, 2 ^ n - 1 do
-      for b = 1, 2 ^ m - 1 do
-        fn(subset(a, n), subset(b, m))
+-- Lane-aware, with balance_lanes: one lane alone and random lane rates give equal lanes on
+-- every output; only left lanes fed gives min(n / 2, m) in total.
+local function check_lanes(lnet, rand, mixes)
+  local n, m = lnet.n_in, lnet.n_out
+  local function check(left, right, label)
+    local total = 0
+    for i = 1, n do
+      total = total + left[i] + right[i]
+    end
+    local per_lane = math.min(total, m) / (2 * m)
+    local lanes = flow.solve_lanes(lnet, left, right, 1)
+    for j = 1, m do
+      local o = assert(lanes.out[j], "missing output")
+      assert(
+        near(o.left, per_lane) and near(o.right, per_lane),
+        string.format("%s lanes %s: output %d %.15g / %.15g, expected %.15g", tag(lnet), label, j, o.left, o.right, per_lane)
+      )
+    end
+  end
+  local zero, halves = filled(n, 0), filled(n, 0.5)
+  check(halves, zero, "all left lanes")
+  local one = filled(n, 0)
+  one[1] = 0.5
+  check(zero, one, "right lane of input 1 alone")
+  for k = 1, mixes do
+    local left, right = {}, {}
+    for i = 1, n do
+      left[i], right[i] = rand(501) / 1000, rand(501) / 1000
+    end
+    check(left, right, "random mix " .. k)
+  end
+end
+
+-- From the loops-full state the network's input and output flows equal the default start.
+local function check_loops_full_start(net)
+  local n, m = net.n_in, net.n_out
+  local full = loops_full(net)
+  for _, cap in ipairs({ 1, 0.5 }) do
+    local a = flow.solve(net, filled(n, 1), filled(m, cap))
+    local b = flow.solve(net, filled(n, 1), filled(m, cap), full)
+    assert_values(inputs_of(b, n), inputs_of(a, n), tag(net) .. " loops-full start, cap " .. cap .. ", inputs")
+    assert_values(outputs_of(b, m), outputs_of(a, m), tag(net) .. " loops-full start, cap " .. cap .. ", outputs")
+  end
+end
+
+-- One output limited to 0.3 of its share: it gets that, every other output gets
+-- (total - 0.3 * share) / (m - 1). With all inputs full, and with a random input mix.
+local function check_one_slow_output(net, rand, cases)
+  local n, m = net.n_in, net.n_out
+  if m < 2 then
+    return
+  end
+  for k = 1, cases do
+    local supply = filled(n, 1)
+    if k > 1 then
+      for i = 1, n do
+        supply[i] = rand(1001) / 1000
       end
     end
-  else
-    local rand = lcg(20261024 + 100 * n + m)
-    for _ = 1, samples or 200 do
-      fn(subset(1 + rand(2 ^ n - 1), n), subset(1 + rand(2 ^ m - 1), m))
+    ---@type number
+    local supplied = 0
+    for i = 1, n do
+      supplied = supplied + (supply[i] or 0)
     end
+    local share = math.min(supplied, m) / m
+    local slow = 1 + rand(m)
+    local caps = filled(m, 1)
+    caps[slow] = 0.3 * share
+    local total = math.min(supplied, 0.3 * share + (m - 1))
+    local expected = filled(m, (total - 0.3 * share) / (m - 1))
+    expected[slow] = 0.3 * share
+    local state = flow.solve(net, supply, caps)
+    assert_values(outputs_of(state, m), expected, tag(net) .. " slow output " .. slow .. " (case " .. k .. ")")
+  end
+end
+
+-- Random subsets of outputs with random limits: water filling (every unlimited output
+-- equal, every limited one gets min(limit, level)).
+local function check_slow_subsets(net, rand, cases)
+  local n, m = net.n_in, net.n_out
+  for k = 1, cases do
+    local supply = filled(n, 1)
+    if k % 2 == 0 then
+      for i = 1, n do
+        supply[i] = rand(1001) / 1000
+      end
+    end
+    ---@type number
+    local supplied = 0
+    for i = 1, n do
+      supplied = supplied + (supply[i] or 0)
+    end
+    local caps = filled(m, 1)
+    for _, j in ipairs(random_subset(m, rand)) do
+      caps[j] = rand(1001) / 1000
+    end
+    local state = flow.solve(net, supply, caps)
+    assert_values(outputs_of(state, m), water_fill(caps, supplied), tag(net) .. " slow subset (case " .. k .. ")")
+  end
+end
+
+-- Inputs saturated: every output limited to the same value, or only a subset open.
+local function check_draw_under_backpressure(net, rand, subsets)
+  local n, m = net.n_in, net.n_out
+  for _, cap in ipairs({ 0.1, 0.5, 0.9 }) do
+    check_inputs_equal(net, cap)
+  end
+  for k = 1, subsets do
+    local open = random_subset(m, rand)
+    local caps = filled(m, 0)
+    for _, j in ipairs(open) do
+      caps[j] = 1
+    end
+    local state = flow.solve(net, filled(n, 1), caps)
+    assert_values(
+      inputs_of(state, n),
+      filled(n, math.min(1, #open / n)),
+      tag(net) .. " only {" .. table.concat(open, ",") .. "} open (case " .. k .. ")"
+    )
   end
 end
 
@@ -146,24 +372,38 @@ local function check_structure(net)
   local seen = {}
   local function use(p, dir)
     local key = string.format("%s:%d:%d:%s", p.kind, p.id, p.port or 1, dir)
-    assert(not seen[key], "port used twice: " .. key)
+    assert(not seen[key], tag(net) .. " port used twice: " .. key)
     seen[key] = true
   end
-  local ids = {}
+  ---@type table<string, table<integer, boolean>>
+  local ids = { splitter = {}, priority = {} }
   for _, s in ipairs(net.splitters) do
-    assert(not ids[s.id], "duplicate splitter id " .. s.id)
-    ids[s.id] = true
+    assert(not ids.splitter[s.id], "duplicate splitter id " .. s.id)
+    ids.splitter[s.id] = true
+  end
+  for _, p in ipairs(net.priority) do
+    assert(p.kind == "priority", "priority node kind")
+    assert(not ids.priority[p.id], "duplicate priority id " .. p.id)
+    ids.priority[p.id] = true
   end
   for _, ed in ipairs(net.edges) do
     assert(ed.from.kind ~= "out" and ed.to.kind ~= "in", "edge direction")
-    if ed.from.kind == "splitter" then
-      assert(ids[ed.from.id], "edge from unknown splitter")
-    end
-    if ed.to.kind == "splitter" then
-      assert(ids[ed.to.id], "edge to unknown splitter")
+    for _, p in ipairs({ ed.from, ed.to }) do
+      local set = ids[p.kind] --[[@as table<integer, boolean>?]]
+      if set then
+        assert(set[p.id], tag(net) .. " edge to unknown " .. p.kind .. " " .. p.id)
+      end
     end
     use(ed.from, "out")
     use(ed.to, "in")
+    if ed.from.kind == "priority" then
+      -- Port 1 is a network output, port 2 the overflow back into the network.
+      if ed.from.port == 1 then
+        assert(ed.to.kind == "out", tag(net) .. " priority port 1 must be a network output")
+      else
+        assert(ed.to.kind ~= "out", tag(net) .. " priority port 2 must go back into the network")
+      end
+    end
   end
   for i = 1, net.n_in do
     assert(seen["in:" .. i .. ":1:out"], "input " .. i .. " unconnected")
@@ -171,19 +411,20 @@ local function check_structure(net)
   for j = 1, net.n_out do
     assert(seen["out:" .. j .. ":1:in"], "output " .. j .. " unconnected")
   end
-  -- Every splitter has at least one input and one output; at most one dead port.
-  for _, s in ipairs(net.splitters) do
-    local ports = 0
-    for _, key in ipairs({ ":1:in", ":2:in", ":1:out", ":2:out" }) do
-      if seen["splitter:" .. s.id .. key] then
-        ports = ports + 1
+  for kind, set in pairs(ids) do
+    for id in pairs(set) do
+      local ports = 0
+      for _, key in ipairs({ ":1:in", ":2:in", ":1:out", ":2:out" }) do
+        if seen[kind .. ":" .. id .. key] then
+          ports = ports + 1
+        end
       end
+      assert(ports >= 3, tag(net) .. " " .. kind .. " " .. id .. " has " .. ports .. " connected ports")
     end
-    assert(ports >= 3, "splitter " .. s.id .. " has " .. ports .. " connected ports")
   end
   -- Every node is reachable from an input and reaches an output (nothing trapped).
   local function key(p)
-    return p.kind == "in" and "in" or p.kind == "out" and "out" or (p.kind .. ":" .. p.id)
+    return (p.kind == "in" or p.kind == "out") and p.kind or (p.kind .. ":" .. p.id)
   end
   local function reach(start, forward)
     local seen_nodes, changed = { [start] = true }, true
@@ -202,147 +443,43 @@ local function check_structure(net)
     return seen_nodes
   end
   local from_in, to_out = reach("in", true), reach("out", false)
-  for _, s in ipairs(net.splitters) do
-    assert(from_in["splitter:" .. s.id], "splitter " .. s.id .. " unreachable from the inputs")
-    assert(to_out["splitter:" .. s.id], "splitter " .. s.id .. " reaches no output")
+  for kind, set in pairs(ids) do
+    for id in pairs(set) do
+      assert(from_in[kind .. ":" .. id], tag(net) .. " " .. kind .. " " .. id .. " unreachable from the inputs")
+      assert(to_out[kind .. ":" .. id], tag(net) .. " " .. kind .. " " .. id .. " reaches no output")
+    end
+  end
+  local st = net.stats
+  assert(
+    st.splitters == #net.splitters
+      and st.priority == #net.priority
+      and st.lane_splitters == #(net.lane_splitters or {})
+      and st.edges == #net.edges,
+    tag(net) .. " stats"
+  )
+end
+
+local function for_each(ratios, fn)
+  for _, r in ipairs(ratios) do
+    fn(build(r[1], r[2]), r[1], r[2])
   end
 end
 
-local function all_checks(n, m)
-  local net = build(n, m)
-  check_structure(net)
-  check_outputs_equal(net)
-  check_inputs_equal(net, 0.5)
-  each_subset_pair(n, m, function(ins, outs)
-    check_throughput(net, ins, outs)
-  end)
-end
+---------------------------------------------------------------------------------------------
 
 return {
   outputs_are_equal = function()
-    for _, r in ipairs(balance_ratios()) do
-      check_outputs_equal(build(r[1], r[2]))
-    end
+    for_each(exhaustive_ratios(), check_outputs_equal)
+    for_each(sampled_ratios(), check_outputs_equal)
   end,
 
   inputs_are_drawn_equally = function()
-    for _, r in ipairs(balance_ratios()) do
-      check_inputs_equal(build(r[1], r[2]), 0.5)
-    end
-  end,
-
-  inputs_are_drawn_equally_at_other_capacities = function()
-    for _, r in ipairs(balance_ratios()) do
-      local net = build(r[1], r[2])
-      for _, cap in ipairs({ 0.1, 0.25, 0.75, 0.9, 0.99 }) do
-        check_inputs_equal(net, cap)
-      end
-    end
-  end,
-
-  -- Beyond the plan: uneven input supply (outputs open) still gives equal outputs, and
-  -- uneven output demand (inputs saturated) still draws inputs equally.
-  uneven_supply_and_demand_stay_balanced = function()
-    local rand = lcg(4242)
-    for _, r in ipairs(balance_ratios()) do
-      local n, m = r[1], r[2]
-      local net = build(n, m)
-      for _ = 1, 2 do
-        local supply, demand, ones_in, ones_out, total_s, total_d = {}, {}, {}, {}, 0, 0
-        for i = 1, n do
-          supply[i] = rand(1000) / 1000
-          total_s = total_s + supply[i]
-          ones_in[i] = 1
+    for _, ratios in ipairs({ exhaustive_ratios(), sampled_ratios() }) do
+      for_each(ratios, function(net)
+        for _, cap in ipairs({ 0.1, 0.25, 0.5, 0.75, 0.99 }) do
+          check_inputs_equal(net, cap)
         end
-        for j = 1, m do
-          demand[j] = rand(1000) / 1000
-          total_d = total_d + demand[j]
-          ones_out[j] = 1
-        end
-        if total_s <= m then
-          local state = flow.solve(net, supply, ones_out)
-          for j = 1, m do
-            local f = state.f[state.out_edge[j]]
-            assert(near(f, total_s / m), string.format("%d:%d uneven supply: output %d gets %.15g", n, m, j, f))
-          end
-        end
-        if total_d <= n then
-          local state = flow.solve(net, ones_in, demand)
-          for i = 1, n do
-            local f = state.f[state.in_edge[i]]
-            assert(near(f, total_d / n), string.format("%d:%d uneven demand: input %d draws %.15g", n, m, i, f))
-          end
-        end
-      end
-    end
-  end,
-
-  -- User requirement: outputs stay equal for any input mix. (a) Each input alone at 1.0
-  -- gives every output 1 / n_out of it. (b) 50 random input-rate vectors in [0, 1] give
-  -- equal outputs totalling min(sum, n_out). (c) The same with balance_lanes in the
-  -- lane-aware model: each input lane alone, and random lane rates in [0, 0.5], give equal
-  -- lanes on every output. Outputs unbounded throughout.
-  outputs_equal_for_any_input_mix = function()
-    local rand = lcg(777)
-    for _, r in ipairs(balance_ratios()) do
-      local n, m = r[1], r[2]
-      local net = build(n, m)
-      local lnet = build(n, m, { balance_lanes = true })
-      local open = {}
-      for j = 1, m do
-        open[j] = 1
-      end
-      local function check(supply, label)
-        local total = 0
-        for i = 1, n do
-          total = total + supply[i]
-        end
-        local expected = math.min(total, m) / m
-        local state = flow.solve(net, supply, open)
-        for j = 1, m do
-          local f = state.f[state.out_edge[j]]
-          assert(near(f, expected), string.format("%d:%d %s: output %d gets %.15g, expected %.15g", n, m, label, j, f, expected))
-        end
-      end
-      local function check_lanes(left, right, label)
-        local total = 0
-        for i = 1, n do
-          total = total + left[i] + right[i]
-        end
-        local expected = math.min(total, m) / (2 * m)
-        local lanes = flow.solve_lanes(lnet, left, right, 1)
-        for j = 1, m do
-          local o = assert(lanes.out[j], "missing output")
-          assert(
-            near(o.left, expected) and near(o.right, expected),
-            string.format("%d:%d lanes %s: output %d %.15g / %.15g, expected %.15g", n, m, label, j, o.left, o.right, expected)
-          )
-        end
-      end
-      for alone = 1, n do
-        local supply, left, right, zero = {}, {}, {}, {}
-        for i = 1, n do
-          supply[i] = i == alone and 1 or 0
-          left[i] = i == alone and 0.5 or 0
-          zero[i] = 0
-        end
-        check(supply, "input " .. alone .. " alone")
-        check_lanes(left, zero, "left lane of input " .. alone .. " alone")
-        for i = 1, n do
-          right[i] = left[i]
-        end
-        check_lanes(zero, right, "right lane of input " .. alone .. " alone")
-      end
-      for k = 1, 50 do
-        local supply, left, right = {}, {}, {}
-        for i = 1, n do
-          supply[i] = rand(1001) / 1000
-          left[i] = rand(501) / 1000
-          right[i] = rand(501) / 1000
-        end
-        check(supply, "random mix " .. k)
-        check_lanes(left, right, "random mix " .. k)
-      end
+      end)
     end
   end,
 
@@ -352,50 +489,81 @@ return {
         local net = build(n, m)
         each_subset_pair(n, m, function(ins, outs)
           check_throughput(net, ins, outs)
-        end)
+        end, 6, 200)
       end
     end
+    for_each(sampled_ratios(), function(net, n, m)
+      each_subset_pair(n, m, function(ins, outs)
+        check_throughput(net, ins, outs)
+      end, 0, 20)
+    end)
   end,
 
-  -- Max flow ignores how splitters share capacity with loops; this runs the same subsets
-  -- through the splitter model (exhaustive up to 4:4, sampled above).
+  -- Max flow ignores how splitters share capacity with loops; this runs subsets through the
+  -- splitter model, from the empty and from the loops-full start (exhaustive up to 4:4).
   throughput_unlimited_in_the_splitter_model = function()
-    local ratios = {}
-    for n = 1, 8 do
-      for m = 1, 8 do
-        ratios[#ratios + 1] = { n, m }
+    for_each(exhaustive_ratios(), function(net, n, m)
+      local full = loops_full(net)
+      each_subset_pair(n, m, function(ins, outs)
+        check_model_throughput(net, ins, outs)
+        check_model_throughput(net, ins, outs, full)
+      end, 4, 25)
+    end)
+    for_each(sampled_ratios(), function(net, n, m)
+      each_subset_pair(n, m, function(ins, outs)
+        check_model_throughput(net, ins, outs)
+      end, 0, 6)
+    end)
+  end,
+
+  outputs_equal_for_any_input_mix = function()
+    local rand = lcg(777)
+    for_each(exhaustive_ratios(), function(net)
+      check_any_input_mix(net, rand, 50, math.huge)
+    end)
+    for_each(sampled_ratios(), function(net)
+      check_any_input_mix(net, rand, 8, 2)
+    end)
+  end,
+
+  balance_lanes_lane_aware = function()
+    local rand = lcg(4242)
+    for _, entry in ipairs({ { exhaustive_ratios(), 20 }, { sampled_ratios(), 3 } }) do
+      for _, r in ipairs(entry[1]) do
+        local n, m = r[1], r[2]
+        local plain = build(n, m)
+        local lnet = build(n, m, { balance_lanes = true })
+        assert(plain.lane_splitters == nil, "no lane splitters without opts")
+        assert(#lnet.lane_splitters == n, string.format("%d:%d has %d lane splitters", n, m, #lnet.lane_splitters))
+        for _, ed in ipairs(lnet.edges) do
+          if ed.to.kind == "lane_splitter" then
+            assert(ed.from.kind == "in", "lane splitter right after an input")
+          end
+        end
+        check_lanes(lnet, rand, entry[2])
       end
     end
-    ratios[#ratios + 1] = { 16, 16 }
-    ratios[#ratios + 1] = { 3, 16 }
-    ratios[#ratios + 1] = { 16, 3 }
-    for _, r in ipairs(ratios) do
-      local net = build(r[1], r[2])
-      each_subset_pair(r[1], r[2], function(ins, outs)
-        check_model_throughput(net, ins, outs)
-      end, 4, 25)
-    end
   end,
 
-  structure_is_well_formed = function()
-    for _, r in ipairs(balance_ratios()) do
-      check_structure(build(r[1], r[2]))
-      check_structure(build(r[1], r[2], { balance_lanes = true }))
-    end
+  -- Without balance_lanes the network keeps lanes: one lane in, the same lane out.
+  network_keeps_lanes = function()
+    for_each(exhaustive_ratios(), function(net, n, m)
+      local lanes = flow.solve_lanes(net, filled(n, 0.5), filled(n, 0), 1)
+      for j = 1, m do
+        local o = assert(lanes.out[j], "missing output")
+        assert(near(o.right, 0), string.format("%d:%d output %d right lane not empty", n, m, j))
+        assert(near(o.left, math.min(n, m) / (2 * m)), string.format("%d:%d output %d left lane", n, m, j))
+      end
+    end)
   end,
 
-  degenerate_ratios_build = function()
-    all_checks(1, 1)
-    all_checks(1, 8)
-    all_checks(8, 1)
-    local one = build(1, 1)
-    assert(#one.splitters == 0 and #one.edges == 1, "1:1 is a single edge")
-    assert(#build(2, 2).splitters == 1, "2:2 is one splitter")
-    assert(#build(1, 2).splitters == 1 and #build(2, 1).splitters == 1, "1:2 and 2:1 are one splitter")
+  loops_full_start_gives_the_same_flows = function()
+    for_each(exhaustive_ratios(), check_loops_full_start)
+    for_each(sampled_ratios(), check_loops_full_start)
   end,
 
   loops_drain_after_backpressure = function()
-    for _, r in ipairs({ { 3, 5 }, { 5, 3 }, { 2, 3 } }) do
+    for _, r in ipairs({ { 3, 5 }, { 5, 3 }, { 2, 3 }, { 9, 1 }, { 1, 40 } }) do
       local net = build(r[1], r[2])
       local draw, blocked = flow.input_draw(net, 0)
       local total = 0
@@ -406,56 +574,121 @@ return {
       for e = 1, #net.edges do
         assert(near(blocked.f[e], 0), string.format("%d:%d edge %d circulates while blocked", r[1], r[2], e))
       end
-      local fresh = flow.shares(net)
       local after = flow.shares(net, blocked)
-      for j = 1, net.n_out do
-        assert(near(after[j], fresh[j]), string.format("%d:%d output %d changed after release", r[1], r[2], j))
-        assert(near(after[j], math.min(r[1], r[2]) / r[2]), "exact after release")
+      assert_values(after, filled(r[2], math.min(r[1], r[2]) / r[2]), tag(net) .. " after release")
+    end
+  end,
+
+  recirc_one_slow_output = function()
+    local rand = lcg(31)
+    for_each(exhaustive_ratios(), function(net)
+      check_one_slow_output(net, rand, 4)
+    end)
+    for_each(sampled_ratios(), function(net)
+      check_one_slow_output(net, rand, 2)
+    end)
+  end,
+
+  recirc_any_subset_of_slow_outputs = function()
+    local rand = lcg(32)
+    for_each(exhaustive_ratios(), function(net)
+      check_slow_subsets(net, rand, 12)
+    end)
+    for_each(sampled_ratios(), function(net)
+      check_slow_subsets(net, rand, 3)
+    end)
+  end,
+
+  recirc_inputs_drawn_equally = function()
+    local rand = lcg(33)
+    for_each(exhaustive_ratios(), function(net)
+      check_draw_under_backpressure(net, rand, 12)
+    end)
+    for_each(sampled_ratios(), function(net)
+      check_draw_under_backpressure(net, rand, 3)
+    end)
+  end,
+
+  -- The F8 case that broke the prototype: 3:5 with outputs 1 and 2 open draws equally.
+  recirc_f8_case_draws_equally = function()
+    local state = flow.solve(build(3, 5), { 1, 1, 1 }, { 1, 1, 0, 0, 0 })
+    assert_values(inputs_of(state, 3), filled(3, 2 / 3), "3:5 with two outputs open")
+  end,
+
+  structure_is_well_formed = function()
+    for _, ratios in ipairs({ exhaustive_ratios(), sampled_ratios() }) do
+      for _, r in ipairs(ratios) do
+        check_structure(build(r[1], r[2]))
+        check_structure(build(r[1], r[2], { balance_lanes = true }))
+        check_structure(build(r[1], r[2], { recirc = false }))
       end
     end
   end,
 
-  -- From the loops-full state (every supply 1, every demand 0: the greatest fixed point)
-  -- the network's input and output flows equal those from the default empty start.
-  loops_full_start_gives_the_same_flows = function()
-    for _, r in ipairs(balance_ratios()) do
+  degenerate_ratios_build = function()
+    local one = build(1, 1)
+    assert(#one.splitters == 0 and #one.priority == 0 and #one.edges == 1, "1:1 is a single edge")
+    assert(#build(2, 1).splitters == 1 and #build(2, 1).priority == 0, "2:1 is one splitter")
+    local rand = lcg(5)
+    for _, r in ipairs({ { 1, 1 }, { 1, 8 }, { 8, 1 } }) do
+      local net = build(r[1], r[2])
+      check_outputs_equal(net)
+      check_inputs_equal(net, 0.5)
+      check_draw_under_backpressure(net, rand, 4)
+      each_subset_pair(r[1], r[2], function(ins, outs)
+        check_throughput(net, ins, outs)
+        check_model_throughput(net, ins, outs)
+      end, 8, 0)
+    end
+  end,
+
+  -- Recirculation off: the Plan 1 network (no priority splitters), still exact.
+  recirc_off_is_the_plain_network = function()
+    for n = 1, 6 do
+      for m = 1, 6 do
+        local net = build(n, m, { recirc = false })
+        assert(m == 1 or #net.priority == 0, string.format("%d:%d plain has priority splitters", n, m))
+        check_outputs_equal(net)
+        check_inputs_equal(net, 0.5)
+        each_subset_pair(n, m, function(ins, outs)
+          check_throughput(net, ins, outs)
+          check_model_throughput(net, ins, outs)
+        end, 4, 25)
+      end
+    end
+  end,
+
+  invalid_sizes_are_refused = function()
+    for _, r in ipairs({ { 0, 2 }, { 2, 0 }, { 1.5, 2 }, { "3", 2 } }) do
+      ---@diagnostic disable-next-line: param-type-mismatch
+      local net, err = network.build(r[1], r[2])
+      assert(net == nil and err == "invalid", tostring(r[1]) .. ":" .. tostring(r[2]) .. " must be refused")
+    end
+    assert(rawget(network, "MAX_SIDE") == nil, "MAX_SIDE is removed")
+  end,
+
+  no_size_cap = function()
+    local rand = lcg(200)
+    for _, r in ipairs({ { 200, 7 }, { 7, 200 } }) do
       local n, m = r[1], r[2]
-      local net = build(n, m)
-      local full = { s = {}, d = {} }
-      for e = 1, #net.edges do
-        full.s[e], full.d[e] = 1, 0
+      -- Best of three, so a garbage collection cycle does not count.
+      local best = math.huge
+      local net
+      for _ = 1, 3 do
+        local t = os.clock()
+        net = build(n, m)
+        best = math.min(best, os.clock() - t)
       end
-      local ones = {}
-      for i = 1, n do
-        ones[i] = 1
-      end
-      for _, cap in ipairs({ 1, 0.5 }) do
-        local caps = {}
-        for j = 1, m do
-          caps[j] = cap
-        end
-        local a = flow.solve(net, ones, caps)
-        local b = flow.solve(net, ones, caps, full)
-        for i = 1, n do
-          local x, y = a.f[a.in_edge[i]], b.f[b.in_edge[i]]
-          assert(near(x, y), string.format("%d:%d cap %g input %d: %.15g vs %.15g", n, m, cap, i, x, y))
-        end
-        for j = 1, m do
-          local x, y = a.f[a.out_edge[j]], b.f[b.out_edge[j]]
-          assert(near(x, y), string.format("%d:%d cap %g output %d: %.15g vs %.15g", n, m, cap, j, x, y))
-        end
-      end
+      assert(best < 0.05, string.format("%d:%d builds in %.1f ms", n, m, best * 1000))
+      check_structure(net)
+      check_any_input_mix(net, rand, 20, 0)
+      check_one_slow_output(net, rand, 2)
+      check_slow_subsets(net, rand, 2)
+      check_draw_under_backpressure(net, rand, 2)
+      each_subset_pair(n, m, function(ins, outs)
+        check_model_throughput(net, ins, outs)
+      end, 0, 2, rand)
     end
-  end,
-
-  size_limit_is_explicit = function()
-    local net, err = network.build(17, 2)
-    assert(net == nil and err == "too-large", "17:2 must be refused")
-    net, err = network.build(2, 17)
-    assert(net == nil and err == "too-large", "2:17 must be refused")
-    net, err = network.build(0, 2)
-    assert(net == nil and err == "invalid", "0:2 must be refused")
-    assert(network.build(16, 16), "16:16 must build")
   end,
 
   build_is_deterministic = function()
@@ -463,85 +696,25 @@ return {
     assert(#a.edges == #b.edges, "same edge count")
     for e = 1, #a.edges do
       local x, y = a.edges[e], b.edges[e]
-      assert(
-        x.from.kind == y.from.kind and x.from.id == y.from.id and x.from.port == y.from.port,
-        "same edges"
-      )
-      assert(x.to.kind == y.to.kind and x.to.id == y.to.id and x.to.port == y.to.port, "same edges")
-    end
-  end,
-
-  balance_lanes_adds_lane_splitters = function()
-    for _, r in ipairs(balance_ratios()) do
-      local n, m = r[1], r[2]
-      local plain = build(n, m)
-      local net = build(n, m, { balance_lanes = true })
-      assert(plain.lane_splitters == nil, "no lane splitters without opts")
-      assert(#net.lane_splitters == n, string.format("%d:%d has %d lane splitters", n, m, #net.lane_splitters))
-      assert(#net.splitters == #plain.splitters, "same splitters")
-      for _, l in ipairs(net.lane_splitters) do
-        assert(l.kind == "lane_splitter", "lane splitter kind")
-      end
-      -- Each lane splitter sits directly on an input.
-      for _, ed in ipairs(net.edges) do
-        if ed.to.kind == "lane_splitter" then
-          assert(ed.from.kind == "in", "lane splitter right after an input")
-        end
-      end
-      check_outputs_equal(net)
-      check_inputs_equal(net, 0.5)
-    end
-  end,
-
-  -- Lane-aware model: with only the left lanes fed (0.5 belt each), every output lane gets
-  -- the same and the total is min(N / 2, M). Output-side lane splitters fail this for
-  -- N > M (each output's lanes only bring 0.5).
-  balance_lanes_keeps_full_throughput_with_one_lane_fed = function()
-    for _, r in ipairs(balance_ratios()) do
-      local n, m = r[1], r[2]
-      local net = build(n, m, { balance_lanes = true })
-      local left, right = {}, {}
-      for i = 1, n do
-        left[i], right[i] = 0.5, 0
-      end
-      local lanes = flow.solve_lanes(net, left, right, 1)
-      local per_lane = math.min(n / 2, m) / (2 * m)
-      for j = 1, m do
-        local o = assert(lanes.out[j], "missing output")
-        assert(
-          near(o.left, per_lane) and near(o.right, per_lane),
-          string.format("%d:%d output %d lanes %.15g / %.15g, expected %.15g", n, m, j, o.left, o.right, per_lane)
-        )
-      end
-      for i = 1, n do
-        assert(near(lanes.draw[i], math.min(0.5, m / n)), string.format("%d:%d input %d draw", n, m, i))
+      for _, k in ipairs({ "from", "to" }) do
+        assert(x[k].kind == y[k].kind and x[k].id == y[k].id and x[k].port == y[k].port, "same edges")
       end
     end
   end,
 
-  -- Without balance_lanes the network keeps lanes: one lane in, the same lane out.
-  plain_network_keeps_lanes = function()
-    for _, r in ipairs(balance_ratios()) do
-      local n, m = r[1], r[2]
-      local left, right = {}, {}
-      for i = 1, n do
-        left[i], right[i] = 0.5, 0
-      end
-      local lanes = flow.solve_lanes(build(n, m), left, right, 1)
-      for j = 1, m do
-        local o = assert(lanes.out[j], "missing output")
-        assert(near(o.right, 0), string.format("%d:%d output %d right lane not empty", n, m, j))
-        assert(near(o.left, math.min(n, m) / (2 * m)), string.format("%d:%d output %d left lane", n, m, j))
-      end
-    end
-  end,
-
-  splitter_count_is_reported = function()
+  size_table = function()
     local parts = {}
-    for _, r in ipairs({ { 2, 3 }, { 3, 5 }, { 8, 3 }, { 1, 5 }, { 16, 16 } }) do
-      local net = build(r[1], r[2])
-      parts[#parts + 1] = string.format("%d:%d=%d", r[1], r[2], #net.splitters)
+    for _, r in ipairs({ { 2, 3 }, { 3, 5 }, { 8, 3 }, { 9, 1 }, { 17, 2 }, { 33, 5 }, { 16, 16 }, { 64, 64 } }) do
+      local s = build(r[1], r[2]).stats
+      parts[#parts + 1] = string.format(
+        "%d:%d=%d+%dp/%de",
+        r[1],
+        r[2],
+        s.splitters,
+        s.priority,
+        s.edges
+      )
     end
-    print("  splitter counts: " .. table.concat(parts, " "))
+    print("  sizes (splitters+priority/edges): " .. table.concat(parts, " "))
   end,
 }

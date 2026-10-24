@@ -21,8 +21,10 @@
 --      the live group that now holds their blocks (a merge), or else to a live group on one of
 --      their tiles (a block upgraded or replaced in place: its items move to the new tier's
 --      network), or else to whoever removed the last block (a player's inventory, a robot's
---      logistic network; what does not fit is spilled there), or else is spilled at the group
---      (destroyed: nothing is deleted);
+--      logistic network, a space platform's hub; what does not fit is spilled), or else is
+--      spilled next to the group (destroyed: nothing is deleted). Spills never land on a tile the
+--      group occupied (a rebuild there would build over them) and are marked for the group's
+--      robots (balancer.spill_clear);
 --   2. refreshes each live dirty group: scan; if it has at least one input and one output, its
 --      edges and block-tile linked belts are put in place (claimed), the network is rebuilt
 --      only when N or M changed (or networks were merged in), and every port is linked. A group
@@ -59,6 +61,7 @@ local balancer = {}
 ---@field outputs mb.IoPort[] linked to placed.outputs[j]
 ---@field units (integer|uint64)[] blocks at the last refresh
 ---@field tiles {[1]: integer, [2]: integer}[] their tiles (x, y) on anchor.surface_index
+---@field force_index integer? the group's force
 ---@field anchor { surface_index: integer, position: MapPosition }?
 ---@field refused { reason: string, position: MapPosition }[]
 
@@ -76,10 +79,20 @@ local function arm()
   end)
 end
 
--- on_load: re-sets the flush handler when a save was made with groups still dirty.
+-- True while a flush has work to do: dirty groups, or loose edges to claim or swap back. The one
+-- rule for the flush handler: arm() is called whenever this becomes true, flush() unregisters the
+-- handler and empties both, and on_load re-arms from it, so a client joining (or a save loaded)
+-- in such a tick registers the same handler as the players already in the game (MODDING-RULES
+-- §2). Reads storage only.
+---@param st table?
+---@return boolean
+function balancer.pending(st)
+  return st ~= nil and (next(st.dirty) ~= nil or (st.loose ~= nil and next(st.loose) ~= nil))
+end
+
+-- on_load: re-sets the flush handler when a save was made with work pending.
 function balancer.on_load()
-  local st = storage.balancer
-  if st and next(st.dirty) then
+  if balancer.pending(storage.balancer) then
     arm()
   end
 end
@@ -318,7 +331,7 @@ local function retire(st, id, ctx, live)
       live[#live + 1] = target
     end
   else
-    ctx.spills[#ctx.spills + 1] = { nets = nets, anchor = rec.anchor, sink = st.sinks[id] }
+    ctx.spills[#ctx.spills + 1] = { nets = nets, anchor = rec.anchor, sink = st.sinks[id], tiles = rec.tiles, force_index = rec.force_index }
   end
 end
 
@@ -389,6 +402,7 @@ local function refresh_group(st, gid, ctx, player_index)
   end
   if anchor_entity then
     rec.anchor = { surface_index = g.surface_index, position = anchor_entity.position }
+    rec.force_index = g.force_index
   end
 
   local n, m = #inputs, #outputs
@@ -586,7 +600,7 @@ function balancer.flush()
     for _, p in ipairs(sp.nets) do
       if s then
         local inv = builder.take(p)
-        balancer.give(inv, sp.sink, s, a.position)
+        balancer.give(inv, sp.sink, s, a.position, sp.tiles, sp.force_index and game.forces[sp.force_index])
       else
         builder.destroy(p) -- the surface is gone, and its blocks and belts with it
       end
@@ -595,60 +609,137 @@ function balancer.flush()
   st.sinks = {}
 end
 
--- Gives the items of `inv` (a script inventory, destroyed) to `sink`: a player's inventory, or
--- the storage chests of the logistic network of a robot (the robot that mined the last block).
--- What does not fit, or everything with no sink, is spilled at `position` of `s`, marked to be
--- looted (and, after a robot, for deconstruction by its force, so robots pick it up).
+-- Spills every stack of `inv` (a script inventory, destroyed) on the ground near `position` of
+-- `s`, but never on one of `tiles` ({x, y} list: the tiles the group occupied), so a block rebuilt
+-- there (a robot rebuilding death ghosts, a script reviving ghosts) cannot build over the items
+-- and delete them. Each stack is dropped whole on the nearest free tile outside `tiles`, searched
+-- ring by ring from `position`; the items are marked to be looted and, with `force`, for
+-- deconstruction by that force, so its robots pick them up.
 ---@param inv LuaInventory
----@param sink { player_index: integer?, robot: LuaEntity? }?
 ---@param s LuaSurface
 ---@param position MapPosition
-function balancer.give(inv, sink, s, position)
+---@param tiles {[1]: integer, [2]: integer}[]?
+---@param force LuaForce?
+function balancer.spill_clear(inv, s, position, tiles, force)
+  local taken = {}
+  for _, t in ipairs(tiles or {}) do
+    taken[t[1] .. "," .. t[2]] = true
+  end
+  local cx = math.floor((position.x or position[1]) --[[@as number]])
+  local cy = math.floor((position.y or position[2]) --[[@as number]])
+  -- candidate tiles, nearest first, outside the group (up to 32 rings)
+  local r, k, ring = 0, 0, {}
+  local function next_tile()
+    while true do
+      k = k + 1
+      if k > #ring then
+        r = r + 1
+        if r > 32 then
+          return nil
+        end
+        ring, k = {}, 1
+        for dx = -r, r do
+          for dy = -r, r do
+            if math.max(math.abs(dx), math.abs(dy)) == r then
+              ring[#ring + 1] = { cx + dx, cy + dy }
+            end
+          end
+        end
+      end
+      local t = ring[k] --[[@as {[1]: integer, [2]: integer}]]
+      if not taken[t[1] .. "," .. t[2]] then
+        return t
+      end
+    end
+  end
+  local tile = next_tile()
+  for i = 1, #inv do
+    local st = inv[i] --[[@as LuaItemStack]]
+    local placed = false
+    while st.valid_for_read and not placed and tile do
+      local made = s.spill_item_stack({
+        position = { tile[1] + 0.5, tile[2] + 0.5 }, stack = st, enable_looted = true, allow_belts = false,
+        drop_full_stack = true, force = force, max_radius = 0.5, use_start_position_on_failure = false,
+      })
+      if #made > 0 then
+        placed = true
+      else
+        tile = next_tile()
+      end
+    end
+    if st.valid_for_read and not placed then
+      -- no free tile within 32 rings: never drop the stack
+      s.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true, force = force })
+    end
+    st.clear()
+  end
+  inv.destroy()
+end
+
+-- Gives the items of `inv` (a script inventory, destroyed) to `sink`:
+--   player     its main inventory (a player without one, dead or a spectator by the flush, is
+--              skipped);
+--   robot      the storage chests of its logistic network;
+--   platform   its hub.
+-- What does not fit, or everything with no sink, is spilled by balancer.spill_clear outside the
+-- group's `tiles`, marked for deconstruction by the robot's or platform's force, or else by
+-- `force` (the group's).
+---@param inv LuaInventory
+---@param sink { player_index: integer?, robot: LuaEntity?, platform: LuaSpacePlatform? }?
+---@param s LuaSurface
+---@param position MapPosition
+---@param tiles {[1]: integer, [2]: integer}[]?
+---@param force LuaForce?
+function balancer.give(inv, sink, s, position, tiles, force)
   local player = sink and sink.player_index and game.get_player(sink.player_index) or nil
+  local main = player and player.valid and player.get_main_inventory() or nil
   local robot = sink and sink.robot
+  local platform = sink and sink.platform
   ---@type LuaLogisticNetwork?
   local net
-  ---@type LuaForce?
-  local mark
+  ---@type LuaEntity?
+  local hub
   if robot and robot.valid then
     net = robot.logistic_network
-    mark = robot.force --[[@as LuaForce]]
+    force = robot.force --[[@as LuaForce]]
+  elseif platform and platform.valid then
+    hub = platform.hub
+    force = platform.force
   end
   for i = 1, #inv do
     local st = inv[i] --[[@as LuaItemStack]]
     if st.valid_for_read then
       local n = 0
-      if player and player.valid then
-        n = player.insert(st)
+      if main and main.valid then
+        n = main.insert(st)
       elseif net and net.valid then
         n = net.insert(st, "storage")
+      elseif hub and hub.valid then
+        n = hub.insert(st)
       end
       if n >= st.count then
         st.clear()
       elseif n > 0 then
         st.count = st.count - n
       end
-      ---@diagnostic disable-next-line: unnecessary-if
-      if st.valid_for_read then
-        s.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true, force = mark })
-        st.clear()
-      end
     end
   end
-  inv.destroy()
+  balancer.spill_clear(inv, s, position, tiles, force)
 end
 
--- Remembers who removed the last block of the `gone` groups (scripts/events.lua, a mined block).
+-- Remembers who removed the last block of the `gone` groups (scripts/events.lua, a mined block):
+-- a player, a robot or a space platform.
 ---@param gone integer[]
 ---@param player_index integer?
 ---@param robot LuaEntity?
-function balancer.set_sink(gone, player_index, robot)
-  if not (player_index or robot) then
+---@param platform LuaSpacePlatform?
+function balancer.set_sink(gone, player_index, robot, platform)
+  if not (player_index or robot or platform) then
     return
   end
   local st = state()
   for _, id in ipairs(gone) do
-    st.sinks[id] = { player_index = player_index, robot = robot }
+    st.sinks[id] = { player_index = player_index, robot = robot, platform = platform }
   end
 end
 
@@ -692,7 +783,7 @@ function balancer.drop_networks()
     local s = a and game.get_surface(a.surface_index)
     for _, p in ipairs(nets) do
       if s and s.valid then
-        builder.spill(p, s, a.position)
+        balancer.spill_clear((builder.take(p)), s, a.position, rec.tiles, rec.force_index and game.forces[rec.force_index])
       else
         builder.destroy(p)
       end

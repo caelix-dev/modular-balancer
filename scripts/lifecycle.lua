@@ -79,52 +79,97 @@ function lifecycle.clean_blueprint(bp)
   end
   if n > 0 then
     lifecycle.clean_entities(entities)
-    bp.set_blueprint_entities(entities)
+    -- only names change: keep every position (a record with absolute snapping keeps its grid)
+    bp.set_blueprint_entities(entities, false)
   end
   return n
 end
 
--- A setup blueprint stack, or nil.
+-- The blueprint in item stack `st`: the stack itself, or the active blueprint of a blueprint book
+-- (nested books followed). nil for anything else (a copy-paste tool, an empty book).
 ---@param st LuaItemStack?
-local function setup(st)
-  if st and st.valid and st.valid_for_read and st.is_blueprint and st.is_blueprint_setup() then
+---@return LuaItemStack?
+local function stack_blueprint(st, depth)
+  depth = depth or 0
+  if not (st and st.valid and st.valid_for_read) or depth > 8 then
+    return nil
+  end
+  if st.is_blueprint then
     return st
+  end
+  if st.is_blueprint_book then
+    local index = st.active_index
+    local inv = index and st.get_inventory(defines.inventory.item_main)
+    if inv and index <= #inv then
+      return stack_blueprint(inv[index --[[@as integer]]] --[[@as LuaItemStack]], depth + 1)
+    end
   end
   return nil
 end
 
--- on_player_setup_blueprint (also raised for copy and cut): the blueprint is the event's record or
--- stack, or the player's blueprint_to_setup (the configure GUI is open), or the cursor stack.
+-- The blueprint in record `r`: the record itself, or the selected record of a blueprint book
+-- record for `player` (nested books followed).
+---@param r LuaRecord?
+---@param player LuaPlayer?
+---@return LuaRecord?
+local function record_blueprint(r, player, depth)
+  depth = depth or 0
+  if not (r and r.valid) or depth > 8 then
+    return nil
+  end
+  if r.type == "blueprint" then
+    return r
+  end
+  if r.type == "blueprint-book" and player and player.valid then
+    return record_blueprint(r.get_selected_record(player), player, depth + 1)
+  end
+  return nil
+end
+
+-- on_player_setup_blueprint (also raised for copy and cut, and for a blueprint reassigned from
+-- the library): every place the selected blueprint can be in is cleaned, since which one holds it
+-- depends on the path (a new blueprint, a book, a library record, the copy tool's blueprint in the
+-- cursor or in blueprint_to_setup). Cleaning is idempotent, so cleaning several is harmless.
+--   event.record   the library record being reassigned (or the selected record of a book record)
+--   event.stack    the item used to select: a blueprint, or a book (its active blueprint)
+--   player.blueprint_to_setup, player.cursor_stack (a blueprint, or a book's active blueprint)
 function lifecycle.on_player_setup_blueprint(event)
-  local record = event.record
-  if record and record.valid and record.is_blueprint_setup() then
+  local pi = event.player_index
+  local player = pi and pi > 0 and game.get_player(pi) or nil
+  local record = record_blueprint(event.record, player)
+  if record and record.is_blueprint_setup() then
     lifecycle.clean_blueprint(record)
-    return
   end
-  local player = event.player_index and game.get_player(event.player_index)
-  local bp = setup(event.stack)
-  if not bp and player and player.valid then
-    bp = setup(player.blueprint_to_setup) or setup(player.cursor_stack)
+  local stacks = { event.stack }
+  if player and player.valid then
+    stacks[#stacks + 1] = player.blueprint_to_setup
+    stacks[#stacks + 1] = player.cursor_stack
   end
-  if bp then
-    lifecycle.clean_blueprint(bp)
+  for _, st in ipairs(stacks) do
+    local bp = stack_blueprint(st)
+    if bp and bp.is_blueprint_setup() then
+      lifecycle.clean_blueprint(bp)
+    end
   end
 end
 
 -- on_player_configured_blueprint: the confirmed blueprint is in the cursor.
 function lifecycle.on_player_configured_blueprint(event)
   local player = game.get_player(event.player_index)
-  local bp = player and player.valid and setup(player.cursor_stack)
-  if bp then
+  local bp = player and player.valid and stack_blueprint(player.cursor_stack) or nil
+  if bp and bp.is_blueprint_setup() then
     lifecycle.clean_blueprint(bp)
   end
 end
 
 -- A ghost of an edge becomes a ghost of its belt (same position, direction, force and quality).
 -- Returns the new ghost, or nil if `ghost` is not an edge ghost.
+-- The new ghost is created for the player who placed the old one (`player_index`, else the old
+-- ghost's last user), so it joins that player's undo item: Ctrl+Z of the paste removes it too.
 ---@param ghost LuaEntity
+---@param player_index integer?
 ---@return LuaEntity?
-function lifecycle.unghost(ghost)
+function lifecycle.unghost(ghost, player_index)
   if not (ghost.valid and ghost.type == "entity-ghost") then
     return nil
   end
@@ -133,21 +178,22 @@ function lifecycle.unghost(ghost)
     return nil
   end
   local s, pos, dir, force, quality = ghost.surface, ghost.position, ghost.direction, ghost.force, ghost.quality
+  local player = player_index and player_index > 0 and game.get_player(player_index) or ghost.last_user
   ghost.destroy()
-  -- no `player`: that would add this script action to the player's undo queue
   return s.create_entity({
     name = "entity-ghost", inner_name = belt, position = pos, direction = dir, force = force, quality = quality,
-    create_build_effect_smoke = false,
+    player = player, create_build_effect_smoke = false,
   })
 end
 
 -- The edge ghosts on the tile of `position` of surface `s` become belt ghosts.
 ---@param s LuaSurface
 ---@param position MapPosition
-local function unghost_at(s, position)
+---@param player_index integer?
+local function unghost_at(s, position, player_index)
   local x, y = math.floor((position.x or position[1]) --[[@as number]]), math.floor((position.y or position[2]) --[[@as number]])
   for _, g in ipairs(s.find_entities_filtered({ area = { { x + 0.1, y + 0.1 }, { x + 0.9, y + 0.9 } }, type = "entity-ghost" })) do
-    lifecycle.unghost(g)
+    lifecycle.unghost(g, player_index)
   end
 end
 
@@ -155,6 +201,12 @@ end
 -- - built-entity of a belt whose tile is now an edge of that belt (undo of a build): the game
 --   finds no entity of that name there, so the edge is marked for deconstruction instead.
 -- - removed-entity of an edge (undo of mining an edge): the ghost it left is made a belt ghost.
+-- - upgraded-entity of a belt whose tile is now an edge (the line was upgraded, then its last tile
+--   swapped): the game finds no belt of that name there, so the edge is swapped back to its belt
+--   and given the order the game meant (undo: back to original_name; redo: to the target), as
+--   the upgrade planner path does.
+-- - rotated-entity of an edge is not handled: a rotation that changed the edge's role swapped it
+--   for another edge prototype, so the undo finds nothing (the player rotates it back by hand).
 ---@param event { player_index: integer, actions: UndoRedoAction[] }
 ---@param undo boolean
 function lifecycle.on_undo_redo(event, undo)
@@ -165,7 +217,20 @@ function lifecycle.on_undo_redo(event, undo)
     local s = a.surface_index and game.get_surface(a.surface_index) or (player and player.valid and player.surface) or nil
     if t and s then
       if a.type == "removed-entity" and belt_io.edge_belt(t.name --[[@as string]]) then
-        unghost_at(s, t.position)
+        unghost_at(s, t.position, pi)
+      elseif a.type == "upgraded-entity" then
+        local from = undo and t.name or a.original_name
+        local to = undo and { name = a.original_name, quality = a.original_quality_name } or { name = t.name, quality = t.quality or "normal" }
+        local p = t.position
+        local x, y = math.floor((p.x or p[1]) --[[@as number]]), math.floor((p.y or p[2]) --[[@as number]])
+        for _, e in ipairs(s.find_entities_filtered({ area = { { x + 0.1, y + 0.1 }, { x + 0.9, y + 0.9 } }, type = "linked-belt" })) do
+          if belt_io.edge_belt(e.name) == from then
+            local force = e.force
+            local belt = belt_io.unswap(e)
+            belt.order_upgrade({ target = to, force = force, player = player })
+            balancer.mark_near(belt, pi)
+          end
+        end
       elseif undo and a.type == "built-entity" then
         local p = t.position
         local x, y = math.floor((p.x or p[1]) --[[@as number]]), math.floor((p.y or p[2]) --[[@as number]])
@@ -232,6 +297,47 @@ local function orphan_tiers()
     end
   end
   return orphans, best
+end
+
+-- A block of a tier whose belt is gone (a leftover turbo block item or ghost placed after Space
+-- Age was removed) is replaced at once by a block of the fastest tier left (raise_built: its own
+-- build event joins it to a group). Returns true if `entity` was replaced.
+---@param entity LuaEntity a block, just built
+---@return boolean
+function lifecycle.replace_orphan(entity)
+  local orphans, best = orphan_tiers()
+  local tier = groups.tier_of(entity.name)
+  if not (tier and orphans[tier] and best) then
+    return false
+  end
+  local s, pos, force, quality = entity.surface, entity.position, entity.force, entity.quality
+  entity.destroy()
+  local new = s.create_entity({
+    name = "mb-balancer-" .. best, position = pos, force = force, quality = quality, raise_built = true,
+    create_build_effect_smoke = false,
+  })
+  if not new then
+    s.spill_item_stack({ position = pos, stack = { name = "mb-balancer-" .. best, count = 1, quality = quality.name }, enable_looted = true })
+  end
+  return true
+end
+
+-- The same for a ghost of such a block: it becomes a ghost of the fastest tier left.
+---@param ghost LuaEntity
+---@return boolean
+function lifecycle.replace_orphan_ghost(ghost)
+  if not (ghost.valid and ghost.type == "entity-ghost") then
+    return false
+  end
+  local orphans, best = orphan_tiers()
+  local tier = groups.tier_of(ghost.ghost_name)
+  if not (tier and orphans[tier] and best) then
+    return false
+  end
+  local s, pos, force, quality = ghost.surface, ghost.position, ghost.force, ghost.quality
+  ghost.destroy()
+  s.create_entity({ name = "entity-ghost", inner_name = "mb-balancer-" .. best, position = pos, force = force, quality = quality })
+  return true
 end
 
 -- Replaces every block of a tier in `from` (a set of tier names) by a block of tier `to`, in
@@ -314,6 +420,19 @@ end
 -- by the next placement when the old one is gone).
 function lifecycle.on_surface_gone(event)
   if ours(event.surface_index) then
+    -- a network placed between the pre event and the clear (none measured) lost its entities:
+    -- drop it (its region with it) and place it again
+    local any = false
+    for _, rec in pairs(storage.balancer and storage.balancer.recs or {}) do
+      local first = rec.placed and rec.placed.entities[1]
+      if first and not first.valid then
+        any = true
+      end
+    end
+    if any then
+      log("modular-balancer: networks placed before the hidden surface was cleared are placed again")
+      balancer.drop_networks()
+    end
     storage.regions = nil
     if not game.get_surface(event.surface_index) then
       storage.surface_index = nil

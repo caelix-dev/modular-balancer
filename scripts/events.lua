@@ -64,12 +64,17 @@ local function built(entity, event)
   end
   local player = event.player_index
   if entity.type == "entity-ghost" then
-    lifecycle.unghost(entity)
+    if not lifecycle.unghost(entity, player) then
+      lifecycle.replace_orphan_ghost(entity)
+    end
     return
   end
   if belt_io.edge_belt(entity.name) then
     balancer.add_loose(entity, player)
     return
+  end
+  if groups.tier_of(entity.name) and lifecycle.replace_orphan(entity) then
+    return -- a block of a tier whose belt is gone was replaced (its build event did the rest)
   end
   if groups.tier_of(entity.name) then
     local p = entity.position
@@ -96,7 +101,7 @@ local function removed(entity, event)
   end
   if groups.tier_of(entity.name) then
     local ids, gone = groups.on_block_removed(entity)
-    balancer.set_sink(gone, event.player_index, event.robot)
+    balancer.set_sink(gone, event.player_index, event.robot, event.platform)
     balancer.mark(ids, gone, event.player_index)
     balancer.mark_block(entity, event.player_index)
   elseif relevant(entity) then
@@ -121,6 +126,12 @@ function events.register()
   local f = filters()
   local fb = filters()
   fb[#fb + 1] = { filter = "ghost_type", type = "linked-belt" }
+  for _, tier in ipairs(groups.TIERS) do
+    ---@diagnostic disable-next-line: unnecessary-if
+    if prototypes.entity["mb-balancer-" .. tier] then
+      fb[#fb + 1] = { filter = "ghost_name", name = "mb-balancer-" .. tier }
+    end
+  end
   local on_built = function(event)
     built(event.entity, event)
   end

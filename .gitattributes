@@ -3,3 +3,5 @@ tests/ export-ignore
 docs/ export-ignore
 .emmyrc.json export-ignore
 .superpowers/ export-ignore
+scripts/flow.lua export-ignore
+CLAUDE.md export-ignore

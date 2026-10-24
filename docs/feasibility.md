@@ -395,9 +395,38 @@ the items.
 
 #### Belt port details (measured)
 
-- `belt_port_ignores_edges`: an output port facing west with F1 output edges on all four
-  sides, and an input port with input edges on all four sides: 0 belt neighbours on the port
-  and on every edge. A port next to edges connects to nothing.
+- `belt_port_ignores_edges`: all four combinations of an output or input port (facing west)
+  with F1 output or input edges on all four sides: 0 belt neighbours on the port and on
+  every edge. A port next to F1 edges of either type connects to nothing. Other neighbours
+  are covered in the next item.
+- **What an output port does to the entity in front of it** (`belt_port_front_neighbours`).
+  The port is fed by a saturated hidden linked belt. Items that left the port in 600 ticks,
+  and the port's `belt_neighbours.outputs` (same at both tiers except the loader):
+
+  | in front of the port | items leaked | `belt_neighbours.outputs` |
+  | --- | --- | --- |
+  | nothing | 0 | none |
+  | a plain belt passing perpendicular | **16** (side-loaded onto it) | the belt |
+  | a belt pointing at the port (head-on) | 0 | none |
+  | the next block's input port, its back to this port | **32** (port to port, past the network) | that linked belt |
+  | the next block's input port, its side to this port | 0 | none |
+  | the next block's output port, its side to this port | 0 | none |
+  | an underground entrance | **32** | the underground |
+  | an underground exit facing away | 0 | none |
+  | a splitter | **30** | the splitter |
+  | a loader into a chest | **410 / 560** | the loader |
+
+  So an output port leaks into anything in front of it that accepts items from that side.
+  Every leak shows up in the port's `belt_neighbours.outputs`, and every case without a leak
+  has it empty (asserted for each case), so a mod can detect a leak without moving any items.
+- **Facing rule** (`belt_port_picks_free_side`): place the port facing each direction in turn
+  and keep the first whose `belt_neighbours.outputs` is empty. If none is empty, refuse the
+  port.
+  - On a block with passing belts on two sides and an underground entrance on the third, the
+    rule chose the free fourth side, and 0 items leaked in 600 ticks.
+  - A block with an accepting neighbour on all four sides was refused.
+  - A belt built later across the chosen side appeared in `belt_neighbours.outputs` at once,
+    so the re-check can run in the build event.
 - Picking from a belt is slower than from a chest (41 vs 45, 47 vs 60 items/s with three
   bulk inserters, above). The share is still exact; it just caps the block at the inserters'
   belt speed, as on a vanilla belt.
@@ -487,6 +516,29 @@ N:M check to Task 5.
   - re-check on `on_player_rotated_entity` and `on_player_flipped_entity` (the inserter's
     positions change), on mining or destroying an inserter, on `on_entity_settings_pasted`,
     and on inserter upgrades (a different inserter prototype can have a different reach).
+  - `pickup_position` and `drop_position` are writable at runtime (for prototypes with
+    `allow_custom_vectors`), and no event fires when another mod writes them. A block's role
+    can then go stale until one of the events above re-checks it. Accept that, and state it
+    in the mod's documentation.
+- **Port facing rule (output port leaks).** An output port pushes items into any accepting
+  belt-connectable in front of it: a passing belt (side-loading), the next block's input port
+  with its back to it, an underground entrance, a splitter, a loader (measured above). Rule:
+  - when placing an output port, try the four directions and keep the first with an empty
+    `belt_neighbours.outputs`. With none, refuse the inserter port with a message (the block
+    then counts as a block without inserters);
+  - an input port has the matching risk from behind (it accepts items from a belt-connectable
+    whose front faces its back). Choose its direction the same way, with
+    `belt_neighbours.inputs` empty. A plain belt pointing into the block is an input and
+    becomes an F1 edge, so in practice only non-swappable entities matter, and a block with
+    those already uses its tile for the block-tile interface;
+  - re-check a block's port whenever a belt-connectable entity is built, mined, rotated,
+    flipped, upgraded or destroyed on one of the block's four neighbour tiles. Also re-check
+    when F1 swaps a neighbour tile into an edge or back, and when a neighbouring block's port
+    changes. If the port's side is no longer free, move the port to a free side (carrying its
+    items over, no loss) or refuse it;
+  - two adjacent blocks: an output port must not face the back of the other block's input
+    port. The rule above covers this (it appears in `belt_neighbours.outputs`), and so does
+    any order of building the two ports, because each placement checks the other.
 - **Player access to the block.** With the belt port the block is not a container, so it has
   no inventory GUI, and opening it can show the lane-toggle GUI the spec suggests. With a
   chest port, the proxy would show the buffer's inventory when opened, and a player could take
@@ -501,4 +553,6 @@ N:M check to Task 5.
   (vanilla included). Task 5's `mixed_items_keep_lanes` and Review Focus 3 should state what
   they expect for that case.
 - **Not measured here:** an N:M network with an inserter output, long-handed and filter
-  inserters on a belt port.
+  inserters on a belt port, an input port next to non-edge neighbours (only edges were
+  measured for it), and modded belt-connectables in front of a port. The facing rule handles
+  modded ones through `belt_neighbours` without knowing their type.

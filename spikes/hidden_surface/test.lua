@@ -8,6 +8,7 @@ local D = defines.direction
 local SA = script.active_mods["space-age"] ~= nil
 local BELT = SA and "turbo-transport-belt" or "express-transport-belt"
 local SPLITTER = SA and "turbo-splitter" or "express-splitter"
+local UNDERGROUND = SA and "turbo-underground-belt" or "express-underground-belt"
 local RATE = SA and 60 or 45 -- items per second of one full belt of the measured tier
 local MEASURE = 3600
 local WARMUP = 600
@@ -598,8 +599,8 @@ describe("spike S2: hidden surface", function()
   end)
 
   -- The belt port next to F1 edges on all four sides: it must not connect to any of them.
-  -- Output port (facing west) with output edges all round; input port (facing west) with
-  -- input edges all round.
+  -- Every combination: output or input port (facing west) with output or input edges all
+  -- round.
   test("belt_port_ignores_edges", function()
     local o = region()
     local function ring(c, port_type, edge_type)
@@ -623,6 +624,167 @@ describe("spike S2: hidden surface", function()
     end
     ring(o, "output", "output")
     ring(at(o, 6, 0), "input", "input")
+    ring(at(o, 0, 6), "output", "input")
+    ring(at(o, 6, 6), "input", "output")
+  end)
+
+  -- N1: what an output belt port does to the belt-connectable entity in front of it. The port
+  -- (on nauvis, facing east, under a block) is fed by a saturated hidden input linked belt.
+  -- After 600 ticks, `leaked` counts the items that went past the port into the neighbour and
+  -- whatever follows it. The question is also whether `belt_neighbours.outputs` of the port
+  -- shows each leak, so a mod can detect it.
+  local function fed_port(c, dir)
+    local hin = ce(hidden, { name = "mb-spike-lb", position = c, direction = D.east, type = "input" })
+    belts(hidden, source(hidden, at(c, -5, 0), D.east), D.east, 3)
+    ce(visible, { name = "mb-spike-block", position = c })
+    local port = ce(visible, { name = "mb-spike-lb", position = c, direction = dir, type = "output" })
+    hin.connect_linked_belts(port)
+    return port
+  end
+
+  ---@param list LuaEntity[]
+  ---@return integer
+  local function items_of(list)
+    local n = 0
+    for _, e in ipairs(list) do
+      if e.type == "container" then
+        n = n + e.get_item_count()
+      else
+        for i = 1, e.get_max_transport_line_index() do
+          n = n + e.get_transport_line(i --[[@as defines.transport_line]]).get_item_count()
+        end
+      end
+    end
+    return n
+  end
+
+  test("belt_port_front_neighbours", function()
+    async(900)
+    local o = region()
+    local cases = {}
+    local function case(name, build)
+      local i = #cases
+      local c = at(o, -12 + (i % 2) * 14, math.floor(i / 2) * 6 - 12)
+      local port = fed_port(c, D.east)
+      cases[#cases + 1] = { name = name, port = port, watch = build(step(c, D.east, 1), c) }
+    end
+    case("nothing", function() return {} end)
+    case("passing belt (perpendicular, going north)", function(f)
+      local list = {}
+      for dy = 1, -3, -1 do
+        list[#list + 1] = ce(visible, { name = BELT, position = at(f, 0, dy), direction = D.north })
+      end
+      return list
+    end)
+    case("belt pointing at the port (head-on)", function(f)
+      return { ce(visible, { name = BELT, position = f, direction = D.west }) }
+    end)
+    local function block_with_input_port(f, dir)
+      ce(visible, { name = "mb-spike-block", position = f })
+      local p = ce(visible, { name = "mb-spike-lb", position = f, direction = dir, type = "input" })
+      local hp = ce(hidden, { name = "mb-spike-lb", position = f, direction = D.east, type = "output" })
+      p.connect_linked_belts(hp)
+      local list = { p, hp }
+      for i = 1, 3 do list[#list + 1] = ce(hidden, { name = BELT, position = at(f, i, 0), direction = D.east }) end
+      return list
+    end
+    case("next block's input port, back to the port", function(f) return block_with_input_port(f, D.east) end)
+    case("next block's input port, side to the port", function(f) return block_with_input_port(f, D.north) end)
+    case("next block's output port, side to the port", function(f)
+      ce(visible, { name = "mb-spike-block", position = f })
+      return { ce(visible, { name = "mb-spike-lb", position = f, direction = D.north, type = "output" }) }
+    end)
+    case("underground entrance", function(f)
+      return {
+        ce(visible, { name = UNDERGROUND, position = f, direction = D.east, type = "input" }),
+        ce(visible, { name = UNDERGROUND, position = at(f, 3, 0), direction = D.east, type = "output" }),
+      }
+    end)
+    case("underground exit facing away", function(f)
+      return { ce(visible, { name = UNDERGROUND, position = f, direction = D.east, type = "output" }) }
+    end)
+    case("splitter", function(f)
+      return {
+        ce(visible, { name = SPLITTER, position = { x = f.x, y = f.y + 0.5 }, direction = D.east }),
+        ce(visible, { name = BELT, position = at(f, 1, 0), direction = D.east }),
+        ce(visible, { name = BELT, position = at(f, 1, 1), direction = D.east }),
+      }
+    end)
+    case("loader into a chest", function(f)
+      ce(visible, { name = "mb-spike-io-loader", position = f, direction = D.east, type = "input" })
+      return { ce(visible, { name = "steel-chest", position = at(f, 1, 0) }) }
+    end)
+    after_ticks(600, function()
+      for _, k in ipairs(cases) do
+        local outs = {}
+        for _, e in ipairs(k.port.belt_neighbours.outputs) do outs[#outs + 1] = e.name end
+        local leaked = items_of(k.watch)
+        report("N1 output port facing %s: leaked %d items in 600 ticks; port belt_neighbours.outputs {%s}",
+          k.name, leaked, table.concat(outs, ", "))
+        assert((leaked > 0) == (#outs > 0), k.name .. ": belt_neighbours.outputs does not match the leak")
+      end
+      done()
+    end)
+  end)
+
+  -- N1 rule: try the four directions and keep the first whose belt_neighbours.outputs is
+  -- empty; refuse when there is none. A belt built in front of the chosen side later shows up
+  -- in belt_neighbours.outputs at once, so on_built_entity can re-check.
+  ---@return LuaEntity?
+  local function place_port(c, partner)
+    for _, dir in ipairs({ D.north, D.east, D.south, D.west }) do
+      local port = ce(visible, { name = "mb-spike-lb", position = c, direction = dir, type = "output" })
+      if #port.belt_neighbours.outputs == 0 then
+        partner.connect_linked_belts(port)
+        return port
+      end
+      port.destroy()
+    end
+    return nil
+  end
+
+  test("belt_port_picks_free_side", function()
+    async(900)
+    local o = region()
+    local c = at(o, -4, 0)
+    local hin = ce(hidden, { name = "mb-spike-lb", position = c, direction = D.east, type = "input" })
+    belts(hidden, source(hidden, at(c, -5, 0), D.east), D.east, 3)
+    ce(visible, { name = "mb-spike-block", position = c })
+    -- north and south: belts passing east to west; east: an underground entrance; west: free
+    local watch = {}
+    for _, dy in ipairs({ -1, 1 }) do
+      for dx = 0, 1 do
+        watch[#watch + 1] = ce(visible, { name = BELT, position = at(c, dx, dy), direction = D.west })
+      end
+    end
+    watch[#watch + 1] = ce(visible, { name = UNDERGROUND, position = at(c, 1, 0), direction = D.east, type = "input" })
+    watch[#watch + 1] = ce(visible, { name = UNDERGROUND, position = at(c, 4, 0), direction = D.east, type = "output" })
+    local port = assert(place_port(c, hin), "no free side found")
+    assert(port.direction == D.west, "chose direction " .. port.direction .. ", expected west")
+    -- a fully surrounded block: the same, plus a belt passing on the west
+    local c2 = at(o, -4, 8)
+    local hin2 = ce(hidden, { name = "mb-spike-lb", position = c2, direction = D.east, type = "input" })
+    ce(visible, { name = "mb-spike-block", position = c2 })
+    for _, dy in ipairs({ -1, 1 }) do
+      for dx = 0, 1 do ce(visible, { name = BELT, position = at(c2, dx, dy), direction = D.west }) end
+    end
+    for dy = -1, 1 do ce(visible, { name = BELT, position = at(c2, -1, dy), direction = D.south }) end
+    ce(visible, { name = UNDERGROUND, position = at(c2, 1, 0), direction = D.east, type = "input" })
+    ce(visible, { name = UNDERGROUND, position = at(c2, 4, 0), direction = D.east, type = "output" })
+    local none = place_port(c2, hin2)
+    after_ticks(600, function()
+      local leaked = items_of(watch)
+      report("N1 port placement: chose %s with belts on two sides and an underground on the third; leaked %d items in 600 ticks; surrounded block: %s",
+        port.direction == D.west and "west" or tostring(port.direction), leaked, none and "placed (wrong)" or "refused")
+      assert(leaked == 0, "items leaked from the chosen side")
+      assert(none == nil, "a port was placed on a block with no free side")
+      -- re-check: a belt built across the chosen side is visible at once
+      ce(visible, { name = BELT, position = at(c, -1, 0), direction = D.north })
+      report("N1 port re-check: after building a belt in front, belt_neighbours.outputs has %d entries",
+        #port.belt_neighbours.outputs)
+      assert(#port.belt_neighbours.outputs == 1, "the new front belt is not in belt_neighbours.outputs")
+      done()
+    end)
   end)
 
   -- F4: one proxy for both directions. An inserter dropping into the output buffer's proxy

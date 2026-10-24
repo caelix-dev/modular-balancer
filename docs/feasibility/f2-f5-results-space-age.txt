@@ -47,6 +47,20 @@ F4 after 2400 ticks: 200 of 200 reached the network-side sink; 0 left in the sou
 F4 belt port: 200 of 200 reached the network-side sink; 0 left in the source
 F3 output port among output edges: port 0 inputs 0 outputs, edges 0 belt neighbours in total
 F3 input port among input edges: port 0 inputs 0 outputs, edges 0 belt neighbours in total
+F3 output port among input edges: port 0 inputs 0 outputs, edges 0 belt neighbours in total
+F3 input port among output edges: port 0 inputs 0 outputs, edges 0 belt neighbours in total
+N1 output port facing nothing: leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing passing belt (perpendicular, going north): leaked 16 items in 600 ticks; port belt_neighbours.outputs {turbo-transport-belt}
+N1 output port facing belt pointing at the port (head-on): leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing next block's input port, back to the port: leaked 32 items in 600 ticks; port belt_neighbours.outputs {mb-spike-lb}
+N1 output port facing next block's input port, side to the port: leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing next block's output port, side to the port: leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing underground entrance: leaked 32 items in 600 ticks; port belt_neighbours.outputs {turbo-underground-belt}
+N1 output port facing underground exit facing away: leaked 0 items in 600 ticks; port belt_neighbours.outputs {}
+N1 output port facing splitter: leaked 30 items in 600 ticks; port belt_neighbours.outputs {turbo-splitter}
+N1 output port facing loader into a chest: leaked 560 items in 600 ticks; port belt_neighbours.outputs {mb-spike-io-loader}
+N1 port placement: chose west with belts on two sides and an underground on the third; leaked 0 items in 600 ticks; surrounded block: refused
+N1 port re-check: after building a belt in front, belt_neighbours.outputs has 1 entries
 F4 put and take on one proxy: 100 of 100 went straight from the putting to the taking inserter
 F5 splitter only: out1 left 0.000 right 15.000, out2 left 0.000 right 15.000 items/s (input one lane, 30.0)
 F5 lane splitter before: out1 left 7.500 right 7.500, out2 left 7.500 right 7.500 items/s (input one lane, 30.0)

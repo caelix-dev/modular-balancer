@@ -19,13 +19,13 @@
 --             candidate with circuit wires or a control behaviour is served the same way, so the
 --             player's belt and its wires stay untouched (Ruling 7); with the block's tile
 --             already taken it is refused ("wired-belt"), never swapped.
--- A shared tile links the two networks directly, so it runs at the networks' speed whatever the
--- tier of the belt on it (the belt itself carries nothing).
 --   inserter  inserters whose pickup position is on the block tile take from it (one output
 --             port per block), those whose drop position is on it put into it (one input port).
 --             The port is a linked belt on the block tile facing a free side (belt_io.block_port).
 --             Both directions on one block are refused, and so is an inserter port on a block
 --             that already has a block-tile interface (one belt-connectable per tile).
+-- A shared tile links the two networks directly, so it runs at the networks' speed whatever the
+-- tier of the belt on it (the belt itself carries nothing).
 -- Loaders next to a block are ignored, and so are inserters of other forces. Inserter roles follow pickup_position and drop_position;
 -- a script that writes those raises no event, so a role can be stale until the next re-check.
 --
@@ -105,6 +105,18 @@ end
 ---@return LuaEntity?
 local function belt_at(s, x, y)
   return s.find_entities_filtered({ area = tile_area(x, y), type = belt_io.BELT_TYPES, limit = 1 })[1]
+end
+
+-- What the belts around tile (x, y) of `s` see there: the belt-connectable's name, direction and
+-- linked belt type, or "" for none. scripts/balancer.lua compares it before and after a flush.
+---@param s LuaSurface
+---@return string
+function belt_io.tile_signature(s, x, y)
+  local e = belt_at(s, x, y)
+  if not e then
+    return ""
+  end
+  return e.name .. "/" .. e.direction .. "/" .. (e.type == "linked-belt" and e.linked_belt_type or "")
 end
 
 -- The mod's linked belt on a block tile (block-tile interface or inserter port), or nil.

@@ -27,9 +27,12 @@
 --   4. cleans the pool: an edge no group claimed is swapped back to its belt (items kept), a
 --      block-tile linked belt no group claimed is removed and its items go into its group's
 --      network buffer (or are spilled when there is none);
---   5. marks the groups around every tile that was swapped, unswapped or had its block-tile linked
---      belt changed, for the next tick (F3 re-check triggers; e.g. an inserter port facing a tile
---      that is a plain belt again moves). That flush changes nothing unless something did.
+--   5. marks the groups around every tile whose belt-connectable is not what it was before the
+--      flush (swapped, unswapped, a block-tile linked belt added, removed or turned), for the next
+--      tick (F3 re-check triggers; e.g. an inserter port facing a tile that is a plain belt again
+--      moves). Only net changes count: a tile swapped and swapped back in the same flush (a
+--      failed rebuild, a group left without outputs) marks nothing, so a flush that cannot make
+--      progress does not run again every tick.
 -- Refusals (io.scan, a failed rebuild) are kept in the record; those not already there at the
 -- last refresh are shown as flying text to the player whose action marked the group
 -- (balancer.notify).
@@ -165,13 +168,21 @@ local function link(a, b)
   end
 end
 
--- Remembers the tile of `e` (valid), which a swap, an unswap or a port change is about to
--- change: the ports around it are re-checked on the next tick (F3 re-check triggers).
-local function touch(ctx, e)
-  if e and e.valid then
-    local x, y = belt_io.tiles_of(e)
-    ctx.touched[#ctx.touched + 1] = { si = e.surface_index, x = x, y = y }
+-- Remembers tile (x, y) of surface `s`, which a swap, an unswap or a port change is about to
+-- change, with what stands there now (the first time in this flush). After the flush, the ports
+-- around it are re-checked on the next tick if it ended up different (F3 re-check triggers).
+---@param s LuaSurface
+local function touch_tile(ctx, s, x, y)
+  local key = s.index .. ":" .. x .. ":" .. y
+  if not ctx.touched[key] then
+    ctx.touched[key] = { s = s, x = x, y = y, before = belt_io.tile_signature(s, x, y) }
   end
+end
+
+-- The same for the tile of `e` (valid).
+local function touch(ctx, e)
+  local x, y = belt_io.tiles_of(e)
+  touch_tile(ctx, e.surface, x, y)
 end
 
 local function claim(ctx, e, gid)
@@ -219,14 +230,8 @@ local function realize(ctx, port, g, s, refused)
   else
     dirs = belt_io.SIDES
   end
-  local old = belt_io.block_tile_belt(s, port.bx, port.by)
+  touch_tile(ctx, s, port.bx, port.by)
   local e, leftover = belt_io.block_port(s, port.bx, port.by, name, ltype, dirs, g.force)
-  if e ~= old then
-    touch(ctx, e or old)
-    if not e then
-      ctx.touched[#ctx.touched + 1] = { si = s.index, x = port.bx, y = port.by }
-    end
-  end
   if leftover then
     ctx.leftovers[#ctx.leftovers + 1] = { inv = leftover, gid = gid, surface = s, position = { x = port.bx + 0.5, y = port.by + 0.5 } }
   end
@@ -525,10 +530,18 @@ function balancer.flush()
   cleanup(st, ctx)
   -- F3: a tile swapped into an edge or back, or a block-tile linked belt that changed, can
   -- change the ports next to it (a port facing a tile that is a plain belt again, a belt whose
-  -- shape changed). Their groups are flushed again on the next tick; that flush swaps nothing
-  -- new unless something really changed, so it settles.
-  for _, t in ipairs(ctx.touched) do
-    mark_tiles(t.si, t.x - 1, t.y - 1, t.x + 1, t.y + 1)
+  -- shape changed). Their groups are flushed again on the next tick, but only for tiles that
+  -- really differ now: a flush that put everything back as it was marks nothing.
+  local keys = {}
+  for key in pairs(ctx.touched) do
+    keys[#keys + 1] = key
+  end
+  table.sort(keys)
+  for _, key in ipairs(keys) do
+    local t = ctx.touched[key] --[[@as { s: LuaSurface, x: integer, y: integer, before: string }]]
+    if t.s.valid and belt_io.tile_signature(t.s, t.x, t.y) ~= t.before then
+      mark_tiles(t.s.index, t.x - 1, t.y - 1, t.x + 1, t.y + 1)
+    end
   end
   for _, sp in ipairs(ctx.spills) do
     local a = sp.anchor

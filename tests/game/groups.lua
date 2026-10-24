@@ -27,6 +27,19 @@ end
 ---@type BoundingBox?
 local last_box
 
+-- Builds a block without raise_built and hands it to the groups directly, so the test sees the
+-- `ids, gone` lists (registered for on_object_destroyed like events.lua does).
+local function build_direct(o, dx, dy, tier, force)
+  local e = H.ce(game.surfaces.nauvis, { name = "mb-balancer-" .. tier, position = { o.x + dx, o.y + dy }, force = force or "player" })
+  script.register_on_object_destroyed(e)
+  local ids, gone = groups.on_block_built(e)
+  return e, ids, gone
+end
+
+local function force(name)
+  return game.forces[name] or game.create_force(name)
+end
+
 describe("groups", function()
   after_each(function()
     if last_box then
@@ -100,9 +113,17 @@ describe("groups", function()
     local o, box = area()
     last_box = box
     -- built from both ends towards the middle, so the last block merges two groups
-    for _, dx in ipairs({ 0, 7, 1, 6, 2, 5, 3, 4 }) do
-      H.block(o, dx, 0, "express")
+    local row = {}
+    for _, dx in ipairs({ 0, 7, 1, 6, 2, 5, 3 }) do
+      row[dx] = H.block(o, dx, 0, "express")
     end
+    local a = assert(groups.of(row[0].unit_number))
+    local b = assert(groups.of(row[7].unit_number))
+    local _, ids, gone = build_direct(o, 4, 0, "express")
+    -- equal halves of 4: the lower id survives
+    local keep, drop = math.min(a, b), math.max(a, b)
+    assert(same(ids, { keep }) and same(gone, { drop }), "final merge reported " .. serpent.line({ ids, gone }) .. ", expected " .. serpent.line({ { keep }, { drop } }))
+    assert(groups.get(drop) == nil, "the merged-away group still exists")
     assert(same(H.check_groups(box, "row"), { 8 }), "expected one group of 8: " .. serpent.line(H.check_groups(box, "row")))
   end)
 
@@ -181,6 +202,78 @@ describe("groups", function()
     assert(#ids == 4 and #gone == 0, "plus split reported " .. serpent.line({ ids, gone }))
     centre.destroy() -- already removed above; on_object_destroyed then finds nothing to do
     assert(same(H.check_groups(box, "plus"), { 3, 1, 1, 1, 1 }), "plus: " .. serpent.line(H.check_groups(box, "plus")))
+    -- building the centre again is a 4-way merge: one group left, three gone, the lowest id
+    -- kept (all arms have one block)
+    table.sort(ids)
+    local _, ids2, gone2 = build_direct(p, 0, 0, "basic")
+    assert(same(ids2, { ids[1] }), "4-way merge kept " .. serpent.line(ids2) .. ", expected " .. ids[1])
+    table.sort(gone2)
+    assert(same(gone2, { ids[2], ids[3], ids[4] }), "4-way merge gone " .. serpent.line(gone2))
+    for _, id in ipairs(gone2) do
+      assert(groups.get(id) == nil, "merged-away group " .. id .. " still exists")
+    end
+    assert(same(H.check_groups(box, "plus merged"), { 5, 3 }), "plus merged: " .. serpent.line(H.check_groups(box, "plus merged")))
+  end)
+
+  -- script_raised_teleported: a block moved next to a row joins it; one moved out of a row's
+  -- middle splits the row and starts its own group.
+  test("teleported_block_moves_between_groups", function()
+    local o, box = area()
+    last_box = box
+    for dx = 0, 2 do
+      H.block(o, dx, 0, "fast")
+    end
+    local lone = H.block(o, 6, 6, "fast")
+    assert(same(H.check_groups(box, "before"), { 3, 1 }), "before teleport")
+    assert(lone.teleport({ o.x + 3, o.y }, nil, true), "teleport refused")
+    assert(same(H.check_groups(box, "joined"), { 4 }), "teleported block did not join: " .. serpent.line(H.check_groups(box, "joined")))
+    local mid = assert(game.surfaces.nauvis.find_entities_filtered({ position = { o.x + 1, o.y }, name = "mb-balancer-fast" })[1])
+    assert(mid.teleport({ o.x + 6, o.y + 6 }, nil, true), "teleport refused")
+    assert(same(H.check_groups(box, "split"), { 2, 1, 1 }), "teleport out did not split: " .. serpent.line(H.check_groups(box, "split")))
+  end)
+
+  -- game.merge_forces moves blocks to the destination force without build events: the groups
+  -- take the destination force, touching groups of the same tier merge, and a later build next
+  -- to them works (the old LuaForce is invalid by then).
+  test("forces_merged_regroups", function()
+    local o, box = area()
+    last_box = box
+    local a, b = force("mb-test-merge-a"), force("mb-test-merge-b")
+    local a_index = a.index
+    H.block(o, 0, 0, "basic", a)
+    H.block(o, 1, 0, "basic", b)
+    H.block(o, 0, 1, "basic", a)
+    H.block(o, 6, 6, "basic", a) -- an a-only group elsewhere
+    H.block(o, 2, 0, "fast", b) -- another tier: never joins
+    assert(same(H.check_groups(box, "before"), { 2, 1, 1, 1 }), "before merge: " .. serpent.line(H.check_groups(box, "before")))
+    game.merge_forces(a, b)
+    after_ticks(2, function()
+      assert(game.forces["mb-test-merge-a"] == nil, "force a still exists")
+      for _, g in pairs(storage.groups.by_id) do
+        assert(g.force_index ~= a_index, "a group kept the merged-away force index")
+      end
+      assert(same(H.check_groups(box, "merged"), { 3, 1, 1 }), "after merge: " .. serpent.line(H.check_groups(box, "merged")))
+      local e = H.block(o, 1, 1, "basic", b)
+      local g = assert(groups.get(groups.of(e.unit_number)))
+      assert(g.force.name == "mb-test-merge-b" and g.count == 4, "build after merge: " .. serpent.line({ g.force.name, g.count }))
+      H.check_groups(box, "built after merge")
+    end)
+  end)
+
+  -- Two blocks on one tile (create_entity does not check collisions): the second joins no group
+  -- and the first keeps its place in the index.
+  test("overlapping_block_is_refused", function()
+    local o, box = area()
+    last_box = box
+    local first = H.block(o, 0, 0, "express")
+    H.block(o, 1, 0, "express")
+    local second = H.block(o, 0, 0, "express")
+    assert(groups.of(second.unit_number) == nil, "the overlapping block joined a group")
+    local id = assert(groups.of(first.unit_number), "the first block lost its group")
+    assert(assert(groups.get(id)).count == 2, "the group changed")
+    second.destroy({ raise_destroy = true })
+    assert(groups.of(first.unit_number) == id and assert(groups.get(id)).count == 2, "removing the refused block changed the group")
+    assert(same(H.check_groups(box, "overlap"), { 2 }), "overlap: " .. serpent.line(H.check_groups(box, "overlap")))
   end)
 
   test("robot_and_script_builds_count", function()
@@ -216,6 +309,22 @@ describe("groups", function()
           assert(groups.of(far_unit) == nil and groups.get(far_group) == nil, "a block destroyed without an event kept its group")
           assert(groups.of(built.unit_number), "the robot-built block has no group")
           assert(same(H.check_groups(box, "robot"), { 4 }), "robot: " .. serpent.line(H.check_groups(box, "robot")))
+          -- on_robot_mined_entity: a robot deconstructs the second block, the row splits 1 + 2
+          local second = assert(s.find_entities_filtered({ position = { o.x + 1, o.y }, name = "mb-balancer-express" })[1], "no second block")
+          local second_unit = second.unit_number
+          second.order_deconstruction("player")
+          local function wait_mined(k)
+            after_ticks(30, function()
+              if second.valid then
+                assert(k > 0, "no robot mined the block in 1 800 ticks")
+                wait_mined(k - 1)
+              else
+                assert(groups.of(second_unit) == nil, "the mined block still has a group")
+                assert(same(H.check_groups(box, "robot mined"), { 2, 1 }), "robot mined: " .. serpent.line(H.check_groups(box, "robot mined")))
+              end
+            end)
+          end
+          wait_mined(60)
         else
           assert(n > 0, "no robot built the ghost in 1 800 ticks")
           wait(n - 1)

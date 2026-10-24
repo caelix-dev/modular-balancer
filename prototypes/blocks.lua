@@ -57,8 +57,8 @@ local function first_frame(anim)
   return {
     filename = anim.filename,
     priority = anim.priority,
-    width = anim.width or anim.size,
-    height = anim.height or anim.size,
+    width = anim.width or (type(anim.size) == "table" and anim.size[1] or anim.size),
+    height = anim.height or (type(anim.size) == "table" and anim.size[2] or anim.size),
     x = anim.x,
     y = anim.y,
     shift = { sx * SHRINK, sy * SHRINK },

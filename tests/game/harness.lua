@@ -443,7 +443,9 @@ function H.check_groups(box, what)
           end
         end
       end
-      assert(table_size(g.blocks) == n, what .. ": group " .. id .. " has " .. table_size(g.blocks) .. " blocks, its part " .. n)
+      assert(table_size(g.blocks) == n and g.count == n,
+        what .. ": group " .. id .. " has " .. table_size(g.blocks) .. " blocks (count " .. g.count .. "), its part " .. n)
+      assert(g.force_index == g.force.index, what .. ": group " .. id .. " force_index differs from its force")
       sizes[#sizes + 1] = n
     end
   end

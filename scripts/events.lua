@@ -4,12 +4,14 @@
 --   removed: on_player_mined_entity, on_robot_mined_entity, on_space_platform_mined_entity,
 --            on_entity_died, script_raised_destroy
 --   moved:   script_raised_teleported
+--   forces:  on_forces_merged (the blocks of the source force now belong to the destination)
 --   anything else (LuaEntity::destroy without raise_destroy, a deleted surface):
 --            on_object_destroyed, for every block registered with register_on_object_destroyed
 --            when it was built
--- Every event but on_object_destroyed carries a name filter for the block prototypes of this
--- game (MODDING-RULES §3), so the handlers only see blocks. A mod has one handler per event:
--- control.lua must not register these events anywhere else.
+-- Every event but on_object_destroyed and on_forces_merged (neither takes filters) carries a
+-- name filter for the block prototypes of this game (MODDING-RULES §3), so the handlers only see
+-- blocks. A mod has one handler per event: control.lua must not register these events anywhere
+-- else.
 local groups = require("scripts.groups")
 
 local events = {}
@@ -64,6 +66,9 @@ function events.register()
       groups.on_block_moved(event.entity)
     end
   end, f)
+  script.on_event(E.on_forces_merged, function(event)
+    groups.on_forces_merged(event.source_index, event.destination)
+  end)
   script.on_event(E.on_object_destroyed, function(event)
     if event.type == defines.target_type.entity then
       groups.on_block_destroyed(event.useful_id)

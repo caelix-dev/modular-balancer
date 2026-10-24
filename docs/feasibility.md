@@ -847,7 +847,7 @@ Each is exactly half a belt of its tier.
 
 ## F10: lifecycle in the engine (Plan 2 Task 5)
 
-Suite `tests/game/lifecycle.lua` (17 tests after fix round 1, both presets; full runs after fix round 1 `feasibility/p2-t5-results-vanilla.txt` 176/176, `p2-t5-results-space-age.txt` 178/178, spikes on); MCP checks in
+Suite `tests/game/lifecycle.lua` (22 tests after the final fix round, both presets; full runs `feasibility/p2-t5-results-vanilla.txt` 181/181, `p2-t5-results-space-age.txt` 183/183, spikes on); MCP checks in
 `feasibility/p2-t5-mcp-checks.txt`. fdev test is headless and has no player, so the player-only
 events (on_player_setup_blueprint, on_undo_applied, rotate and flip) are driven by calling the
 mod's handlers with the event fields they read, after doing to the world what the game would do.
@@ -930,6 +930,23 @@ configuration change refreshes every group without rebuilding an unchanged one.
   book's active blueprint), blueprint_to_setup and the cursor (or its book's active blueprint) are
   all cleaned; `set_blueprint_entities(entities, false)` keeps positions. A real Ctrl+C / book /
   library session is still not run (no player headless).
+
+**Final fix round (Plan 2 final review).**
+- *No inventory is sized by item count (I1).* `builder.take` fills script inventories of at most
+  `builder.max_take_slots` (65 535, the uint16 limit of `create_inventory`) slots, merging as it
+  inserts and opening a new inventory only when one is full even merged. `carry_into` caps the
+  buffer at `builder.max_buffer_slots` and lets the inserts merge, refusing only when the merged
+  items do not fit. Tests: `take_uses_bounded_inventories` (cap 1, iron and copper: at least two
+  inventories, every plate kept, none on the block tile) and `carry_merges_into_a_capped_buffer`
+  (a 1:2 shrunk to 1:1 with more single belt items to buffer than its 3-slot cap: rebuilt, all
+  600 plates kept).
+- *Belts of another force* next to a block are never swapped or linked; one pointing into or away
+  from a block is refused ("other-force").
+- *Block-tile port items* of a removed group go to the miner or are spilled off the group's tiles,
+  marked for its robots (`block_tile_port_items_spilled_off_the_tile`).
+- *A cloned block-tile linked belt* is loose until a port claims it; else it is removed and its
+  items go to the network of the group on its tile, or are spilled
+  (`cloned_block_tile_belt_cleaned_up`).
 
 **Save mid-rebuild.** A save made in the tick the blocks and belts were built (groups dirty, no
 network yet) builds the balancer on the first tick after loading (on_load re-arms the flush),

@@ -100,6 +100,11 @@ PASSED: tests/game/play > play > merge_into_dormant_group_carries_network
 PASSED: tests/game/play > play > edge_turned_round_becomes_input
 PASSED: tests/game/play > play > failing_rebuild_does_not_rearm
 PASSED: tests/game/play > play > no_free_side_does_not_rearm
+PASSED: tests/game/lifecycle > lifecycle > take_uses_bounded_inventories
+PASSED: tests/game/lifecycle > lifecycle > carry_merges_into_a_capped_buffer
+PASSED: tests/game/lifecycle > lifecycle > belt_of_another_force_ignored
+PASSED: tests/game/lifecycle > lifecycle > block_tile_port_items_spilled_off_the_tile
+PASSED: tests/game/lifecycle > lifecycle > cloned_block_tile_belt_cleaned_up
 PASSED: tests/game/lifecycle > lifecycle > blueprint_round_trip
 PASSED: tests/game/lifecycle > lifecycle > copy_paste_round_trip
 PASSED: tests/game/lifecycle > lifecycle > undo_deconstruct
@@ -176,4 +181,4 @@ PASSED: spikes/hidden_surface/test > spike S2: hidden surface > belt_port_front_
 PASSED: spikes/hidden_surface/test > spike S2: hidden surface > belt_port_picks_free_side
 PASSED: spikes/hidden_surface/test > spike S2: hidden surface > put_and_take_on_one_proxy_bypass_the_network
 PASSED: spikes/hidden_surface/test > spike S2: hidden surface > lane_mode_balances_lanes
-178 passed, 0 failed, 0 skipped (178 total)
+183 passed, 0 failed, 0 skipped (183 total)

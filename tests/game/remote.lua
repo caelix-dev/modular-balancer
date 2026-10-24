@@ -8,6 +8,8 @@
 -- Also builds the F7 benchmark saves (docs/feasibility.md F7):
 --   exec_lua: return remote.call("mb-test", "bench_hidden", 50)   -- 50 saturated 8:3 networks
 --   exec_lua: return remote.call("mb-test", "bench_vanilla", 50)  -- 50 x 24 vanilla splitters
+-- UPS gate saves against Better Belt Balancer and Belt Balancer 3 (Plan 3 Task 1): the bench_*
+-- functions of bench/builders.lua, results in docs/benchmarks.md.
 -- Groups save/load check (save_load_keeps_groups, Plan 2 Task 3):
 --   exec_lua: return remote.call("mb-test", "groups_build")    -- blocks in several groups
 --   exec_lua: return remote.call("mb-test", "groups_summary")  -- before the save
@@ -190,8 +192,13 @@ local function groups_destroy()
   return e ~= nil and e.destroy()
 end
 
-remote.add_interface("mb-test", {
+local functions = {
   build = build, count = count, block = block, bench_hidden = bench_hidden, bench_vanilla = bench_vanilla,
   groups_build = groups_build, groups_summary = groups_summary, groups_bridge = groups_bridge,
   groups_destroy = groups_destroy,
-})
+}
+-- UPS gate saves (Plan 3 Task 1): bench/builders.lua, docs/benchmarks.md.
+for name, fn in pairs(require("bench.builders")) do
+  functions[name] = fn
+end
+remote.add_interface("mb-test", functions)

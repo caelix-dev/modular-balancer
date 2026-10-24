@@ -5,3 +5,4 @@ docs/ export-ignore
 .superpowers/ export-ignore
 scripts/flow.lua export-ignore
 CLAUDE.md export-ignore
+bench/ export-ignore

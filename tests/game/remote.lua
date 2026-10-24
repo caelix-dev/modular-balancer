@@ -17,7 +17,8 @@
 --   exec_lua: remote.call("mb-test", "groups_destroy"); run_ticks 2; groups_summary
 --                                       -- a block destroyed without an event after the load
 --                                          leaves its group (on_object_destroyed)
--- Loaded from control.lua only with factorio-test. Results: docs/feasibility.md F6, F7.
+-- Loaded from control.lua only with the dev gate `mb-dev` (settings.lua: factorio-test and the
+-- dev marker tests/dev.lua, which release zips leave out). Results: docs/feasibility.md F6, F7.
 local network = require("scripts.network")
 local builder = require("scripts.builder")
 local H = require("tests.game.harness")

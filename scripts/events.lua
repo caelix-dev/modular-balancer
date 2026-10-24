@@ -9,6 +9,11 @@
 --   changed: on_player_rotated_entity, on_player_flipped_entity, on_entity_settings_pasted
 --            (the inserter positions or a belt direction change)
 --   forces:  on_forces_merged (the blocks of the source force now belong to the destination)
+--   lifecycle (scripts/lifecycle.lua):
+--            on_player_setup_blueprint, on_player_configured_blueprint (edges become belts),
+--            on_undo_applied, on_redo_applied, on_marked_for_upgrade and on_cancelled_upgrade
+--            of transport belts, on_pre_surface_deleted / on_pre_surface_cleared and
+--            on_surface_deleted / on_surface_cleared (the hidden surface)
 --   anything else (LuaEntity::destroy without raise_destroy, a deleted surface):
 --            on_object_destroyed, for every block registered with register_on_object_destroyed
 --            when it was built
@@ -16,11 +21,16 @@
 -- type filters for belt-connectables and inserters (MODDING-RULES §3). Blocks go to the groups;
 -- the groups they change and the groups near any other entity are marked for the next balancer
 -- flush (coalesced, one refresh per group per batch of events). A belt-connectable built on a
--- block tile, or a block built on one, is undone and handed back (Ruling 6). A mod has one
--- handler per event: control.lua must not register these events anywhere else.
+-- block tile, or a block built on one, is undone and handed back (Ruling 6). The build events
+-- also take ghosts of linked belts: a ghost of an edge becomes a ghost of its belt, and an edge
+-- built by the game (not by this mod, which raises no event for its own swaps) is kept only if
+-- a group claims it at the next flush. The player or robot that mines the last block of a group
+-- gets its network's items (scripts/balancer.lua). A mod has one handler per event: control.lua
+-- must not register these events anywhere else.
 local groups = require("scripts.groups")
 local balancer = require("scripts.balancer")
 local belt_io = require("scripts.io")
+local lifecycle = require("scripts.lifecycle")
 
 local events = {}
 
@@ -53,6 +63,14 @@ local function built(entity, event)
     return
   end
   local player = event.player_index
+  if entity.type == "entity-ghost" then
+    lifecycle.unghost(entity)
+    return
+  end
+  if belt_io.edge_belt(entity.name) then
+    balancer.add_loose(entity, player)
+    return
+  end
   if groups.tier_of(entity.name) then
     local p = entity.position
     if belt_io.foreign_belt_on(entity.surface, math.floor(p.x), math.floor(p.y)) then
@@ -78,6 +96,7 @@ local function removed(entity, event)
   end
   if groups.tier_of(entity.name) then
     local ids, gone = groups.on_block_removed(entity)
+    balancer.set_sink(gone, event.player_index, event.robot)
     balancer.mark(ids, gone, event.player_index)
     balancer.mark_block(entity, event.player_index)
   elseif relevant(entity) then
@@ -91,12 +110,24 @@ local function changed(entity, event)
   end
 end
 
+-- The handlers of the rotate and flip events, for tests (headless tests have no player, so
+-- LuaEntity::rotate and ::flip raise nothing).
+function events.on_rotated(event)
+  changed(event.entity, event)
+end
+events.on_flipped = events.on_rotated
+
 function events.register()
   local f = filters()
+  local fb = filters()
+  fb[#fb + 1] = { filter = "ghost_type", type = "linked-belt" }
   local on_built = function(event)
     built(event.entity, event)
   end
-  for _, id in ipairs({ E.on_built_entity, E.on_robot_built_entity, E.on_space_platform_built_entity, E.script_raised_built, E.script_raised_revive }) do
+  for _, id in ipairs({ E.on_built_entity, E.script_raised_built, E.script_raised_revive }) do
+    script.on_event(id, on_built, fb)
+  end
+  for _, id in ipairs({ E.on_robot_built_entity, E.on_space_platform_built_entity }) do
     script.on_event(id, on_built, f)
   end
   script.on_event(E.on_entity_cloned, function(event)
@@ -125,12 +156,8 @@ function events.register()
       balancer.mark_around(osi, ox, oy, entity.type == "inserter" and belt_io.reach() or 2)
     end
   end, f)
-  script.on_event(E.on_player_rotated_entity, function(event)
-    changed(event.entity, event)
-  end)
-  script.on_event(E.on_player_flipped_entity, function(event)
-    changed(event.entity, event)
-  end)
+  script.on_event(E.on_player_rotated_entity, events.on_rotated)
+  script.on_event(E.on_player_flipped_entity, events.on_flipped)
   script.on_event(E.on_entity_settings_pasted, function(event)
     changed(event.destination, event)
   end)
@@ -138,6 +165,21 @@ function events.register()
     local ids, gone = groups.on_forces_merged(event.source_index, event.destination)
     balancer.mark(ids, gone)
   end)
+  script.on_event(E.on_player_setup_blueprint, lifecycle.on_player_setup_blueprint)
+  script.on_event(E.on_player_configured_blueprint, lifecycle.on_player_configured_blueprint)
+  script.on_event(E.on_undo_applied, function(event)
+    lifecycle.on_undo_redo(event, true)
+  end)
+  script.on_event(E.on_redo_applied, function(event)
+    lifecycle.on_undo_redo(event, false)
+  end)
+  local belts = { { filter = "type", type = "transport-belt" } }
+  script.on_event(E.on_marked_for_upgrade, lifecycle.on_marked_for_upgrade, belts)
+  script.on_event(E.on_cancelled_upgrade, lifecycle.on_cancelled_upgrade, belts)
+  script.on_event(E.on_pre_surface_deleted, lifecycle.on_pre_surface_gone)
+  script.on_event(E.on_pre_surface_cleared, lifecycle.on_pre_surface_gone)
+  script.on_event(E.on_surface_deleted, lifecycle.on_surface_gone)
+  script.on_event(E.on_surface_cleared, lifecycle.on_surface_gone)
   script.on_event(E.on_object_destroyed, function(event)
     if event.type == defines.target_type.entity then
       local si, x, y = groups.where(event.useful_id)

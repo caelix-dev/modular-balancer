@@ -5,8 +5,9 @@ Measured in Factorio 2.1.23 with fdev (`fdev test`, MCP `server_start` / `exec_l
 
 Spike code lives in `spikes/`. It loads only when the hidden startup setting `mb-spikes` is on.
 That setting is forced on when two things hold: the git-ignored file `spikes/local-enable.lua`
-exists (it returns `true`, or `{ variant = "<name>" }` to pick a prototype variant), and the
-`factorio-test` mod is enabled. Otherwise it is forced off. See `settings.lua`.
+exists (it returns `true`, or `{ variant = "<name>" }` to pick a prototype variant), and the dev
+gate `mb-dev` is on (the `factorio-test` mod enabled and the dev marker `tests/dev.lua` present,
+Plan 2 Task 5). Otherwise it is forced off. See `settings.lua`.
 
 Commands:
 
@@ -840,6 +841,71 @@ built in `data-final-fixes.lua`. With the test mod `tests/mods/mb-test-speed` (e
 | turbo | 15.000 / 15.000 |
 
 Each is exactly half a belt of its tier.
+
+## F10: lifecycle in the engine (Plan 2 Task 5)
+
+Suite `tests/game/lifecycle.lua` (13 tests, both presets; full runs `feasibility/p2-t5-results-vanilla.txt` 172/172, `p2-t5-results-space-age.txt` 174/174, spikes on); MCP checks in
+`feasibility/p2-t5-mcp-checks.txt`. fdev test is headless and has no player, so the player-only
+events (on_player_setup_blueprint, on_undo_applied, rotate and flip) are driven by calling the
+mod's handlers with the event fields they read, after doing to the world what the game would do.
+
+**Blueprints.** `LuaItemCommon::create_blueprint` over a running balancer records each edge as
+itself (`mb-edge-in-express-transport-belt`, `type = "input"`), as F1 found. After the rewrite
+(`lifecycle.clean_blueprint`, run from on_player_setup_blueprint, which copy and cut raise too)
+a 2:3 holds 2 blocks and 15 plain belts and nothing else of the mod; the block-tile linked belt is
+`not-blueprintable`; a wired input belt (Ruling 7) keeps its wire. Pasted (build_blueprint with
+raise_built) and revived, it is a 2:3 again and its outputs measure 29.967 / 30.000 / 30.000. A blueprint made
+without the rewrite pastes too: its edge ghosts become belt ghosts as they are placed.
+- The harness loaders and chests (`minable = nil`) are not blueprinted; the tests rebuild them.
+
+**Edges cannot follow the upgrade planner.** `order_upgrade` on an edge with another edge
+prototype as target (same `fast_replaceable_group`, `placeable_by` the new belt) returns false
+(prototype, name or `{name, quality}`). Design instead: on on_marked_for_upgrade of a transport
+belt, an edge of the same belt that it feeds or is fed by is swapped back to its belt and that
+belt gets the same order (player kept for the undo queue). A belt marked for upgrade is not a
+port, so the order survives; once robots (here `apply_upgrade`, which raises
+script_raised_destroy/_built) upgrade it, it becomes an edge of the new belt. Items kept.
+
+**Block upgrades.** `order_upgrade` + `apply_upgrade` of a basic block to fast: the fast block is
+already in a fast group when `apply_upgrade` returns (the old block is gone before the new one's
+build event: no overlap refusal, Task 3 note). A fast-replace `create_entity` of an express block
+over it behaves the same. The old network's items reach the new tier's network through the
+retire-by-tile rule (`scripts/balancer.lua`); measured equal before and after.
+
+**Removing a block.** With the network's last block mined by a construction robot, the network's
+items go into the robot's logistic network (a storage chest got all 26; nothing on the ground).
+A player's inventory gets them the same way (not testable headless). A block destroyed with no
+miner still spills them at its tile.
+- Undo of that removal rebuilds the block from its ghost on that tile. The spilled items lie on
+  the tile, and a script `revive` without `overflow` deletes the item-on-ground entities it
+  collides with (measured: 26 of 600 plates gone). The test passes an overflow inventory. A
+  player or robot build moves colliding items rather than deleting them, but this was not measured.
+
+**Edges and rotation.** A connected edge can be rotated (`rotate` returns true and keeps its
+link). Turned round it becomes the other role, turned sideways a plain belt again.
+
+**Deconstruction marks** survive the swaps in both directions (`order_deconstruction` on the new
+entity).
+
+**The hidden surface deleted.** `delete_surface` returns true and the surface is gone on the next
+tick; on_pre_surface_deleted comes first, so the networks' items are spilled at their blocks, and
+the next flush places every network on a new `mb-hidden`, which can get the same surface index
+as the old one.
+
+**Space Age removed (Review Focus 5).** With the turbo block and hidden turbo prototypes defined
+without Space Age, a save with a backed-up turbo 1:1 (1 000 plates in all, 26 in the network)
+loads in vanilla: on_configuration_changed replaces both turbo blocks by express blocks, the next
+tick carries the turbo network's items into a new express network, total 1 000.
+- Edges of turbo belts, like the player's turbo belts, are deleted by the game with their items
+  (as vanilla deletes turbo belts).
+
+**Speed changed by a mod.** Existing hidden entities and edges follow their changed prototypes
+after a load with `mb-test-speed` added (express 0.1015625 everywhere, items kept). A
+configuration change refreshes every group without rebuilding an unchanged one.
+
+**Save mid-rebuild.** A save made in the tick the blocks and belts were built (groups dirty, no
+network yet) builds the balancer on the first tick after loading (on_load re-arms the flush),
+items kept (64 of 64).
 
 ## Concerns for Plan 2 from Task 5 (parked review minors)
 

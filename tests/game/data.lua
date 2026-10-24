@@ -1,5 +1,6 @@
--- Test harness prototypes for the in-game suites (tests/game/). Loaded from data.lua only when
--- the factorio-test mod is enabled; never part of the product.
+-- Test harness prototypes for the in-game suites (tests/game/). Loaded from data.lua only with the
+-- dev gate `mb-dev` (settings.lua: factorio-test and the dev marker tests/dev.lua, which release
+-- zips leave out); never part of the product.
 --   mb-test-loader-<tier>  loader-1x1 at the belt speed of basic / fast / express (/ turbo)
 --   mb-test-loader-half    loader-1x1 at half the express belt speed (a throttled sink)
 --   mb-test-chest          a large chest, used as a finite source and as a counting sink

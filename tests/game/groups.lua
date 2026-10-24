@@ -48,7 +48,8 @@ describe("groups", function()
     end
   end)
 
-  -- Entity, item and recipe per tier (turbo only with Space Age), the upgrade chain, the
+  -- Entity, item and recipe per tier (without Space Age the turbo block and item exist hidden,
+  -- with no recipe, for saves that drop Space Age: Review Focus 5), the upgrade chain, the
   -- recipe, the unlock by the splitter's technology, and the F1 collision mask.
   test("prototypes_per_tier", function()
     local tiers = {
@@ -62,7 +63,9 @@ describe("groups", function()
       local name = "mb-balancer-" .. t[1]
       local e = prototypes.entity[name]
       if t[1] == "turbo" and not sa then
-        assert(e == nil and prototypes.item[name] == nil and prototypes.recipe[name] == nil, "turbo exists without Space Age")
+        assert(e and e.hidden and prototypes.item[name] and prototypes.item[name].hidden and prototypes.recipe[name] == nil,
+          "without Space Age the turbo block must exist hidden, without a recipe")
+        assert(e.next_upgrade == nil, "hidden turbo block has an upgrade")
       else
         assert(e and e.type == "simple-entity-with-owner", name .. ": entity missing or wrong type")
         assert(e.tile_width == 1 and e.tile_height == 1, name .. ": not 1x1")

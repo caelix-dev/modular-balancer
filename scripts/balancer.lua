@@ -6,6 +6,9 @@
 -- storage.balancer = {
 --   recs  = { [group id] = mb.Balancer },
 --   dirty = { [group id] = player index (0 for none) },   groups to refresh at the next flush
+--   sinks = { [group id] = { player_index?, robot? } },   who removed the last block of a group
+--   loose = { [unit number] = LuaEntity },                 edges built by the game, not by this
+--                                                           mod (an upgrade, a ghost, a clone)
 -- }
 --
 -- Coalescing. Events only mark groups dirty (balancer.mark, mark_near, mark_block). The next
@@ -15,8 +18,11 @@
 --
 -- A flush:
 --   1. retires groups that no longer exist: their ports go to a pool, and their network goes to
---      the live group that now holds their blocks (a merge) or, with none, is spilled at the
---      group (removed: nothing is deleted);
+--      the live group that now holds their blocks (a merge), or else to a live group on one of
+--      their tiles (a block upgraded or replaced in place: its items move to the new tier's
+--      network), or else to whoever removed the last block (a player's inventory, a robot's
+--      logistic network; what does not fit is spilled there), or else is spilled at the group
+--      (destroyed: nothing is deleted);
 --   2. refreshes each live dirty group: scan; if it has at least one input and one output, its
 --      edges and block-tile linked belts are put in place (claimed), the network is rebuilt
 --      only when N or M changed (or networks were merged in), and every port is linked. A group
@@ -24,7 +30,8 @@
 --      visible ports;
 --   3. links shared tiles: the output network linked belt of one group straight to the input
 --      network linked belt of the other (a tile between two blocks stays a plain belt, F1);
---   4. cleans the pool: an edge no group claimed is swapped back to its belt (items kept), a
+--   4. cleans the pool (and the loose edges): an edge no group claimed is swapped back to its
+--      belt (items kept), a
 --      block-tile linked belt no group claimed is removed and its items go into its group's
 --      network buffer (or are spilled when there is none);
 --   5. marks the groups around every tile whose belt-connectable is not what it was before the
@@ -51,12 +58,16 @@ local balancer = {}
 ---@field inputs mb.IoPort[] linked to placed.inputs[i]
 ---@field outputs mb.IoPort[] linked to placed.outputs[j]
 ---@field units (integer|uint64)[] blocks at the last refresh
+---@field tiles {[1]: integer, [2]: integer}[] their tiles (x, y) on anchor.surface_index
 ---@field anchor { surface_index: integer, position: MapPosition }?
 ---@field refused { reason: string, position: MapPosition }[]
 
 local function state()
   storage.balancer = storage.balancer or { recs = {}, dirty = {} }
-  return storage.balancer
+  local st = storage.balancer
+  st.sinks = st.sinks or {}
+  st.loose = st.loose or {}
+  return st
 end
 
 local function arm()
@@ -205,7 +216,8 @@ local function realize(ctx, port, g, s, refused)
       return false
     end
     local _, role = belt_io.edge_belt(e.name)
-    if role == port.role then
+    -- an edge built by the game (an upgrade, a ghost) may carry the wrong linked belt type
+    if role == port.role and e.linked_belt_type == (role == "in" and "input" or "output") then
       claim(ctx, e, gid)
       port.visible = e
       return true
@@ -269,6 +281,16 @@ local function retire(st, id, ctx, live)
       break
     end
   end
+  if not target and rec.anchor then
+    for _, t in ipairs(rec.tiles or {}) do
+      local unit = groups.block_at(rec.anchor.surface_index, t[1], t[2])
+      local gid = unit and groups.of(unit)
+      if gid and groups.get(gid) then
+        target = gid
+        break
+      end
+    end
+  end
   for _, list in ipairs({ rec.inputs, rec.outputs }) do
     for _, p in ipairs(list) do
       if p.visible and p.visible.valid then
@@ -296,7 +318,7 @@ local function retire(st, id, ctx, live)
       live[#live + 1] = target
     end
   else
-    ctx.spills[#ctx.spills + 1] = { nets = nets, anchor = rec.anchor }
+    ctx.spills[#ctx.spills + 1] = { nets = nets, anchor = rec.anchor, sink = st.sinks[id] }
   end
 end
 
@@ -433,11 +455,15 @@ local function refresh_group(st, gid, ctx, player_index)
     end
   end
   rec.inputs, rec.outputs, rec.refused = inputs, outputs, refused
-  local units = {}
+  local units, tiles = {}, {}
   for u in pairs(g.blocks) do
     units[#units + 1] = u
+    local _, x, y = groups.where(u)
+    if x then
+      tiles[#tiles + 1] = { x, y }
+    end
   end
-  rec.units = units
+  rec.units, rec.tiles = units, tiles
   ctx.refreshed[#ctx.refreshed + 1] = gid
   if #fresh > 0 then
     balancer.notify(player_index, fresh, g.surface_index)
@@ -479,6 +505,17 @@ end
 
 -- Step 4.
 local function cleanup(st, ctx)
+  local loose = {}
+  for unit, e in pairs(st.loose) do
+    if e.valid then
+      loose[#loose + 1] = { unit = unit, entity = e }
+    end
+  end
+  table.sort(loose, function(a, b) return a.unit < b.unit end)
+  for _, l in ipairs(loose) do
+    ctx.pool[#ctx.pool + 1] = { entity = l.entity }
+  end
+  st.loose = {}
   for _, entry in ipairs(ctx.pool) do
     local e = entry.entity
     if e.valid and not ctx.claimed[e.unit_number] then
@@ -548,12 +585,121 @@ function balancer.flush()
     local s = a and game.get_surface(a.surface_index)
     for _, p in ipairs(sp.nets) do
       if s then
-        builder.spill(p, s, a.position)
+        local inv = builder.take(p)
+        balancer.give(inv, sp.sink, s, a.position)
       else
         builder.destroy(p) -- the surface is gone, and its blocks and belts with it
       end
     end
   end
+  st.sinks = {}
+end
+
+-- Gives the items of `inv` (a script inventory, destroyed) to `sink`: a player's inventory, or
+-- the storage chests of the logistic network of a robot (the robot that mined the last block).
+-- What does not fit, or everything with no sink, is spilled at `position` of `s`, marked to be
+-- looted (and, after a robot, for deconstruction by its force, so robots pick it up).
+---@param inv LuaInventory
+---@param sink { player_index: integer?, robot: LuaEntity? }?
+---@param s LuaSurface
+---@param position MapPosition
+function balancer.give(inv, sink, s, position)
+  local player = sink and sink.player_index and game.get_player(sink.player_index) or nil
+  local robot = sink and sink.robot
+  ---@type LuaLogisticNetwork?
+  local net
+  ---@type LuaForce?
+  local mark
+  if robot and robot.valid then
+    net = robot.logistic_network
+    mark = robot.force --[[@as LuaForce]]
+  end
+  for i = 1, #inv do
+    local st = inv[i] --[[@as LuaItemStack]]
+    if st.valid_for_read then
+      local n = 0
+      if player and player.valid then
+        n = player.insert(st)
+      elseif net and net.valid then
+        n = net.insert(st, "storage")
+      end
+      if n >= st.count then
+        st.clear()
+      elseif n > 0 then
+        st.count = st.count - n
+      end
+      ---@diagnostic disable-next-line: unnecessary-if
+      if st.valid_for_read then
+        s.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true, force = mark })
+        st.clear()
+      end
+    end
+  end
+  inv.destroy()
+end
+
+-- Remembers who removed the last block of the `gone` groups (scripts/events.lua, a mined block).
+---@param gone integer[]
+---@param player_index integer?
+---@param robot LuaEntity?
+function balancer.set_sink(gone, player_index, robot)
+  if not (player_index or robot) then
+    return
+  end
+  local st = state()
+  for _, id in ipairs(gone) do
+    st.sinks[id] = { player_index = player_index, robot = robot }
+  end
+end
+
+-- An edge built by the game, not by this mod (a ghost revived, an upgrade, a clone, an old
+-- blueprint): the next flush keeps it if a group claims it, else swaps it back to its belt.
+---@param e LuaEntity
+---@param player_index integer?
+function balancer.add_loose(e, player_index)
+  state().loose[e.unit_number] = e
+  balancer.mark_near(e, player_index)
+  arm()
+end
+
+-- Marks every group (configuration change, a lost hidden surface).
+function balancer.mark_all()
+  local ids = {}
+  for id in pairs(storage.groups and storage.groups.by_id or {}) do
+    ids[#ids + 1] = id
+  end
+  table.sort(ids)
+  balancer.mark(ids)
+end
+
+-- The hidden surface is about to go (deleted or cleared by another mod or a command): every
+-- network's items are spilled at its group, the networks are dropped, and every group is marked,
+-- so the next flush places new networks on a new surface. Nothing is deleted.
+function balancer.drop_networks()
+  local st = state()
+  local ids = {}
+  for id in pairs(st.recs) do
+    ids[#ids + 1] = id
+  end
+  table.sort(ids)
+  for _, id in ipairs(ids) do
+    local rec = st.recs[id]
+    local nets = { table.unpack(rec.extra) }
+    if rec.placed then
+      table.insert(nets, 1, rec.placed)
+    end
+    local a = rec.anchor
+    local s = a and game.get_surface(a.surface_index)
+    for _, p in ipairs(nets) do
+      if s and s.valid then
+        builder.spill(p, s, a.position)
+      else
+        builder.destroy(p)
+      end
+    end
+    rec.placed, rec.extra, rec.n, rec.m = nil, {}, 0, 0
+  end
+  balancer.mark_all()
 end
 
 -- Marks group `id` and flushes at once (the interface of the plan; events mark and let the next

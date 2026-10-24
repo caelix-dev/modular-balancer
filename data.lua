@@ -2,9 +2,9 @@
 require("prototypes.blocks")
 -- The hidden network prototypes are created in data-final-fixes.lua (speeds from the final belts).
 
--- Test harness prototypes, only with factorio-test (never in the product).
----@diagnostic disable-next-line: unnecessary-if
-if mods["factorio-test"] then
+-- Test harness prototypes, only with the dev gate (settings.lua: factorio-test and the dev
+-- marker tests/dev.lua, which release zips leave out).
+if settings.startup["mb-dev"].value then
   require("tests.game.data")
 end
 

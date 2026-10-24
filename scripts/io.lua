@@ -264,6 +264,10 @@ function belt_io.scan(group)
         if edge_belt then
           -- already an edge: its role follows its direction (a rotated edge is swapped again)
           port.kind, port.role = role and "edge", role
+        elseif e.type == "transport-belt" and e.to_be_upgraded() then
+          -- marked for upgrade (scripts/lifecycle.lua puts an edge's mark on its plain belt):
+          -- not a port until the upgrade is built, so the swap does not drop the mark
+          port.kind = nil
         elseif e.type == "transport-belt" and belt_io.edge_name(e.name, "in") then
           if role == "in" then
             if e.belt_shape ~= "straight" then
@@ -392,7 +396,7 @@ function belt_io.put_back(e, inv, items)
 end
 
 -- Swaps a plain belt for the edge of its belt and `role`, keeping its direction, force,
--- quality, health and items. Returns the edge, or nil (the belt is left as it was) if the edge cannot
+-- quality, health, items and deconstruction mark. Returns the edge, or nil (the belt is left as it was) if the edge cannot
 -- be created.
 ---@param belt LuaEntity
 ---@param role string "in" | "out"
@@ -404,6 +408,7 @@ function belt_io.swap(belt, role)
   end
   local s, pos, dir, force, quality, belt_name = belt.surface, belt.position, belt.direction, belt.force, belt.quality, belt.name
   local health = belt.health
+  local decon = belt.to_be_deconstructed()
   local inv, items = belt_io.lift(belt)
   belt.destroy()
   local edge = s.create_entity({
@@ -415,14 +420,21 @@ function belt_io.swap(belt, role)
       "modular-balancer: could not put back " .. belt_name)
     back.health = health
     belt_io.put_back(back, inv, items)
+    if decon then
+      back.order_deconstruction(force)
+    end
     return nil
   end
   edge.health = health
   belt_io.put_back(edge, inv, items)
+  if decon then
+    edge.order_deconstruction(force) -- a deconstruction planner's mark stays on the tile
+  end
   return edge
 end
 
--- Swaps an edge back for its plain belt (direction, force, quality, health and items kept). Returns the
+-- Swaps an edge back for its plain belt (direction, force, quality, health, items and
+-- deconstruction mark kept). Returns the
 -- belt.
 ---@param edge LuaEntity
 ---@return LuaEntity
@@ -430,12 +442,16 @@ function belt_io.unswap(edge)
   local belt = assert(belt_io.edge_belt(edge.name))
   local s, pos, dir, force, quality = edge.surface, edge.position, edge.direction, edge.force, edge.quality
   local health = edge.health
+  local decon = edge.to_be_deconstructed()
   local inv, items = belt_io.lift(edge)
   edge.destroy()
   local e = assert(s.create_entity({ name = belt, position = pos, direction = dir, force = force, quality = quality, create_build_effect_smoke = false }),
     "modular-balancer: could not put back " .. belt)
   e.health = health
   belt_io.put_back(e, inv, items)
+  if decon then
+    e.order_deconstruction(force)
+  end
   return e
 end
 

@@ -1,0 +1,173 @@
+PASSED: tests/game/smoke > modular-balancer smoke > nauvis exists
+PASSED: tests/game/placement > placement > place_then_destroy_leaves_nothing
+PASSED: tests/game/placement > placement > place_is_atomic
+PASSED: tests/game/placement > placement > destroy_returns_items
+PASSED: tests/game/placement > placement > regions_do_not_overlap
+PASSED: tests/game/placement > placement > tier_speed_follows_final_prototypes
+PASSED: tests/game/placement > placement > destroy_returns_all_items_of_a_running_network_3_5
+PASSED: tests/game/placement > placement > destroy_returns_all_items_of_a_running_network_8_3
+PASSED: tests/game/placement > placement > tier_throughput_basic
+PASSED: tests/game/placement > placement > lane_splitters_carry_items_per_tier_basic
+PASSED: tests/game/placement > placement > tier_throughput_fast
+PASSED: tests/game/placement > placement > lane_splitters_carry_items_per_tier_fast
+PASSED: tests/game/placement > placement > tier_throughput_express
+PASSED: tests/game/placement > placement > lane_splitters_carry_items_per_tier_express
+PASSED: tests/game/exactness > exactness > outputs_equal_2_3
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_2_3
+PASSED: tests/game/exactness > exactness > throughput_2_3
+PASSED: tests/game/exactness > exactness > outputs_equal_3_5
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_3_5
+PASSED: tests/game/exactness > exactness > throughput_3_5
+PASSED: tests/game/exactness > exactness > outputs_equal_8_3
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_8_3
+PASSED: tests/game/exactness > exactness > throughput_8_3
+PASSED: tests/game/exactness > exactness > outputs_equal_1_5
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_1_5
+PASSED: tests/game/exactness > exactness > throughput_1_5
+PASSED: tests/game/exactness > exactness > outputs_equal_5_1
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_5_1
+PASSED: tests/game/exactness > exactness > throughput_5_1
+PASSED: tests/game/exactness > exactness > outputs_equal_1_1
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_1_1
+PASSED: tests/game/exactness > exactness > throughput_1_1
+PASSED: tests/game/exactness > exactness > outputs_equal_unequal_inputs_2_4
+PASSED: tests/game/exactness > exactness > outputs_equal_unequal_inputs_3_5
+PASSED: tests/game/exactness > exactness > mixed_items_keep_lanes
+PASSED: tests/game/exactness > exactness > backpressure_then_release_moves_again
+PASSED: tests/game/exactness > exactness > recirc_slow_belt_2_3
+PASSED: tests/game/exactness > exactness > recirc_slow_belt_3_5
+PASSED: tests/game/exactness > exactness > recirc_settling_3_5
+PASSED: tests/game/exactness > exactness > priority_splitter_matches_model_half
+PASSED: tests/game/exactness > exactness > priority_splitter_matches_model_basic
+PASSED: tests/game/exactness > exactness > inserter_share_2_3
+PASSED: tests/game/exactness > exactness > inserter_share_lanes_2_3
+PASSED: tests/game/exactness > exactness > inserter_share_3_5
+PASSED: tests/game/exactness > exactness > inserter_share_lanes_3_5
+PASSED: tests/game/exactness > exactness > lane_balance_2_3
+PASSED: tests/game/exactness > exactness > lane_balance_8_3
+PASSED: tests/game/rebuild > rebuild > rebuild_keeps_every_item
+PASSED: tests/game/rebuild > rebuild > shrink_keeps_every_item
+PASSED: tests/game/rebuild > rebuild > grow_keeps_every_item
+PASSED: tests/game/rebuild > rebuild > quality_kept_on_rebuild
+PASSED: tests/game/rebuild > rebuild > failed_rebuild_keeps_the_old_network
+PASSED: tests/game/rebuild > rebuild > buffer_drains_at_full_output_rate
+PASSED: tests/game/rebuild > rebuild > item_data_kept_on_rebuild
+PASSED: tests/game/rebuild > rebuild > spoilage_kept_on_rebuild
+PASSED: tests/game/rebuild > rebuild > too_many_items_keeps_the_old_network
+PASSED: tests/game/rebuild > rebuild > never_item_is_dropped_on_rebuild
+PASSED: tests/game/rebuild > rebuild > rebuild_cost_at_64_64
+PASSED: tests/game/rebuild > rebuild > second_rebuild_with_full_buffer_keeps_every_item
+PASSED: tests/game/rebuild > rebuild > partial_stacks_keep_item_state
+PASSED: tests/game/groups > groups > prototypes_per_tier
+PASSED: tests/game/groups > groups > single_block_is_a_group
+PASSED: tests/game/groups > groups > row_of_eight_is_one_group
+PASSED: tests/game/groups > groups > l_shape_and_branch_are_one_group
+PASSED: tests/game/groups > groups > different_tiers_never_join
+PASSED: tests/game/groups > groups > removing_middle_block_splits
+PASSED: tests/game/groups > groups > teleported_block_moves_between_groups
+PASSED: tests/game/groups > groups > forces_merged_regroups
+PASSED: tests/game/groups > groups > overlapping_block_is_refused
+PASSED: tests/game/groups > groups > robot_and_script_builds_count
+PASSED: tests/game/io > io > edges_per_belt_prototype
+PASSED: tests/game/io > io > removing_block_restores_belts_with_items
+PASSED: tests/game/io > io > belt_on_block_is_returned
+PASSED: tests/game/io > io > side_loaded_output_refused
+PASSED: tests/game/io > io > underground_neighbour_uses_block_tile
+PASSED: tests/game/io > io > block_on_edge_tile_refused
+PASSED: tests/game/io > io > belt_on_block_returned_to_robot
+PASSED: tests/game/io > io > wired_belt_uses_block_tile_or_is_refused
+PASSED: tests/game/io > io > port_moves_when_neighbour_edge_unswapped
+PASSED: tests/game/io > io > inserter_both_refused
+PASSED: tests/game/play > play > row_8_in_3_out_balances
+PASSED: tests/game/play > play > user_l_shape_2_in_6_out
+PASSED: tests/game/play > play > two_belts_on_one_block
+PASSED: tests/game/play > play > inserter_port_share_and_recirc
+PASSED: tests/game/play > play > inserter_input_counts
+PASSED: tests/game/play > play > adding_and_removing_a_belt_rebuilds_without_loss
+PASSED: tests/game/play > play > shared_tile_between_groups
+PASSED: tests/game/play > play > self_feeding_group
+PASSED: tests/game/play > play > curved_last_tile_refused_with_message
+PASSED: tests/game/play > play > passing_belt_is_not_an_output
+PASSED: tests/game/play > play > mixed_tier_belts
+PASSED: tests/game/play > play > tick_handler_flushes_without_a_call
+PASSED: tests/game/play > play > merge_two_running_balancers_keeps_items
+PASSED: tests/game/play > play > split_keeps_items
+PASSED: tests/game/play > play > rotated_edge_reswapped
+PASSED: tests/game/play > play > failed_rebuild_keeps_old_network
+PASSED: tests/game/play > play > merge_into_dormant_group_carries_network
+PASSED: tests/game/play > play > edge_turned_round_becomes_input
+PASSED: tests/game/play > play > failing_rebuild_does_not_rearm
+PASSED: tests/game/play > play > no_free_side_does_not_rearm
+PASSED: tests/game/lifecycle > lifecycle > blueprint_round_trip
+PASSED: tests/game/lifecycle > lifecycle > copy_paste_round_trip
+PASSED: tests/game/lifecycle > lifecycle > undo_deconstruct
+PASSED: tests/game/lifecycle > lifecycle > redo
+PASSED: tests/game/lifecycle > lifecycle > ghost_block_then_built_by_robot
+PASSED: tests/game/lifecycle > lifecycle > upgrade_planner_block_tier
+PASSED: tests/game/lifecycle > lifecycle > upgrade_planner_on_edge_belt
+PASSED: tests/game/lifecycle > lifecycle > mine_edge_returns_belt_and_items
+PASSED: tests/game/lifecycle > lifecycle > edge_built_by_the_game
+PASSED: tests/game/lifecycle > lifecycle > rotate_and_flip_neighbour_belt
+PASSED: tests/game/lifecycle > lifecycle > space_age_removed
+PASSED: tests/game/lifecycle > lifecycle > belt_speed_changed_by_mod
+PASSED: tests/game/lifecycle > lifecycle > hidden_surface_deleted
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_stacked_linked_belts_refused
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_stacked_loaders_refused
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_block_as_belt_input_and_output_on_one_tile (no output)
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_input_and_output_on_one_tile
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_throughput
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_four_sides
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_row_1x8_eight_in_three_out
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_hybrid_four_sides
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_block_tile_interface_refuses_side_loading
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_output_edge_side_loading
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_shared_tile_internal_link
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_two_tile_gap_edges_chain
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_swap_keeps_items
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_swap_partner_full_conserves_items
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_swap_in_backed_up_line_conserves_items
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_swap_keeps_belt_stacks
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_mines_to_belt_item
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_blueprint_records
+PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_edge_fast_replace
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > linked_belt_cross_surface_throughput
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > inserter_takes_from_proxy_of_hidden_chest
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > inserter_share_phases_chest1
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > inserter_share_phases_belt
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_share_lanes_chest1
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_share_lanes_chest2
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_share_lanes_filtered
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_share_lanes_belt
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_share_mixed_chest1
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_share_mixed_chest2
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_share_mixed_filtered
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_share_mixed_belt
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_share_alternating_belt
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_chest1
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_chest2
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_filtered
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_belt
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_plain
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_late_chest1
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_late_chest2
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_late_filtered
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_late_belt
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_lanes_late_plain
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_mixed_chest1
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_mixed_chest2
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_mixed_filtered
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_mixed_belt
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_mixed_plain
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_alternating_belt
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > mixed_assembler_alternating_plain
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > proxy_block_shares_tile_with_linked_belt
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > drop_target_on_shared_tile
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > inserter_positions_known_at_build
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > inserter_puts_into_proxy
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > inserter_puts_onto_belt_port
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > belt_port_ignores_edges
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > belt_port_front_neighbours
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > belt_port_picks_free_side
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > put_and_take_on_one_proxy_bypass_the_network
+PASSED: spikes/hidden_surface/test > spike S2: hidden surface > lane_mode_balances_lanes
+172 passed, 0 failed, 0 skipped (172 total)

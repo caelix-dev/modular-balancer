@@ -29,20 +29,29 @@
 --                                   edges do not. Own fast-replace group, so a belt cannot be
 --                                   dragged over an edge. They keep the vanilla linked-belt
 --                                   structure (a hatch) for now; Plan 3 gives them a plain belt look
--- Tiers: basic, fast, express, and turbo with Space Age.
+-- Tiers: basic, fast, express and turbo (see TIERS).
 --
 -- Required from data-final-fixes.lua, so every speed is read from the final belt prototype: a
 -- mod that changes a belt's speed in data-updates or in an earlier data-final-fixes also
 -- changes the hidden entities of that tier (final review M3).
 
+---@type { name: string, belt: string, splitter: string, speed: number? }[]
 local TIERS = {
   { name = "basic", belt = "transport-belt", splitter = "splitter" },
   { name = "fast", belt = "fast-transport-belt", splitter = "fast-splitter" },
   { name = "express", belt = "express-transport-belt", splitter = "express-splitter" },
 }
+-- The turbo tier exists even without Space Age, so a save with turbo balancers keeps their hidden
+-- networks (and the items on them) when Space Age is removed: the game would otherwise delete
+-- every entity of a removed prototype with its items. Without the turbo belt it copies the
+-- express entities at TURBO_SPEED, and control.lua downgrades the turbo blocks to express
+-- (scripts/lifecycle.lua).
+local TURBO_SPEED = 0.125 -- the Space Age turbo belt (60 items/s)
 ---@diagnostic disable-next-line: unnecessary-if
-if mods["space-age"] then
+if data.raw["transport-belt"]["turbo-transport-belt"] then
   TIERS[#TIERS + 1] = { name = "turbo", belt = "turbo-transport-belt", splitter = "turbo-splitter" }
+else
+  TIERS[#TIERS + 1] = { name = "turbo", belt = "express-transport-belt", splitter = "express-splitter", speed = TURBO_SPEED }
 end
 
 -- `hidden` is a PrototypeBase property in 2.1, not an entity flag.
@@ -78,7 +87,7 @@ end
 
 local protos = {}
 for _, tier in ipairs(TIERS) do
-  local speed = raw("transport-belt", tier.belt).speed
+  local speed = tier.speed or raw("transport-belt", tier.belt).speed
 
   local sp = hide(table.deepcopy(raw("splitter", tier.splitter)), "mb-hidden-splitter-" .. tier.name)
   sp.speed = speed

@@ -1,5 +1,5 @@
 -- The visible balancer blocks, one per belt tier: entity, item and recipe `mb-balancer-<tier>`.
--- Tiers: basic, fast, express, and turbo with Space Age.
+-- Tiers: basic, fast, express, and turbo (hidden, without a recipe, when Space Age is absent).
 --
 -- The block is a `simple-entity-with-owner`, not a belt-connectable entity, with the collision
 -- layers item, player and is_object only (docs/feasibility.md F1 "Chosen design"): its tile can
@@ -14,14 +14,21 @@
 -- `next_upgrade` chains the tiers for the upgrade planner.
 -- Required from data.lua.
 
+---@type { name: string, belt: string, splitter: string, orphan: boolean? }[]
 local TIERS = {
   { name = "basic", belt = "transport-belt", splitter = "splitter" },
   { name = "fast", belt = "fast-transport-belt", splitter = "fast-splitter" },
   { name = "express", belt = "express-transport-belt", splitter = "express-splitter" },
 }
+-- Turbo needs Space Age. Without it the turbo block still exists, hidden and without a recipe
+-- (express graphics), so a save with turbo balancers loads after Space Age is removed: the game
+-- deletes every entity of a removed prototype, and control.lua downgrades these blocks to express
+-- instead, items kept (scripts/lifecycle.lua).
 ---@diagnostic disable-next-line: unnecessary-if
-if mods["space-age"] then
+if data.raw["transport-belt"]["turbo-transport-belt"] then
   TIERS[#TIERS + 1] = { name = "turbo", belt = "turbo-transport-belt", splitter = "turbo-splitter" }
+else
+  TIERS[#TIERS + 1] = { name = "turbo", belt = "express-transport-belt", splitter = "express-splitter", orphan = true }
 end
 
 -- The splitter housing is 2.5 tiles wide at its own scale; this fits it into one tile.
@@ -94,45 +101,7 @@ local function unlocking_effects(recipe)
 end
 
 local protos = {}
-for i, tier in ipairs(TIERS) do
-  local name = "mb-balancer-" .. tier.name
-  local splitter = raw("splitter", tier.splitter)
-  local splitter_item = raw("item", tier.splitter)
-  local next_tier = TIERS[i + 1]
-  local icons = icons_of(splitter_item)
-
-  protos[#protos + 1] = {
-    type = "simple-entity-with-owner",
-    name = name,
-    icons = icons,
-    flags = { "placeable-neutral", "player-creation" },
-    minable = { mining_time = 0.1, result = name },
-    max_health = splitter.max_health or 170,
-    corpse = splitter.corpse,
-    dying_explosion = splitter.dying_explosion,
-    resistances = table.deepcopy(splitter.resistances),
-    collision_box = { { -0.4, -0.4 }, { 0.4, 0.4 } },
-    selection_box = { { -0.5, -0.5 }, { 0.5, 0.5 } },
-    collision_mask = { layers = { item = true, player = true, is_object = true } },
-    fast_replaceable_group = "mb-balancer",
-    next_upgrade = next_tier and ("mb-balancer-" .. next_tier.name) or nil,
-    render_layer = "object",
-    picture = picture(splitter),
-  }
-
-  protos[#protos + 1] = {
-    type = "item",
-    name = name,
-    icons = icons,
-    subgroup = splitter_item.subgroup or "belt",
-    order = (splitter_item.order or "c") .. "-mb[" .. i .. "]",
-    inventory_move_sound = splitter_item.inventory_move_sound,
-    pick_sound = splitter_item.pick_sound,
-    drop_sound = splitter_item.drop_sound,
-    place_result = name,
-    stack_size = 50,
-  }
-
+local function add_recipe(name, tier)
   local recipe = {
     type = "recipe",
     name = name,
@@ -153,6 +122,58 @@ for i, tier in ipairs(TIERS) do
     -- No technology unlocks the splitter (an overhaul mod): follow the splitter recipe.
     local sr = data.raw.recipe[tier.splitter]
     recipe.enabled = sr == nil or sr.enabled ~= false
+  end
+end
+
+for i, tier in ipairs(TIERS) do
+  local name = "mb-balancer-" .. tier.name
+  local splitter = raw("splitter", tier.splitter)
+  local splitter_item = raw("item", tier.splitter)
+  local next_tier = TIERS[i + 1]
+  if next_tier and next_tier.orphan then
+    next_tier = nil
+  end
+  local icons = icons_of(splitter_item)
+
+  protos[#protos + 1] = {
+    type = "simple-entity-with-owner",
+    name = name,
+    icons = icons,
+    flags = { "placeable-neutral", "player-creation" },
+    minable = { mining_time = 0.1, result = name },
+    max_health = splitter.max_health or 170,
+    corpse = splitter.corpse,
+    dying_explosion = splitter.dying_explosion,
+    resistances = table.deepcopy(splitter.resistances),
+    collision_box = { { -0.4, -0.4 }, { 0.4, 0.4 } },
+    selection_box = { { -0.5, -0.5 }, { 0.5, 0.5 } },
+    collision_mask = { layers = { item = true, player = true, is_object = true } },
+    fast_replaceable_group = "mb-balancer",
+    next_upgrade = next_tier and ("mb-balancer-" .. next_tier.name) or nil,
+    render_layer = "object",
+    picture = picture(splitter),
+    hidden = tier.orphan or nil,
+    hidden_in_factoriopedia = tier.orphan or nil,
+  }
+
+  protos[#protos + 1] = {
+    type = "item",
+    name = name,
+    icons = icons,
+    subgroup = splitter_item.subgroup or "belt",
+    order = (splitter_item.order or "c") .. "-mb[" .. i .. "]",
+    inventory_move_sound = splitter_item.inventory_move_sound,
+    pick_sound = splitter_item.pick_sound,
+    drop_sound = splitter_item.drop_sound,
+    place_result = name,
+    stack_size = 50,
+    hidden = tier.orphan or nil,
+    hidden_in_factoriopedia = tier.orphan or nil,
+  }
+
+  -- recipe and technology unlock (none for the hidden turbo block without Space Age)
+  if not tier.orphan then
+    add_recipe(name, tier)
   end
 end
 

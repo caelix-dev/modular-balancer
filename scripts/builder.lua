@@ -524,14 +524,13 @@ function builder.stash(placed, inv)
   return true
 end
 
--- Destroys `placed` and spills every item it held (merged into whole stacks first, item data and
--- spoilage kept) on the ground around `position` of `surf`, marked to be looted. For a balancer
--- removed with items inside, so nothing is deleted. Returns the number of items spilled.
+-- Destroys `placed` and returns every item it held in a new script inventory, merged into whole
+-- stacks (item data and spoilage kept), and the number of items. The caller empties and destroys
+-- the inventory (a balancer removed with items inside: scripts/balancer.lua gives them to whoever
+-- removed it, or spills them).
 ---@param placed table
----@param surf LuaSurface
----@param position MapPosition
----@return integer
-function builder.spill(placed, surf, position)
+---@return LuaInventory, integer
+function builder.take(placed)
   local sources = stacks_of(placed)
   local inv = game.create_inventory(math.max(1, #sources))
   local n = 0
@@ -539,12 +538,26 @@ function builder.spill(placed, surf, position)
     local k = inv.insert(st)
     n = n + st.count
     if k < st.count then
-      -- cannot happen with one slot per source stack; spill the rest directly, never drop it
+      -- cannot happen with one slot per source stack; grow the inventory, never drop it
+      inv.resize(#inv + 1)
       local rest = { name = st.name, count = st.count - k, quality = st.quality.name } --[[@as ItemStackIdentification]]
-      surf.spill_item_stack({ position = position, stack = rest, enable_looted = true, allow_belts = false })
+      inv.insert(rest)
     end
   end
   inv.sort_and_merge()
+  builder.destroy(placed)
+  return inv, n
+end
+
+-- Destroys `placed` and spills every item it held (merged into whole stacks first, item data and
+-- spoilage kept) on the ground around `position` of `surf`, marked to be looted. Returns the
+-- number of items spilled.
+---@param placed table
+---@param surf LuaSurface
+---@param position MapPosition
+---@return integer
+function builder.spill(placed, surf, position)
+  local inv, n = builder.take(placed)
   for i = 1, #inv do
     local st = inv[i] --[[@as LuaItemStack]]
     if st.valid_for_read then
@@ -552,7 +565,6 @@ function builder.spill(placed, surf, position)
     end
   end
   inv.destroy()
-  builder.destroy(placed)
   return n
 end
 

@@ -1,0 +1,75 @@
+Task 5 in-game suites, Factorio 2.1.23, space-age preset (fdev test modular-balancer --preset space-age). Exactness tests run at express; tier_throughput_turbo at turbo.
+MB-TEST conservation 3:5: 988 inside the network, 988 returned, 2012 outside (of 3000)
+MB-TEST tier basic 2:3: outputs 10.000 10.000 10.000, total 30.000 (2 belts = 30.000)
+MB-TEST tier fast 2:3: outputs 20.000 20.000 20.000, total 60.000 (2 belts = 60.000)
+MB-TEST tier express 2:3: outputs 30.000 30.000 30.000, total 90.000 (2 belts = 90.000)
+MB-TEST tier turbo 2:3: outputs 40.000 40.000 40.000, total 120.000 (2 belts = 120.000)
+MB-TEST outputs_equal 2:3: outputs 30.000 30.000 30.000 items/s
+MB-TEST inputs_drawn_equally 2:3 (outputs at half speed): inputs 33.817 33.833, outputs 22.500 22.500 22.500 items/s
+MB-TEST throughput 2:3: total 90.000 items/s (min(n, m) belts = 90.000)
+MB-TEST outputs_equal 3:5: outputs 26.950 26.933 26.933 26.967 26.933 items/s
+MB-TEST inputs_drawn_equally 3:5 (outputs at half speed): inputs 39.833 39.833 39.833, outputs 22.500 22.500 22.500 22.500 22.500 items/s
+MB-TEST throughput 3:5: total 134.733 items/s (min(n, m) belts = 135.000)
+MB-TEST outputs_equal 8:3: outputs 45.000 45.000 45.000 items/s
+MB-TEST inputs_drawn_equally 8:3 (outputs at half speed): inputs 8.450 8.433 8.433 8.433 8.450 8.433 8.433 8.433, outputs 22.500 22.500 22.500 items/s
+MB-TEST throughput 8:3: total 135.000 items/s (min(n, m) belts = 135.000)
+MB-TEST outputs_equal 1:5: outputs 9.000 9.000 8.967 8.967 9.000 items/s
+MB-TEST inputs_drawn_equally 1:5 (outputs at half speed): inputs 45.000, outputs 9.000 8.967 9.000 9.000 9.000 items/s
+MB-TEST throughput 1:5: total 44.933 items/s (min(n, m) belts = 45.000)
+MB-TEST outputs_equal 5:1: outputs 45.000 items/s
+MB-TEST inputs_drawn_equally 5:1 (outputs at half speed): inputs 4.500 4.483 4.517 4.500 4.500, outputs 22.500 items/s
+MB-TEST throughput 5:1: total 45.000 items/s (min(n, m) belts = 45.000)
+MB-TEST outputs_equal_unequal_inputs 2:4 (input 1 at a third): outputs 15.000 15.000 15.000 15.000 items/s, total 60.000 (supply 60.000)
+MB-TEST outputs_equal_unequal_inputs 3:5 (input 1 at a third): outputs 20.967 20.933 20.967 20.967 20.967 items/s, total 104.800 (supply 105.000)
+MB-TEST mixed_items_keep_lanes 2:3: iron (left) 15.000 15.000 15.000, copper (right) 15.000 15.000 15.000 items/s
+MB-TEST backpressure_then_release 3:5: after release, outputs 28.500 28.500 28.500 28.500 28.483 items/s, total 142.483
+MB-TEST inserter_share 2:3: belt outputs 22.500 22.500 22.500, port 22.500 items/s
+MB-TEST inserter_share 2:3 throttled: belt outputs 22.500 42.283 22.500, port 2.717 items/s
+MB-TEST inserter_share_loop 2:3: belt outputs 22.500 22.500 22.500, port 22.500 items/s
+MB-TEST inserter_share_loop 2:3 throttled: belt outputs 29.083 29.083 29.067, port 2.717 items/s
+MB-TEST inserter_share_lanes 2:3: iron 11.250 11.250 11.250 11.250, copper 11.250 11.250 11.250 11.250 items/s (last = port)
+MB-TEST inserter_share 3:5: belt outputs 22.500 22.467 22.517 22.500 22.467, port 22.467 items/s
+MB-TEST inserter_share 3:5 throttled: belt outputs 22.517 42.283 22.500 22.500 22.500, port 2.717 items/s
+MB-TEST inserter_share_loop 3:5: belt outputs 22.500 22.500 22.500 22.467 22.500, port 22.500 items/s
+MB-TEST inserter_share_loop 3:5 throttled: belt outputs 26.450 26.450 26.433 26.433 26.450, port 2.733 items/s
+MB-TEST inserter_share_lanes 3:5: iron 11.250 11.250 11.250 11.250 11.250 11.250, copper 11.250 11.250 11.250 11.250 11.250 11.250 items/s (last = port)
+MB-TEST lane_balance 2:3 (left lanes only): lanes (left right per output) 7.500 7.500 7.500 7.500 7.500 7.500 items/s, total 45.000 (expected 45.000)
+MB-TEST lane_balance 8:3 (left lanes only): lanes (left right per output) 22.500 22.500 22.500 22.500 22.500 22.500 items/s, total 135.000 (expected 135.000)
+
+PASSED: tests/game/smoke > modular-balancer smoke > nauvis exists
+PASSED: tests/game/placement > placement > place_then_destroy_leaves_nothing
+PASSED: tests/game/placement > placement > destroy_returns_items
+PASSED: tests/game/placement > placement > regions_do_not_overlap
+PASSED: tests/game/placement > placement > destroy_returns_all_items_of_a_running_network
+PASSED: tests/game/placement > placement > tier_throughput_basic
+PASSED: tests/game/placement > placement > tier_throughput_fast
+PASSED: tests/game/placement > placement > tier_throughput_express
+PASSED: tests/game/placement > placement > tier_throughput_turbo
+PASSED: tests/game/exactness > exactness > outputs_equal_2_3
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_2_3
+PASSED: tests/game/exactness > exactness > throughput_2_3
+PASSED: tests/game/exactness > exactness > outputs_equal_3_5
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_3_5
+PASSED: tests/game/exactness > exactness > throughput_3_5
+PASSED: tests/game/exactness > exactness > outputs_equal_8_3
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_8_3
+PASSED: tests/game/exactness > exactness > throughput_8_3
+PASSED: tests/game/exactness > exactness > outputs_equal_1_5
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_1_5
+PASSED: tests/game/exactness > exactness > throughput_1_5
+PASSED: tests/game/exactness > exactness > outputs_equal_5_1
+PASSED: tests/game/exactness > exactness > inputs_drawn_equally_5_1
+PASSED: tests/game/exactness > exactness > throughput_5_1
+PASSED: tests/game/exactness > exactness > outputs_equal_unequal_inputs_2_4
+PASSED: tests/game/exactness > exactness > outputs_equal_unequal_inputs_3_5
+PASSED: tests/game/exactness > exactness > mixed_items_keep_lanes
+PASSED: tests/game/exactness > exactness > backpressure_then_release_moves_again
+FAILED: tests/game/exactness > exactness > inserter_share_2_3
+PASSED: tests/game/exactness > exactness > inserter_share_loop_2_3
+PASSED: tests/game/exactness > exactness > inserter_share_lanes_2_3
+FAILED: tests/game/exactness > exactness > inserter_share_3_5
+PASSED: tests/game/exactness > exactness > inserter_share_loop_3_5
+PASSED: tests/game/exactness > exactness > inserter_share_lanes_3_5
+PASSED: tests/game/exactness > exactness > lane_balance_2_3
+PASSED: tests/game/exactness > exactness > lane_balance_8_3
+34 passed, 2 failed, 0 skipped (36 total)

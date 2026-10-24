@@ -558,3 +558,55 @@ asserts total throughput as well as lane equality.
   inserters on a belt port, an input port next to non-edge neighbours (only edges were
   measured for it), and modded belt-connectables in front of a port. The facing rule handles
   modded ones through `belt_neighbours` without knowing their type.
+
+## F6: save and load with items inside a placed network (Task 5)
+
+**Result: nothing lost, links and hidden flag kept, flow continues.** FactorioTest cannot reload
+a save, so this runs as a scripted MCP check through the remote interface `mb-test`
+(`tests/game/remote.lua`, loaded only with `factorio-test`). Full log:
+`feasibility/f6-save-load.txt`.
+
+- A 3:5 placed by `builder.place` (138 hidden entities) with 3 finite sources of 1 000 plates.
+- Saved twice, each time with `game.server_save`, `server_stop` and `server_start` from the save:
+  once while flowing (tick 918: 586 items in the network, 1 208 delivered) and once with every
+  output blocked (tick 1818: 243 in the network, 200 on the visible side, 2 557 delivered).
+- After each load: identical counts per part (sources, visible, network, per output), all 8
+  links back to nauvis intact, the surface still hidden for the player force.
+- After the first load, flow continued (2 557 delivered 600 ticks later). After the second, the
+  outputs were released and all 3 000 plates arrived: 0 left in the network, nothing circulating
+  in the loops (Review Focus 1 and 4).
+
+## F7: hidden entity counts and engine cost (Task 5)
+
+**Hidden entities per network** (`builder.place`; every edge is one linked-belt pair, the
+network's inputs and outputs are one half each):
+
+| ratio | splitters | lane splitters | linked belts | total | with balance lanes |
+| --- | --- | --- | --- | --- | --- |
+| 1:1 | 0 | 0 | 2 | 2 | 3 |
+| 2:3 | 8 | 0 | 31 | 39 | 45 |
+| 2:4 | 7 | 0 | 26 | 33 | 39 |
+| 3:5 | 28 | 0 | 110 | 138 | 147 |
+| 3:6 | 27 | 0 | 105 | 132 | 141 |
+| 8:3 | 24 | 0 | 91 | 115 | 139 |
+| 1:5 | 23 | 0 | 88 | 111 | 114 |
+| 5:1 | 23 | 0 | 88 | 111 | 126 |
+| 16:16 | 64 | 0 | 256 | 320 | 368 |
+
+**Engine cost** (MCP `benchmark_run`, vanilla, 5 runs of 1 000 ticks, 100 warm-up ticks dropped,
+median ms per tick; instance `mb-t5b` with `modular-balancer` and `factorio-test`; saves built
+with `remote.call("mb-test", "bench_hidden" | "bench_vanilla", 50)` and run 1 200 ticks before
+saving, so everything is saturated):
+
+| save | content | wholeUpdate | transportLinesUpdate | entityUpdate |
+| --- | --- | --- | --- | --- |
+| empty | the same fresh map, nothing built | 0.187 | 0.071 | 0.002 |
+| hidden | 50 x 8:3 on `mb-hidden` (1 200 splitters, 4 550 linked belts), each with 8 endless sources and 3 sinks on nauvis; 150 belts of output | 0.528 | 0.137 | 0.221 |
+| vanilla | 50 x 24 = 1 200 vanilla express splitters on nauvis, 8 rows of 3 splitters in series per copy, 400 sources and 400 sinks; 400 belts of output | 0.671 | 0.142 | 0.369 |
+
+- Most of `entityUpdate` is the harness, not the network: loaders 0.076 (hidden) vs 0.154
+  (vanilla) and infinity containers 0.087 vs 0.161; the vanilla save has more sources and sinks.
+  Splitters and linked belts are transport lines, so the network's own cost is in
+  `transportLinesUpdate`: +0.066 ms over the empty map for 50 saturated 8:3 networks plus their
+  harness belts, about the same as 1 200 vanilla splitters in series (+0.071).
+- Numbers only. The gate is Plan 3's comparison with Better Belt Balancer.

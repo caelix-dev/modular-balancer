@@ -32,8 +32,11 @@ Build a release zip from `git archive` (committed files only), never from the wo
 ## File map
 
 - `info.json`, `settings.lua`, `data.lua`, `control.lua` - mod entry points. `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
+- `prototypes/hidden.lua` - hidden per-tier entities of the balancing network (`mb-hidden-splitter-<tier>`, `mb-hidden-linked-belt-<tier>`, `mb-hidden-lane-splitter-<tier>`).
+- `scripts/network.lua` - network generator (pure Lua). `scripts/flow.lua` - offline flow model, never required at runtime.
+- `scripts/surface.lua` - the hidden surface `mb-hidden` and its region allocator. `scripts/builder.lua` - places a network on it (`place`, `size`, `destroy`).
 - `tests/unit/` - offline tests and `run.lua` runner.
-- `tests/game/` - FactorioTest suites run by `fdev test`.
+- `tests/game/` - FactorioTest suites run by `fdev test` (`placement.lua`, `exactness.lua`, shared rig `harness.lua`). Loaded only with `factorio-test`: `data.lua` (harness prototypes `mb-test-*`) and `remote.lua` (remote interface `mb-test` for the F6 save/load check and the F7 benchmark saves on an MCP instance).
 - `spikes/` - throwaway research spikes, loaded (prototypes and test suites) only when the hidden startup setting `mb-spikes` is on. It is forced on only when the git-ignored `spikes/local-enable.lua` exists (`return true`, or `return { variant = "<name>" }` for a prototype variant) and the `factorio-test` mod is enabled; otherwise forced off. An MCP `server_start` instance without `factorio-test` therefore has no spike prototypes. `spikes/multi_belt/repro-load-errors.sh` reproduces the prototype-stage errors of F1. `spikes/hidden_surface/save_load.lua` registers the remote interface `mb-spike-s2` (only with `mb-spikes`) for the F2 save/load check on an MCP instance.
 - `docs/feasibility.md` - spike findings (F1..), screenshots in `docs/feasibility/`.
 - `.emmyrc.json` - editor config (FactorioTest globals whitelisted). `fdev lua check` ignores it and generates its own.

@@ -510,7 +510,12 @@ function builder.stash(placed, inv)
   for i = 1, #inv do
     local st = inv[i] --[[@as LuaItemStack]]
     if st.valid_for_read and st.name ~= NEVER then
-      binv.insert(st)
+      local n = binv.insert(st)
+      if n < st.count then
+        -- cannot happen with one slot per source stack; never drop silently
+        st.count = (st.count - n) --[[@as uint32]]
+        buffer.surface.spill_item_stack({ position = buffer.position, stack = st, enable_looted = true, drop_full_stack = true })
+      end
     end
     st.clear()
   end
@@ -531,8 +536,13 @@ function builder.spill(placed, surf, position)
   local inv = game.create_inventory(math.max(1, #sources))
   local n = 0
   for _, st in ipairs(sources) do
+    local k = inv.insert(st)
     n = n + st.count
-    inv.insert(st)
+    if k < st.count then
+      -- cannot happen with one slot per source stack; spill the rest directly, never drop it
+      local rest = { name = st.name, count = st.count - k, quality = st.quality.name } --[[@as ItemStackIdentification]]
+      surf.spill_item_stack({ position = position, stack = rest, enable_looted = true, allow_belts = false })
+    end
   end
   inv.sort_and_merge()
   for i = 1, #inv do

@@ -149,6 +149,153 @@ describe("io", function()
     end)
   end)
 
+  -- Ruling 6 the other way round: a block built on an edge tile is refused like a block on a
+  -- plain belt, and the edge keeps working.
+  test("block_on_edge_tile_refused", function()
+    local o, box = area(10, 10)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3)
+    H.sink(o, 4, 4, D.east, 3)
+    balancer.flush()
+    local edge = H.at(o, 5, 4, "linked-belt")
+    assert(edge and edge.name == "mb-edge-out-" .. H.BELT, "no output edge")
+    local s = game.surfaces.nauvis
+    local nb = s.create_entity({ name = "mb-balancer-" .. H.TIER, position = { o.x + 5, o.y + 4 }, force = "player", raise_built = true })
+    assert(nb == nil or not nb.valid, "the block on the edge was kept")
+    balancer.flush()
+    assert(edge.valid, "the edge was removed")
+    local rec = rec_of(b)
+    assert(rec.n == 1 and rec.m == 1, "network " .. rec.n .. ":" .. rec.m .. ", expected 1:1")
+    local n = 0
+    for _, it in ipairs(s.find_entities_filtered({ area = box, type = "item-entity" })) do
+      if it.stack.name == "mb-balancer-" .. H.TIER then
+        n = n + it.stack.count
+      end
+    end
+    assert(n == 1, n .. " block items on the ground, expected 1")
+  end)
+
+  -- Ruling 6 with a robot: a construction robot builds a belt ghost on a block tile; the belt is
+  -- undone and handed to the robot (nothing on the ground), and the item comes back to storage.
+  test("belt_on_block_returned_to_robot", function()
+    async(3700)
+    local o, box = area(12, 12)
+    H.block(o, 3, 3, H.TIER)
+    local s = game.surfaces.nauvis
+    local port = H.ce(s, { name = "mb-test-roboport", position = { o.x + 8, o.y + 8 } })
+    port.get_inventory(defines.inventory.roboport_robot).insert({ name = "construction-robot", count = 2 })
+    local chest = H.ce(s, { name = "storage-chest", position = { o.x + 10, o.y + 3 } })
+    chest.insert({ name = H.BELT, count = 1 })
+    H.ce(s, { name = "entity-ghost", inner_name = H.BELT, position = { o.x + 3, o.y + 3 }, direction = D.east })
+    ---@return number
+    local function belts_held()
+      local n = 0.0 + chest.get_item_count(H.BELT)
+      for _, r in ipairs(s.find_entities_filtered({ area = box, type = "construction-robot" })) do
+        local cargo = r.get_inventory(defines.inventory.robot_cargo)
+        n = n + (cargo and cargo.get_item_count(H.BELT) or 0)
+      end
+      return n
+    end
+    ---@return number
+    local function ground()
+      local n = 0.0
+      for _, it in ipairs(s.find_entities_filtered({ area = box, type = "item-entity" })) do
+        n = n + it.stack.count
+      end
+      return n
+    end
+    local function wait(k, phase)
+      after_ticks(30, function()
+        if phase == "build" then
+          if s.find_entities_filtered({ area = box, type = "entity-ghost" })[1] then
+            assert(k > 0, "no robot built the ghost in 1 800 ticks")
+            return wait(k - 1, "build")
+          end
+          assert(H.at(o, 3, 3, "transport-belt") == nil, "the robot-built belt stayed on the block")
+          assert(ground() == 0, "the belt was spilled instead of handed to the robot")
+          assert(belts_held() == 1, belts_held() .. " belts held by the chest and robots, expected 1")
+          return wait(60, "home")
+        end
+        if chest.get_item_count(H.BELT) == 1 then
+          done()
+        else
+          assert(k > 0, "the belt never came back to the storage chest")
+          assert(belts_held() == 1, "belt lost on the way back")
+          wait(k - 1, "home")
+        end
+      end)
+    end
+    wait(60, "build")
+  end)
+
+  -- Ruling 7: a wired belt next to a block is not swapped; the block-tile interface serves it, the
+  -- belt keeps its wire, and items flow. A second wired belt on the same block is refused (sides
+  -- are taken north, east, south, west: the north input first, the south output second).
+  test("wired_belt_uses_block_tile_or_is_refused", function()
+    async(700)
+    local o = area(10, 10)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.north, 3)
+    local out = H.sink(o, 4, 4, D.east, 3)
+    local south = H.sink(o, 4, 4, D.south, 3)
+    local comb = H.put(o, 2, 4, "constant-combinator", D.north)
+    local red = defines.wire_connector_id.circuit_red
+    local cin = comb.get_wire_connector(red, true)
+    local last_in = assert(H.at(o, 4, 3, "transport-belt"), "no input belt") --[[@as LuaEntity]]
+    local last_south = south.belts[1] --[[@as LuaEntity]]
+    local function wire(e)
+      return e.get_wire_connector(red, true) --[[@as LuaWireConnector]]
+    end
+    assert(wire(last_in).connect_to(cin), "could not wire the input belt")
+    assert(wire(last_south).connect_to(cin), "could not wire the south belt")
+    balancer.flush()
+    local rec = rec_of(b)
+    assert(rec.n == 1 and rec.m == 1, "network " .. rec.n .. ":" .. rec.m .. ", expected 1:1")
+    local first = assert(rec.inputs[1], "no input")
+    assert(first.kind == "tile", "the wired input is a " .. first.kind .. ", expected the block-tile interface")
+    assert(reasons(rec)["wired-belt"], "the second wired belt was not refused: " .. serpent.line(rec.refused))
+    assert(last_in.valid and wire(last_in).connection_count == 1, "the input belt lost its wire")
+    assert(last_south.valid and last_south.type == "transport-belt" and wire(last_south).connection_count == 1,
+      "the south belt was swapped or lost its wire")
+    after_ticks(600, function()
+      assert(out.chest.get_item_count() > 100, "only " .. out.chest.get_item_count() .. " plates through the interface")
+      done()
+    end)
+  end)
+
+  -- F3 re-check when a tile is swapped back (I3): block Y's inserter port faces north, where block
+  -- X's output edge passes (an edge takes no side loading, so that side is free). X is removed,
+  -- the edge becomes a plain belt again, and on the next tick Y's port turns away from it. Y is
+  -- diagonal to X, so only the swap re-check reaches it.
+  test("port_moves_when_neighbour_edge_unswapped", function()
+    async(30)
+    local o = area(12, 12)
+    local x = H.block(o, 3, 2, H.TIER)
+    local y = H.block(o, 4, 3, H.TIER)
+    H.feed(o, 3, 2, D.west, 3)
+    H.sink(o, 3, 2, D.east, 3)
+    H.feed(o, 4, 3, D.west, 3)
+    H.put(o, 4, 4, "mb-test-inserter", D.north)
+    H.put(o, 4, 5, "mb-test-chest")
+    balancer.flush()
+    local port = assert(rec_of(y).outputs[1], "Y has no output")
+    local pv = assert(port.kind == "inserter" and port.visible, "Y has no inserter port") --[[@as LuaEntity]]
+    assert(pv.direction == D.north, "test setup: Y's port does not face the edge (" .. pv.direction .. ")")
+    x.destroy({ raise_destroy = true })
+    balancer.flush()
+    local t = H.at(o, 4, 2, "transport-belt")
+    assert(t and t.name == H.BELT, "X's edge was not swapped back")
+    after_ticks(3, function()
+      local out = assert(rec_of(y).outputs[1], "Y lost its output")
+      local p = out.visible
+      assert(p and p.valid, "Y lost its port")
+      assert(#p.belt_neighbours.outputs == 0, "Y's port still feeds a belt")
+      assert(p.direction ~= D.north, "Y's port still faces the plain belt")
+      assert(next(storage.balancer.dirty) == nil, "groups still dirty: the re-check does not settle")
+      done()
+    end)
+  end)
+
   -- Inserters both taking from and putting into one block: refused, no inserter port.
   test("inserter_both_refused", function()
     local o = area(10, 10)

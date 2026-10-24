@@ -6,6 +6,7 @@
 local H = require("tests.game.harness")
 local balancer = require("scripts.balancer")
 local groups = require("scripts.groups")
+local builder = require("scripts.builder")
 
 local D = defines.direction
 local WARMUP, WINDOW = 3000, 3600
@@ -416,6 +417,184 @@ describe("play", function()
       near(rates[2], basic, "basic output")
       near(rates[1], RATE - basic, "express output")
       done()
+    end)
+  end)
+
+  -- The deferred path: nothing calls balancer.flush(); the on_nth_tick handler armed by the build
+  -- events refreshes the group on the next tick and disarms itself.
+  test("tick_handler_flushes_without_a_call", function()
+    async(400)
+    local o = area(10, 10)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3)
+    local out = H.sink(o, 4, 4, D.east, 3)
+    assert(next(storage.balancer.dirty) ~= nil, "the build marked nothing")
+    after_ticks(2, function()
+      assert(next(storage.balancer.dirty) == nil, "groups still dirty after the tick")
+      local _, rec = rec_of(b)
+      assert(rec.placed and rec.n == 1 and rec.m == 1, "no 1:1 network after the tick")
+      after_ticks(300, function()
+        assert(out.chest.get_item_count() > 0, "nothing came out")
+        done()
+      end)
+    end)
+  end)
+
+  -- Two running, backed-up 1:1 balancers (dead-end outputs) are joined by a block between them:
+  -- one group, one 2:2 network carrying both old networks' items, nothing lost.
+  test("merge_two_running_balancers_keeps_items", function()
+    async(1500)
+    local o, box = area(12, 12)
+    local a = H.block(o, 3, 4, H.TIER)
+    local b = H.block(o, 5, 4, H.TIER)
+    H.feed(o, 3, 4, D.west, 3, { stock = 500 })
+    H.feed(o, 5, 4, D.east, 3, { stock = 500 })
+    for _, x in ipairs({ 3, 5 }) do
+      for y = 5, 7 do
+        H.put(o, x, y, H.BELT, D.south)
+      end
+    end
+    balancer.flush()
+    local ga, gb = groups.of(a.unit_number), groups.of(b.unit_number)
+    local ra0, rb0 = balancer.get(ga), balancer.get(gb)
+    assert(ga ~= gb and ra0 and ra0.placed and rb0 and rb0.placed, "test setup: two running balancers expected")
+    after_ticks(600, function()
+      assert(H.count_box(box, "iron-plate") == 1000, "before the merge: " .. H.count_box(box, "iron-plate"))
+      local in_a, in_b = H.network_of(ga), H.network_of(gb)
+      assert(in_a > 0 and in_b > 0, "test setup: both networks should hold items (" .. in_a .. ", " .. in_b .. ")")
+      H.block(o, 4, 4, H.TIER)
+      balancer.flush()
+      local g, rec = rec_of(a)
+      assert(groups.of(b.unit_number) == g, "the blocks did not merge")
+      assert(rec.n == 2 and rec.m == 2, "network " .. rec.n .. ":" .. rec.m .. ", expected 2:2")
+      assert(#rec.extra == 0, "old networks left over")
+      local gone = g == ga and gb or ga
+      assert(balancer.get(gone) == nil, "the merged-away balancer still exists")
+      local total = H.count_box(box, "iron-plate")
+      H.report("merge: networks held %d + %d, after the merge %d in the box (network %d)", in_a, in_b, total, H.network_of(g))
+      assert(total == 1000, "after the merge: " .. total .. " of 1000")
+      after_ticks(600, function()
+        assert(H.count_box(box, "iron-plate") == 1000, "600 ticks after the merge: " .. H.count_box(box, "iron-plate"))
+        done()
+      end)
+    end)
+  end)
+
+  -- A running, backed-up row of three is split by removing its middle block: two balancers, the
+  -- old network's items kept by one of them, nothing lost.
+  test("split_keeps_items", function()
+    async(1500)
+    local o, box = area(12, 12)
+    local a = H.block(o, 3, 4, H.TIER)
+    local mid = H.block(o, 4, 4, H.TIER)
+    local b = H.block(o, 5, 4, H.TIER)
+    H.feed(o, 3, 4, D.west, 3, { stock = 500 })
+    H.feed(o, 5, 4, D.east, 3, { stock = 500 })
+    for _, x in ipairs({ 3, 5 }) do
+      for y = 5, 7 do
+        H.put(o, x, y, H.BELT, D.south)
+      end
+    end
+    balancer.flush()
+    local _, rec = rec_of(a)
+    assert(rec.n == 2 and rec.m == 2, "test setup: network " .. rec.n .. ":" .. rec.m)
+    after_ticks(600, function()
+      local held = H.network_of(groups.of(a.unit_number))
+      assert(held > 0, "test setup: the network holds nothing")
+      assert(H.count_box(box, "iron-plate") == 1000, "before the split: " .. H.count_box(box, "iron-plate"))
+      mid.destroy({ raise_destroy = true })
+      balancer.flush()
+      local ga, ra = rec_of(a)
+      local gb, rb = rec_of(b)
+      assert(ga ~= gb, "the row did not split")
+      assert(ra.n == 1 and ra.m == 1 and rb.n == 1 and rb.m == 1, "networks " .. ra.n .. ":" .. ra.m .. " and " .. rb.n .. ":" .. rb.m)
+      local total = H.count_box(box, "iron-plate")
+      H.report("split: network held %d, after the split %d in the box", held, total)
+      assert(total == 1000, "after the split: " .. total .. " of 1000")
+      after_ticks(600, function()
+        assert(H.count_box(box, "iron-plate") == 1000, "600 ticks after the split: " .. H.count_box(box, "iron-plate"))
+        done()
+      end)
+    end)
+  end)
+
+  -- Rotating an output edge (as a player would; the rotate event only marks the groups near it)
+  -- re-swaps the tile for its new role: the tile ends up as an edge whose role follows its
+  -- direction, or a plain belt when it no longer faces the block. Nothing is lost.
+  test("rotated_edge_reswapped", function()
+    async(700)
+    local o, box = area(10, 10)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3, { stock = 2000 })
+    H.sink(o, 4, 4, D.east, 3)
+    H.sink(o, 4, 4, D.south, 3)
+    balancer.flush()
+    after_ticks(300, function()
+      local edge = H.at(o, 5, 4, "linked-belt")
+      assert(edge and edge.name == "mb-edge-out-" .. H.BELT, "no output edge")
+      assert(edge.rotate(), "the edge did not rotate")
+      balancer.mark_near(edge)
+      balancer.flush()
+      local e = H.at(o, 5, 4, "linked-belt") or H.at(o, 5, 4, "transport-belt")
+      assert(e, "the tile is empty")
+      local _, rec = rec_of(b)
+      H.report("rotated_edge: tile is %s facing %d (%s), network %d:%d", e.name, e.direction,
+        e.type == "linked-belt" and e.linked_belt_type or "-", rec.n, rec.m)
+      if e.direction == D.west then
+        assert(e.name == "mb-edge-in-" .. H.BELT and e.linked_belt_type == "input", "an edge pointing into the block is not an input edge")
+        assert(rec.n == 2 and rec.m == 1, "network " .. rec.n .. ":" .. rec.m .. ", expected 2:1")
+      elseif e.direction == D.east then
+        assert(e.name == "mb-edge-out-" .. H.BELT and e.linked_belt_type == "output", "an edge leaving the block is not an output edge")
+      else
+        assert(e.type == "transport-belt", "a tile alongside the block is still an edge")
+        assert(rec.n == 1 and rec.m == 1, "network " .. rec.n .. ":" .. rec.m .. ", expected 1:1")
+      end
+      assert(H.count_box(box, "iron-plate") == 2000, "after the rotation: " .. H.count_box(box, "iron-plate"))
+      after_ticks(300, function()
+        assert(H.count_box(box, "iron-plate") == 2000, "300 ticks after the rotation: " .. H.count_box(box, "iron-plate"))
+        done()
+      end)
+    end)
+  end)
+
+  -- A rebuild that fails keeps the old network: a second output added while placement fails (test
+  -- hook) is refused with a message, its tile stays a plain belt, and nothing is lost. Once
+  -- placement works again the next refresh builds 1:2.
+  test("failed_rebuild_keeps_old_network", function()
+    async(700)
+    local o, box = area(10, 10)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3, { stock = 2000 })
+    H.sink(o, 4, 4, D.east, 3)
+    balancer.flush()
+    after_ticks(300, function()
+      local id, rec = rec_of(b)
+      local old = rec.placed
+      builder.fail_after = 1
+      local ok, err = pcall(function()
+        H.sink(o, 4, 4, D.south, 3)
+        balancer.flush()
+      end)
+      builder.fail_after = nil
+      assert(ok, tostring(err))
+      local _, after = rec_of(b)
+      assert(after.placed == old and after.n == 1 and after.m == 1, "the old network was not kept: " .. after.n .. ":" .. after.m)
+      local refused = {}
+      for _, r in ipairs(after.refused) do
+        refused[r.reason] = true
+      end
+      assert(refused["rebuild-failed"], "not refused: " .. serpent.line(after.refused))
+      local t = H.at(o, 4, 5, "transport-belt")
+      assert(t and t.name == H.BELT, "the refused output tile is not a plain belt")
+      assert(H.count_box(box, "iron-plate") == 2000, "after the failed rebuild: " .. H.count_box(box, "iron-plate"))
+      balancer.refresh(id)
+      local _, again = rec_of(b)
+      assert(again.m == 2 and again.placed ~= old, "the next refresh did not build 1:2")
+      assert(H.count_box(box, "iron-plate") == 2000, "after the rebuild: " .. H.count_box(box, "iron-plate"))
+      after_ticks(300, function()
+        assert(H.count_box(box, "iron-plate") == 2000, "at the end: " .. H.count_box(box, "iron-plate"))
+        done()
+      end)
     end)
   end)
 end)

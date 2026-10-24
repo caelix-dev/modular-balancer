@@ -113,12 +113,16 @@ function events.register()
     if not entity.valid then
       return
     end
+    local osi, op = event.old_surface_index, event.old_position
+    local ox, oy = math.floor(op.x --[[@as number]]), math.floor(op.y --[[@as number]])
     if groups.tier_of(entity.name) then
       local ids, gone = groups.on_block_moved(entity)
       balancer.mark(ids, gone)
       balancer.mark_block(entity)
+      balancer.mark_block_at(osi, ox, oy)
     elseif relevant(entity) then
       balancer.mark_near(entity)
+      balancer.mark_around(osi, ox, oy, entity.type == "inserter" and belt_io.reach() or 2)
     end
   end, f)
   script.on_event(E.on_player_rotated_entity, function(event)
@@ -136,8 +140,12 @@ function events.register()
   end)
   script.on_event(E.on_object_destroyed, function(event)
     if event.type == defines.target_type.entity then
+      local si, x, y = groups.where(event.useful_id)
       local ids, gone = groups.on_block_destroyed(event.useful_id)
       balancer.mark(ids, gone)
+      if si then
+        balancer.mark_block_at(si, x, y)
+      end
     end
   end)
 end

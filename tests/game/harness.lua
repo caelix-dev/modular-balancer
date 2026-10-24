@@ -562,6 +562,24 @@ function H.count_box(box, item)
   return n
 end
 
+-- Items in the network of group `id` (and in networks merged into it but not carried in yet).
+---@return number
+function H.network_of(id)
+  ---@type mb.Balancer?
+  local rec = storage.balancer and storage.balancer.recs[id] or nil
+  local n = 0.0
+  if rec then
+    local nets = { table.unpack(rec.extra) }
+    nets[#nets + 1] = rec.placed
+    for _, p in ipairs(nets) do
+      for _, it in ipairs(builder.contents(p)) do
+        n = n + it.count
+      end
+    end
+  end
+  return n
+end
+
 -- Removes the blocks in `box` with raise_destroy (so their balancers are retired and their
 -- networks freed), flushes, then clears the box.
 function H.clear_blocks(box)

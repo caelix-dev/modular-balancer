@@ -432,6 +432,19 @@ function groups.block_at(si, x, y)
   return at and at[x .. "," .. y] or nil
 end
 
+-- Where block `unit` is recorded: surface_index, x, y (still known when its entity is gone,
+-- until it is removed from the groups), or nil.
+---@param unit integer|uint64|nil
+---@return integer?, integer?, integer?
+function groups.where(unit)
+  ---@type mb.BlockRecord?
+  local rec = unit and state().blocks[unit] or nil
+  if not rec then
+    return nil
+  end
+  return rec.surface_index, rec.x, rec.y
+end
+
 -- The entity of block `unit`, or nil.
 ---@param unit integer|uint64|nil
 ---@return LuaEntity?

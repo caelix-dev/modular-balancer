@@ -15,13 +15,18 @@
 --   tile      T holds another belt-connectable (an underground belt, a splitter, a lane splitter,
 --             another mod's linked belt, or a transport belt with no edge prototype) that feeds
 --             into the block or takes from it: a linked belt on the block's own tile faces T (the
---             block-tile interface). At most one per block; a second one is refused.
+--             block-tile interface). At most one per block; a second one is refused. An edge
+--             candidate with circuit wires or a control behaviour is served the same way, so the
+--             player's belt and its wires stay untouched (Ruling 7); with the block's tile
+--             already taken it is refused ("wired-belt"), never swapped.
+-- A shared tile links the two networks directly, so it runs at the networks' speed whatever the
+-- tier of the belt on it (the belt itself carries nothing).
 --   inserter  inserters whose pickup position is on the block tile take from it (one output
 --             port per block), those whose drop position is on it put into it (one input port).
 --             The port is a linked belt on the block tile facing a free side (belt_io.block_port).
 --             Both directions on one block are refused, and so is an inserter port on a block
 --             that already has a block-tile interface (one belt-connectable per tile).
--- Loaders next to a block are ignored. Inserter roles follow pickup_position and drop_position;
+-- Loaders next to a block are ignored, and so are inserters of other forces. Inserter roles follow pickup_position and drop_position;
 -- a script that writes those raises no event, so a role can be stale until the next re-check.
 --
 -- Items are never dropped: a swap moves every item of the old entity onto the new one (its own
@@ -163,6 +168,19 @@ local function unswappable_role(e, d)
   return nil
 end
 
+-- True when belt `e` has a circuit wire or a control behaviour that does something (enable /
+-- disable by circuit or logistic condition, read contents). A swap would lose them (Ruling 7).
+---@param e LuaEntity
+local function controlled(e)
+  for _, c in pairs(e.get_wire_connectors(false)) do
+    if c.connection_count > 0 then
+      return true
+    end
+  end
+  local cb = e.get_control_behavior() --[[@as LuaTransportBeltControlBehavior?]]
+  return cb ~= nil and (cb.circuit_enable_disable or cb.connect_to_logistic_network or cb.read_contents) == true
+end
+
 -- Side inputs of a plain belt that leaves a block, not counting the mod's own block-tile linked
 -- belt behind it (an inserter port that will move away once the tile is an edge).
 ---@param e LuaEntity
@@ -269,6 +287,16 @@ function belt_io.scan(group)
               refuse("other-force", tx, ty)
               port.kind = nil
             end
+          elseif not edge_belt and controlled(e) then
+            -- Ruling 7: an edge cannot carry wires or control behaviour, so a wired or
+            -- controlled belt is left untouched and served by the block-tile interface
+            if tile_port then
+              refuse("wired-belt", tx, ty)
+              port.kind = nil
+            else
+              port.kind = "tile"
+              tile_port = port
+            end
           end
         end
         if port.kind and port.kind ~= "tile" then
@@ -280,7 +308,7 @@ function belt_io.scan(group)
     -- inserters reaching the block tile
     local take, put = false, false
     local area = { { b.x - reach, b.y - reach }, { b.x + 1 + reach, b.y + 1 + reach } }
-    for _, ins in ipairs(s.find_entities_filtered({ area = area, type = "inserter" })) do
+    for _, ins in ipairs(s.find_entities_filtered({ area = area, type = "inserter", force = group.force })) do
       local px, py = floor_pos(ins.pickup_position)
       local dx, dy = floor_pos(ins.drop_position)
       take = take or (px == b.x and py == b.y)
@@ -352,7 +380,7 @@ function belt_io.put_back(e, inv, items)
 end
 
 -- Swaps a plain belt for the edge of its belt and `role`, keeping its direction, force,
--- quality and items. Returns the edge, or nil (the belt is left as it was) if the edge cannot
+-- quality, health and items. Returns the edge, or nil (the belt is left as it was) if the edge cannot
 -- be created.
 ---@param belt LuaEntity
 ---@param role string "in" | "out"
@@ -363,6 +391,7 @@ function belt_io.swap(belt, role)
     return nil
   end
   local s, pos, dir, force, quality, belt_name = belt.surface, belt.position, belt.direction, belt.force, belt.quality, belt.name
+  local health = belt.health
   local inv, items = belt_io.lift(belt)
   belt.destroy()
   local edge = s.create_entity({
@@ -372,24 +401,28 @@ function belt_io.swap(belt, role)
   if not edge then
     local back = assert(s.create_entity({ name = belt_name, position = pos, direction = dir, force = force, quality = quality, create_build_effect_smoke = false }),
       "modular-balancer: could not put back " .. belt_name)
+    back.health = health
     belt_io.put_back(back, inv, items)
     return nil
   end
+  edge.health = health
   belt_io.put_back(edge, inv, items)
   return edge
 end
 
--- Swaps an edge back for its plain belt (direction, force, quality and items kept). Returns the
+-- Swaps an edge back for its plain belt (direction, force, quality, health and items kept). Returns the
 -- belt.
 ---@param edge LuaEntity
 ---@return LuaEntity
 function belt_io.unswap(edge)
   local belt = assert(belt_io.edge_belt(edge.name))
   local s, pos, dir, force, quality = edge.surface, edge.position, edge.direction, edge.force, edge.quality
+  local health = edge.health
   local inv, items = belt_io.lift(edge)
   edge.destroy()
   local e = assert(s.create_entity({ name = belt, position = pos, direction = dir, force = force, quality = quality, create_build_effect_smoke = false }),
     "modular-balancer: could not put back " .. belt)
+  e.health = health
   belt_io.put_back(e, inv, items)
   return e
 end
@@ -501,12 +534,13 @@ function belt_io.on_block_tile(entity)
   return false
 end
 
--- A foreign belt-connectable on block tile (x, y) of `s`, or nil.
+-- A belt-connectable on block tile (x, y) of `s` other than the mod's block-tile linked belts
+-- (edges count: a block cannot be built on an edge either), or nil.
 ---@param s LuaSurface
 ---@return LuaEntity?
 function belt_io.foreign_belt_on(s, x, y)
   for _, e in ipairs(s.find_entities_filtered({ area = tile_area(x, y), type = belt_io.BELT_TYPES })) do
-    if not belt_io.is_ours(e.name) then
+    if e.name:sub(1, #HIDDEN_LB) ~= HIDDEN_LB then
       return e
     end
   end

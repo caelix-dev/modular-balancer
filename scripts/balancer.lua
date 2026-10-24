@@ -1,5 +1,5 @@
 -- Live balancing: turns each group of blocks (scripts/groups.lua) into a working balancer. A
--- refresh scans the group's ports (scripts/belt_io.lua), swaps belt tiles for edges and places the
+-- refresh scans the group's ports (scripts/io.lua), swaps belt tiles for edges and places the
 -- block-tile linked belts, builds the N:M network (scripts/network.lua) and places or rebuilds it
 -- with the items carried over (scripts/builder.lua), then links every port to it.
 --
@@ -26,9 +26,13 @@
 --      network linked belt of the other (a tile between two blocks stays a plain belt, F1);
 --   4. cleans the pool: an edge no group claimed is swapped back to its belt (items kept), a
 --      block-tile linked belt no group claimed is removed and its items go into its group's
---      network buffer (or are spilled when there is none).
--- Refusals (belt_io.scan, a failed rebuild) are shown as flying text to the player whose action
--- marked the group (balancer.notify), and kept in the record.
+--      network buffer (or are spilled when there is none);
+--   5. marks the groups around every tile that was swapped, unswapped or had its block-tile linked
+--      belt changed, for the next tick (F3 re-check triggers; e.g. an inserter port facing a tile
+--      that is a plain belt again moves). That flush changes nothing unless something did.
+-- Refusals (io.scan, a failed rebuild) are kept in the record; those not already there at the
+-- last refresh are shown as flying text to the player whose action marked the group
+-- (balancer.notify).
 local groups = require("scripts.groups")
 local network = require("scripts.network")
 local builder = require("scripts.builder")
@@ -102,8 +106,13 @@ end
 -- may share a belt tile with it.
 ---@param entity LuaEntity
 function balancer.mark_block(entity, player_index)
-  local si = entity.surface_index
   local x, y = belt_io.tiles_of(entity)
+  balancer.mark_block_at(entity.surface_index, x, y, player_index)
+end
+
+-- The same for a block that was on tile (x, y) of surface `si` (a block destroyed without an
+-- event, or teleported away).
+function balancer.mark_block_at(si, x, y, player_index)
   local ids = {}
   for _, o in ipairs({ { 2, 0 }, { -2, 0 }, { 0, 2 }, { 0, -2 } }) do
     local unit = groups.block_at(si, x + o[1], y + o[2])
@@ -117,6 +126,11 @@ end
 -- A belt-connectable or an inserter changed (built, removed, rotated, flipped, pasted): marks
 -- the groups it can affect. A belt changes the shape of belts up to two tiles away (curves,
 -- side loading), and an inserter reaches belt_io.reach() tiles.
+-- Marks the groups of the blocks within `r` tiles of tile (x, y) of surface `si`.
+function balancer.mark_around(si, x, y, r, player_index)
+  mark_tiles(si, x - r, y - r, x + r, y + r, player_index)
+end
+
 ---@param entity LuaEntity
 function balancer.mark_near(entity, player_index)
   local r = entity.type == "inserter" and belt_io.reach() or 2
@@ -151,6 +165,15 @@ local function link(a, b)
   end
 end
 
+-- Remembers the tile of `e` (valid), which a swap, an unswap or a port change is about to
+-- change: the ports around it are re-checked on the next tick (F3 re-check triggers).
+local function touch(ctx, e)
+  if e and e.valid then
+    local x, y = belt_io.tiles_of(e)
+    ctx.touched[#ctx.touched + 1] = { si = e.surface_index, x = x, y = y }
+  end
+end
+
 local function claim(ctx, e, gid)
   ctx.claimed[e.unit_number] = true
   ctx.pool[#ctx.pool + 1] = { entity = e, gid = gid }
@@ -176,6 +199,7 @@ local function realize(ctx, port, g, s, refused)
       port.visible = e
       return true
     end
+    touch(ctx, e)
     if belt_io.edge_belt(e.name) then
       e = belt_io.unswap(e) -- rotated edge: back to its belt, then swapped with the right role
     end
@@ -195,7 +219,14 @@ local function realize(ctx, port, g, s, refused)
   else
     dirs = belt_io.SIDES
   end
+  local old = belt_io.block_tile_belt(s, port.bx, port.by)
   local e, leftover = belt_io.block_port(s, port.bx, port.by, name, ltype, dirs, g.force)
+  if e ~= old then
+    touch(ctx, e or old)
+    if not e then
+      ctx.touched[#ctx.touched + 1] = { si = s.index, x = port.bx, y = port.by }
+    end
+  end
   if leftover then
     ctx.leftovers[#ctx.leftovers + 1] = { inv = leftover, gid = gid, surface = s, position = { x = port.bx + 0.5, y = port.by + 0.5 } }
   end
@@ -385,6 +416,17 @@ local function refresh_group(st, gid, ctx, player_index)
     end
   end
 
+  -- only refusals that were not there at the last refresh are shown again
+  local shown = {}
+  for _, r in ipairs(rec.refused) do
+    shown[r.reason .. "@" .. r.position.x .. "," .. r.position.y] = true
+  end
+  local fresh = {}
+  for _, r in ipairs(refused) do
+    if not shown[r.reason .. "@" .. r.position.x .. "," .. r.position.y] then
+      fresh[#fresh + 1] = r
+    end
+  end
   rec.inputs, rec.outputs, rec.refused = inputs, outputs, refused
   local units = {}
   for u in pairs(g.blocks) do
@@ -392,8 +434,8 @@ local function refresh_group(st, gid, ctx, player_index)
   end
   rec.units = units
   ctx.refreshed[#ctx.refreshed + 1] = gid
-  if #refused > 0 then
-    balancer.notify(player_index, refused, g.surface_index)
+  if #fresh > 0 then
+    balancer.notify(player_index, fresh, g.surface_index)
   end
 end
 
@@ -435,6 +477,7 @@ local function cleanup(st, ctx)
   for _, entry in ipairs(ctx.pool) do
     local e = entry.entity
     if e.valid and not ctx.claimed[e.unit_number] then
+      touch(ctx, e)
       if belt_io.edge_belt(e.name) then
         belt_io.unswap(e)
       else
@@ -462,7 +505,7 @@ function balancer.flush()
     ids[#ids + 1] = id
   end
   table.sort(ids)
-  local ctx = { pool = {}, claimed = {}, donors = {}, spills = {}, refreshed = {}, leftovers = {} }
+  local ctx = { pool = {}, claimed = {}, donors = {}, spills = {}, refreshed = {}, leftovers = {}, touched = {} }
   local live = { set = {} } -- array of group ids, and their set
   for _, id in ipairs(ids) do
     if groups.get(id) then
@@ -480,6 +523,13 @@ function balancer.flush()
   end
   link_shared(st, ctx)
   cleanup(st, ctx)
+  -- F3: a tile swapped into an edge or back, or a block-tile linked belt that changed, can
+  -- change the ports next to it (a port facing a tile that is a plain belt again, a belt whose
+  -- shape changed). Their groups are flushed again on the next tick; that flush swaps nothing
+  -- new unless something really changed, so it settles.
+  for _, t in ipairs(ctx.touched) do
+    mark_tiles(t.si, t.x - 1, t.y - 1, t.x + 1, t.y + 1)
+  end
   for _, sp in ipairs(ctx.spills) do
     local a = sp.anchor
     local s = a and game.get_surface(a.surface_index)

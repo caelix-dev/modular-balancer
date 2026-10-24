@@ -267,7 +267,7 @@ function H.total_items(rig)
   return t
 end
 
--- Removes the rig's network and visible entities; returns the items builder.destroy returned.
+-- Removes the rig's network; returns the list builder.destroy returned.
 function H.teardown(rig)
   local items = builder.destroy(rig.placed)
   surface.release(rig.origin)

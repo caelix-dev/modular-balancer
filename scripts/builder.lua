@@ -122,21 +122,38 @@ function builder.place(net, tier, origin, force)
   return placed
 end
 
--- Destroys every entity of `placed` and returns the items that were on them.
+-- Destroys every entity of `placed` and returns the items that were on them, one entry per item
+-- and quality, sorted by name then quality: { {name = "iron-plate", quality = "normal",
+-- count = 10}, ... } (an empty list for an empty network).
 ---@param placed table
----@return table<string, integer> items
+---@return {name: string, quality: string, count: integer}[] items
 function builder.destroy(placed)
+  local by_key = {}
   local items = {}
   for _, e in ipairs(placed.entities) do
     if e.valid then
       for i = 1, e.get_max_transport_line_index() do
         for _, stack in ipairs(e.get_transport_line(i).get_contents()) do
-          items[stack.name] = (items[stack.name] or 0) + stack.count
+          local quality = stack.quality or "normal"
+          local key = stack.name .. "/" .. quality
+          local entry = by_key[key]
+          if not entry then
+            entry = { name = stack.name, quality = quality, count = 0 }
+            by_key[key] = entry
+            items[#items + 1] = entry
+          end
+          entry.count = entry.count + stack.count
         end
       end
       e.destroy()
     end
   end
+  table.sort(items, function(a, b)
+    if a.name ~= b.name then
+      return a.name < b.name
+    end
+    return a.quality < b.quality
+  end)
   placed.entities, placed.inputs, placed.outputs = {}, {}, {}
   return items
 end

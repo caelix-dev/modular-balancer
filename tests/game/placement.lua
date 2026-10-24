@@ -57,32 +57,53 @@ describe("placement", function()
         end
         assert(count_in(s, origin, w, h) == #placed.entities, what .. ": stray entities in the rectangle")
         local items = builder.destroy(placed)
-        assert(next(items) == nil, what .. ": destroy returned items from an empty network: " .. serpent.line(items))
+        assert(#items == 0, what .. ": destroy returned items from an empty network: " .. serpent.line(items))
         assert(count_in(s, origin, w, h) == 0, what .. ": entities left in the rectangle")
         surface.release(origin)
       end
     end
   end)
 
+  -- 10 normal iron plates (and, when the quality "uncommon" exists, as in Space Age, 3 uncommon
+  -- iron plates and 2 normal copper plates) on hidden belts come back per item and quality.
   test("destroy_returns_items", function()
     local net = assert(network.build(3, 5))
     local w, h = builder.size(net)
     local origin = surface.reserve(w, h)
     local placed = builder.place(net, "express", origin)
-    local put = 0
+    local want = { { name = "iron-plate", quality = "normal", count = 10 } }
+    ---@diagnostic disable-next-line: unnecessary-if
+    if prototypes.quality["uncommon"] then
+      want = {
+        { name = "copper-plate", quality = "normal", count = 2 },
+        { name = "iron-plate", quality = "normal", count = 10 },
+        { name = "iron-plate", quality = "uncommon", count = 3 },
+      }
+    end
+    local slots = {}
     for _, e in ipairs(placed.entities) do
       if e.type == "linked-belt" then
         for _, li in ipairs(H.LINES) do
-          if put < 10 and e.get_transport_line(li).insert_at(0.1, { name = "iron-plate", count = 1 }) then
-            put = put + 1
-          end
+          slots[#slots + 1] = e.get_transport_line(li)
         end
       end
     end
-    assert(put == 10, "could only put " .. put .. " plates on hidden belts")
+    local k = 0
+    for _, wnt in ipairs(want) do
+      for _ = 1, wnt.count do
+        k = k + 1
+        assert(slots[k] and slots[k].insert_at(0.1, { name = wnt.name, quality = wnt.quality, count = 1 }),
+          "could not put " .. wnt.name .. " on hidden belt " .. k)
+      end
+    end
     local items = builder.destroy(placed)
     surface.release(origin)
-    assert(items["iron-plate"] == 10 and H.sum(items) == 10, "destroy returned " .. serpent.line(items))
+    assert(#items == #want, "destroy returned " .. serpent.line(items))
+    for i, wnt in ipairs(want) do
+      local got = items[i]
+      assert(got and got.name == wnt.name and got.quality == wnt.quality and got.count == wnt.count,
+        "entry " .. i .. ": destroy returned " .. serpent.line(items) .. ", expected " .. serpent.line(want))
+    end
   end)
 
   test("regions_do_not_overlap", function()
@@ -124,7 +145,10 @@ describe("placement", function()
         for _, e in ipairs(rig.placed.entities) do
           inside = inside + H.items_on(e)
         end
-        local returned = H.sum(H.teardown(rig))
+        local returned = 0
+        for _, it in ipairs(H.teardown(rig)) do
+          returned = returned + it.count
+        end
         local outside = 0
         for i = 1, 3 do
           outside = outside + rig.sources[i][1].get_item_count()

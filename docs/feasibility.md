@@ -844,7 +844,7 @@ Each is exactly half a belt of its tier.
 
 ## F10: lifecycle in the engine (Plan 2 Task 5)
 
-Suite `tests/game/lifecycle.lua` (13 tests, both presets; full runs `feasibility/p2-t5-results-vanilla.txt` 172/172, `p2-t5-results-space-age.txt` 174/174, spikes on); MCP checks in
+Suite `tests/game/lifecycle.lua` (17 tests after fix round 1, both presets; full runs after fix round 1 `feasibility/p2-t5-results-vanilla.txt` 176/176, `p2-t5-results-space-age.txt` 178/178, spikes on); MCP checks in
 `feasibility/p2-t5-mcp-checks.txt`. fdev test is headless and has no player, so the player-only
 events (on_player_setup_blueprint, on_undo_applied, rotate and flip) are driven by calling the
 mod's handlers with the event fields they read, after doing to the world what the game would do.

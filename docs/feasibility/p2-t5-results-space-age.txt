@@ -109,9 +109,13 @@ PASSED: tests/game/lifecycle > lifecycle > upgrade_planner_block_tier
 PASSED: tests/game/lifecycle > lifecycle > upgrade_planner_on_edge_belt
 PASSED: tests/game/lifecycle > lifecycle > mine_edge_returns_belt_and_items
 PASSED: tests/game/lifecycle > lifecycle > edge_built_by_the_game
+PASSED: tests/game/lifecycle > lifecycle > destroyed_group_rebuilt_by_robots_keeps_items
+PASSED: tests/game/lifecycle > lifecycle > leftover_orphan_tier_block_is_replaced
+PASSED: tests/game/lifecycle > lifecycle > platform_sink_gets_items
 PASSED: tests/game/lifecycle > lifecycle > rotate_and_flip_neighbour_belt
 PASSED: tests/game/lifecycle > lifecycle > space_age_removed
 PASSED: tests/game/lifecycle > lifecycle > belt_speed_changed_by_mod
+PASSED: tests/game/lifecycle > lifecycle > hidden_surface_cleared
 PASSED: tests/game/lifecycle > lifecycle > hidden_surface_deleted
 PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_stacked_linked_belts_refused
 PASSED: spikes/multi_belt/test > spike S1: several belts per block > spike_stacked_loaders_refused
@@ -172,4 +176,4 @@ PASSED: spikes/hidden_surface/test > spike S2: hidden surface > belt_port_front_
 PASSED: spikes/hidden_surface/test > spike S2: hidden surface > belt_port_picks_free_side
 PASSED: spikes/hidden_surface/test > spike S2: hidden surface > put_and_take_on_one_proxy_bypass_the_network
 PASSED: spikes/hidden_surface/test > spike S2: hidden surface > lane_mode_balances_lanes
-174 passed, 0 failed, 0 skipped (174 total)
+178 passed, 0 failed, 0 skipped (178 total)

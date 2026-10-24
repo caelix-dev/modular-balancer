@@ -903,6 +903,31 @@ tick carries the turbo network's items into a new express network, total 1 000.
 after a load with `mb-test-speed` added (express 0.1015625 everywhere, items kept). A
 configuration change refreshes every group without rebuilding an unchanged one.
 
+**Fix round 1 (review of Task 5).**
+- *Pending work rule (I1).* The flush handler is armed whenever `balancer.pending` is true (dirty
+  groups or loose edges) and `on_load` re-arms from the same rule. MCP: a lone loose edge saved in
+  its build tick is swapped back on the first tick after loading (`p2-t5-mcp-checks.txt` 5).
+- *Spills never land on the group's tiles (I2).* A destroyed group's network (and any sink
+  overflow, and the hidden-surface drop) is spilled stack by stack on the nearest free tile
+  outside every tile the group occupied, marked for deconstruction by the group's force.
+  `destroyed_group_rebuilt_by_robots_keeps_items`: two backed-up blocks `die()` with ghosts on
+  death; 26 plates spilled, none on a block tile, all marked; robots rebuilt both blocks from
+  their death ghosts and carried all 26 into the storage chest; 600 of 600 (robot cargo bonus 10 in
+  the test; with cargo 1 the pick-up of one 11-plate stack took over 4 000 ticks). The undo test
+  now revives the block without an `overflow` inventory and loses nothing.
+- *Space platform sink:* a platform's hub gets the items (`platform_sink_gets_items`, Space Age).
+- *Leftover orphan blocks:* without Space Age, a turbo block or ghost placed later becomes an
+  express block or ghost at once.
+- *Undo of an upgrade:* `upgraded-entity` on an edge's tile swaps the edge back and orders the
+  original belt. The belt ghost that replaces an edge ghost is created for the player who placed
+  it (so it should join that player's undo item; not verifiable headless).
+- *Surface clear:* `hidden_surface_cleared` (LuaSurface::clear): spilled first, placed again,
+  items kept, runs.
+- *Blueprint sources:* event.record (or a book record's selected record), event.stack (or a
+  book's active blueprint), blueprint_to_setup and the cursor (or its book's active blueprint) are
+  all cleaned; `set_blueprint_entities(entities, false)` keeps positions. A real Ctrl+C / book /
+  library session is still not run (no player headless).
+
 **Save mid-rebuild.** A save made in the tick the blocks and belts were built (groups dirty, no
 network yet) builds the balancer on the first tick after loading (on_load re-arms the flush),
 items kept (64 of 64).

@@ -48,3 +48,13 @@ server_stop
    portal_mods = factorio-test (3.1.2, enabled): mb-dev false, mb-spikes false, no mb-test-chest
    prototype, no "mb-test" remote interface; the mod loads (mb-balancer-turbo exists).
 server_stop
+
+5. loose edge across a save (fix round 1, I1; instance mb2-t5f, vanilla, dev_mods = modular-balancer)
+   One exec_lua call, tick 18: a lone mb-edge-in-express-transport-belt created with raise_built far
+   from any block (no group is marked dirty; only storage.balancer.loose holds it), 1 plate on it;
+   game.server_save("t5-loose") in the same call.
+   server_stop; server_start save = E:\factorio-dev\instances\mb2-t5f\saves\t5-loose.zip
+   tick 18: the edge is still there; run_ticks 1, tick 19: an express-transport-belt in its place,
+   1 item on it -> on_load re-armed the flush from the loose list (balancer.pending), as the players
+   already in the game would have it armed.
+server_stop

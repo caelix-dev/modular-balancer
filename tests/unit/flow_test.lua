@@ -211,4 +211,32 @@ return {
     assert_all(shares, 0.5, "shares")
     assert(near(flow.max_throughput(net, { 1 }, { 1, 2 }), 1), "max throughput through lane splitter")
   end,
+  lane_model_keeps_lanes_through_a_splitter = function()
+    -- Only the left lane fed: a splitter keeps lanes, so each output gets 0.25 on its left.
+    local lanes = flow.solve_lanes(one_splitter_1_2(), { 0.5 }, { 0 }, 1)
+    for j = 1, 2 do
+      local o = assert(lanes.out[j], "missing output")
+      assert(near(o.left, 0.25) and near(o.right, 0), "output " .. j)
+    end
+  end,
+
+  lane_model_caps_each_lane_at_half_a_belt = function()
+    -- Merge 2:1 with only left lanes fed: the output's left lane caps the total at 0.5.
+    local lanes = flow.solve_lanes(merge_2_1(), { 0.5, 0.5 }, { 0, 0 }, 1)
+    local o = assert(lanes.out[1], "missing output")
+    assert(near(o.left, 0.5) and near(o.right, 0), "left lane full, right empty")
+    assert(near(lanes.draw[1], 0.25) and near(lanes.draw[2], 0.25), "drawn equally")
+  end,
+
+  lane_splitter_balances_lanes = function()
+    local net = one_splitter_1_2()
+    net.lane_splitters = { { kind = "lane_splitter", id = 1 } }
+    net.edges[1] = edge(port("in", 1), port("lane_splitter", 1))
+    table.insert(net.edges, edge(port("lane_splitter", 1), port("splitter", 1, 1)))
+    local lanes = flow.solve_lanes(net, { 0.5 }, { 0 }, 1)
+    for j = 1, 2 do
+      local o = assert(lanes.out[j], "missing output")
+      assert(near(o.left, 0.125) and near(o.right, 0.125), "output " .. j)
+    end
+  end,
 }

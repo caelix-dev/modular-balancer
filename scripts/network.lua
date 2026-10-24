@@ -17,19 +17,23 @@
 --   of the inputs. Two in a row are throughput unlimited: the first spreads any inputs
 --   evenly over all wires, and the second, read backwards, collects them into any outputs.
 --   Core outputs that are not network outputs loop back, one to one, into core inputs.
--- - N = M: one core with S = 2^ceil(log2 N), b = 2, S - N loops.
--- - N < M: a front core for N:N (b = 1, S - N loops; none for N = 1) and then an M:M
---   core (b = 2, S - M loops; b = 1 for 1:2^k) whose M - N spare inputs are unconnected.
+-- - N = M: one core with S = 2^ceil(log2 N), b = 2 (b = 1 for 2:2), S - N loops.
+-- - N < M: a front core for N:N (b = 1, S - N loops) and then an M:M core (b = 2,
+--   S - M loops; b = 1 for 1:2^k) whose M - N spare inputs are unconnected.
 --   The front core keeps the input draw equal: it is an exact N:N balancer in both
 --   directions (its loops are one to one), so whatever the M:M core asks from its N live
 --   inputs, the front core draws equally from the network inputs. Without it, 2:3 at half
---   output capacity draws 0.5 and 1.0 from its inputs.
+--   output capacity draws 0.5 and 1.0 from its inputs. It is left out when N is a power
+--   of two: the M:M core's first log2 N stages already balance its N live wires, which sit
+--   on the lowest wires.
 -- - Splitters left with no input or no output are removed, and a splitter left with one
 --   input and one output becomes a plain edge; repeated until nothing changes.
 --
--- With opts.balance_lanes, a lane splitter sits on every input when N <= M and on every
--- output when N > M, min(N, M) in total (docs/feasibility.md F5: either side is exact, so
--- the smaller side). The flow model passes belt totals through them.
+-- With opts.balance_lanes, a lane splitter sits on every input (N of them), so both lanes
+-- carry equal totals before the keep-lanes network. Not on the outputs: there each output's
+-- lane splitter could pass only what its two lanes bring, and with only the left input
+-- lanes fed an N > M network would deliver half (0.5 per output). The lane-aware model
+-- (flow.solve_lanes) checks this.
 local network = {}
 
 network.MAX_SIDE = 16
@@ -217,13 +221,14 @@ local function forward(n, m)
   for i = 1, n do
     wires[i] = { kind = "in", id = i, port = 1 }
   end
-  if n < m and n > 1 then
+  if n < m and ceil_pow2(n) ~= n then
     wires = core(b, wires, n, 1)
   end
   if m > 1 then
-    -- 1:2^k is a plain splitter tree; everything else needs both butterflies (with one,
-    -- loops take capacity from blocked paths and 2:4 cannot reach outputs 1 and 3).
-    wires = core(b, wires, m, (n == 1 and ceil_pow2(m) == m) and 1 or 2)
+    -- 1:2^k is a plain splitter tree and 2:2 is one splitter; everything else needs both
+    -- butterflies (with one, loops take capacity from blocked paths and 2:4 cannot reach
+    -- outputs 1 and 3).
+    wires = core(b, wires, m, ((n == 1 and ceil_pow2(m) == m) or m == 2) and 1 or 2)
   end
   for j = 1, m do
     add_edge(b, wires[j], { kind = "out", id = j, port = 1 })
@@ -245,22 +250,14 @@ local function transpose(net)
 end
 
 local function add_lane_splitters(net)
-  local on_inputs = net.n_in <= net.n_out
   net.lane_splitters = {}
   local count = #net.edges
   for e = 1, count do
     local ed = net.edges[e]
-    local lane
-    if on_inputs and ed.from.kind == "in" then
-      lane = #net.lane_splitters + 1
+    if ed.from.kind == "in" then
+      local lane = #net.lane_splitters + 1
       net.edges[#net.edges + 1] = { from = { kind = "lane_splitter", id = lane, port = 1 }, to = ed.to }
       ed.to = { kind = "lane_splitter", id = lane, port = 1 }
-    elseif not on_inputs and ed.to.kind == "out" then
-      lane = #net.lane_splitters + 1
-      net.edges[#net.edges + 1] = { from = ed.from, to = { kind = "lane_splitter", id = lane, port = 1 } }
-      ed.from = { kind = "lane_splitter", id = lane, port = 1 }
-    end
-    if lane then
       net.lane_splitters[lane] = { kind = "lane_splitter", id = lane }
     end
   end

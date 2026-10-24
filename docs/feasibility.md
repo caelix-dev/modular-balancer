@@ -483,17 +483,19 @@ The vanilla `lane-splitter` exists in base 2.1.23 but runs at yellow speed (0.03
 the tier speed (`mb-spike-lane-splitter`), and the product needs one hidden lane splitter
 prototype per tier.
 
-**Recommended design for N:M:** put the lane splitters on whichever side has fewer belts, so
-min(N, M) of them. Either placement is exact:
+**Recommended design for N:M (corrected in Task 4 fix round 1): one lane splitter on every
+input, N of them.** A lane splitter on every input makes the left and right totals equal
+before the keep-lanes network splits them, so both lane networks carry flow.
 
-- A lane splitter on every input makes the left and right totals equal before the keep-lanes
-  network splits them.
-- A lane splitter on every output averages that output's left and right shares, which the
-  keep-lanes network makes equal across outputs.
-
-The choice only changes the entity count. Both placements were measured equal, in the 1:2
-case only; behaviour under partial backpressure was not compared. The plan owner assigns the
-N:M check to Task 5.
+An earlier version of this section recommended the smaller side, min(N, M). That is wrong
+for N > M. Output-side lane splitters split exactly as long as the network is below lane
+capacity, which is the only case the 1:2 measurement above covered. Above it they lose
+throughput: the keep-lanes network carries each lane separately at most 0.5 belt, so an
+output's lane splitter can pass only what that output's lanes bring. With only the left input
+lanes fed, 8:3 delivers 3 x 0.5 = 1.5 belts instead of 3.0, and 2:1 delivers 0.5 instead of
+1.0. The lane-aware flow model (`flow.solve_lanes` in `scripts/flow.lua`, test
+`balance_lanes_keeps_full_throughput_with_one_lane_fed`) shows this. Task 5's lane test
+asserts total throughput as well as lane equality.
 
 ### Concerns for Plan 2
 

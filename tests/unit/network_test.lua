@@ -321,6 +321,8 @@ return {
     all_checks(8, 1)
     local one = build(1, 1)
     assert(#one.splitters == 0 and #one.edges == 1, "1:1 is a single edge")
+    assert(#build(2, 2).splitters == 1, "2:2 is one splitter")
+    assert(#build(1, 2).splitters == 1 and #build(2, 1).splitters == 1, "1:2 and 2:1 are one splitter")
   end,
 
   loops_drain_after_backpressure = function()
@@ -340,6 +342,39 @@ return {
       for j = 1, net.n_out do
         assert(near(after[j], fresh[j]), string.format("%d:%d output %d changed after release", r[1], r[2], j))
         assert(near(after[j], math.min(r[1], r[2]) / r[2]), "exact after release")
+      end
+    end
+  end,
+
+  -- From the loops-full state (every supply 1, every demand 0: the greatest fixed point)
+  -- the network's input and output flows equal those from the default empty start.
+  loops_full_start_gives_the_same_flows = function()
+    for _, r in ipairs(balance_ratios()) do
+      local n, m = r[1], r[2]
+      local net = build(n, m)
+      local full = { s = {}, d = {} }
+      for e = 1, #net.edges do
+        full.s[e], full.d[e] = 1, 0
+      end
+      local ones = {}
+      for i = 1, n do
+        ones[i] = 1
+      end
+      for _, cap in ipairs({ 1, 0.5 }) do
+        local caps = {}
+        for j = 1, m do
+          caps[j] = cap
+        end
+        local a = flow.solve(net, ones, caps)
+        local b = flow.solve(net, ones, caps, full)
+        for i = 1, n do
+          local x, y = a.f[a.in_edge[i]], b.f[b.in_edge[i]]
+          assert(near(x, y), string.format("%d:%d cap %g input %d: %.15g vs %.15g", n, m, cap, i, x, y))
+        end
+        for j = 1, m do
+          local x, y = a.f[a.out_edge[j]], b.f[b.out_edge[j]]
+          assert(near(x, y), string.format("%d:%d cap %g output %d: %.15g vs %.15g", n, m, cap, j, x, y))
+        end
       end
     end
   end,
@@ -372,26 +407,63 @@ return {
       local n, m = r[1], r[2]
       local plain = build(n, m)
       local net = build(n, m, { balance_lanes = true })
-      assert(plain.lane_splitters == nil or #plain.lane_splitters == 0, "no lane splitters without opts")
-      assert(
-        #net.lane_splitters == math.min(n, m),
-        string.format("%d:%d has %d lane splitters", n, m, #net.lane_splitters)
-      )
+      assert(plain.lane_splitters == nil, "no lane splitters without opts")
+      assert(#net.lane_splitters == n, string.format("%d:%d has %d lane splitters", n, m, #net.lane_splitters))
       assert(#net.splitters == #plain.splitters, "same splitters")
       for _, l in ipairs(net.lane_splitters) do
         assert(l.kind == "lane_splitter", "lane splitter kind")
       end
-      -- Each lane splitter sits directly on an input (n <= m) or an output (n > m).
+      -- Each lane splitter sits directly on an input.
       for _, ed in ipairs(net.edges) do
-        if ed.to.kind == "lane_splitter" and n <= m then
+        if ed.to.kind == "lane_splitter" then
           assert(ed.from.kind == "in", "lane splitter right after an input")
-        end
-        if ed.from.kind == "lane_splitter" and n > m then
-          assert(ed.to.kind == "out", "lane splitter right before an output")
         end
       end
       check_outputs_equal(net)
       check_inputs_equal(net, 0.5)
+    end
+  end,
+
+  -- Lane-aware model: with only the left lanes fed (0.5 belt each), every output lane gets
+  -- the same and the total is min(N / 2, M). Output-side lane splitters fail this for
+  -- N > M (each output's lanes only bring 0.5).
+  balance_lanes_keeps_full_throughput_with_one_lane_fed = function()
+    for _, r in ipairs(balance_ratios()) do
+      local n, m = r[1], r[2]
+      local net = build(n, m, { balance_lanes = true })
+      local left, right = {}, {}
+      for i = 1, n do
+        left[i], right[i] = 0.5, 0
+      end
+      local lanes = flow.solve_lanes(net, left, right, 1)
+      local per_lane = math.min(n / 2, m) / (2 * m)
+      for j = 1, m do
+        local o = assert(lanes.out[j], "missing output")
+        assert(
+          near(o.left, per_lane) and near(o.right, per_lane),
+          string.format("%d:%d output %d lanes %.15g / %.15g, expected %.15g", n, m, j, o.left, o.right, per_lane)
+        )
+      end
+      for i = 1, n do
+        assert(near(lanes.draw[i], math.min(0.5, m / n)), string.format("%d:%d input %d draw", n, m, i))
+      end
+    end
+  end,
+
+  -- Without balance_lanes the network keeps lanes: one lane in, the same lane out.
+  plain_network_keeps_lanes = function()
+    for _, r in ipairs(balance_ratios()) do
+      local n, m = r[1], r[2]
+      local left, right = {}, {}
+      for i = 1, n do
+        left[i], right[i] = 0.5, 0
+      end
+      local lanes = flow.solve_lanes(build(n, m), left, right, 1)
+      for j = 1, m do
+        local o = assert(lanes.out[j], "missing output")
+        assert(near(o.right, 0), string.format("%d:%d output %d right lane not empty", n, m, j))
+        assert(near(o.left, math.min(n, m) / (2 * m)), string.format("%d:%d output %d left lane", n, m, j))
+      end
     end
   end,
 

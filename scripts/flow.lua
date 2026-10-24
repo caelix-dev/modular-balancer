@@ -10,7 +10,7 @@
 --   what it has and the other input gives the rest.
 -- - An unconnected splitter input supplies nothing. An unconnected splitter output takes
 --   nothing (in the game it is a dead end that fills with a few items and then blocks).
--- - A lane splitter passes belt totals through unchanged (lanes are checked in game).
+-- - A lane splitter passes belt totals through unchanged. flow.solve_lanes models lanes.
 --
 -- Every edge e has a supply s[e] (what its upstream node could push into it if the edge
 -- took everything) and a demand d[e] (what its downstream node could take from it if the
@@ -21,16 +21,28 @@
 -- At a fixed point these flows conserve items at every splitter and reproduce the
 -- water-filling split above (see the conservation checks in tests/unit/flow_test.lua).
 --
--- Loops are solved by Gauss-Seidel fixed-point iteration, sweeping all nodes until no
--- value changes by more than TOLERANCE (1e-13, below the 1e-12 the plan asks for). It
--- raises an error if it does not converge within MAX_SWEEPS.
+-- Offline only: tests/unit uses this module to prove the generator's networks; the mod
+-- does not load it at runtime (Plan 2 runs only scripts/network.lua in game). If it is ever
+-- used in game, call it only from build events and handle its error.
+--
+-- Loops are solved by Gauss-Seidel fixed-point iteration, sweeping all nodes until the
+-- largest change in one sweep is at most TOLERANCE (1e-13, below the 1e-12 the plan asks
+-- for). That is a step size, not a residual: with geometric convergence at rate r the
+-- remaining error is about TOLERANCE * r / (1 - r), so 1e-13 keeps it far below the tests'
+-- 1e-9 for any rate seen (at most about 1 700 sweeps over all 256 ratios). The update is
+-- monotone (supply up, demand down), so from the default start (no inner supply, full
+-- demand) it converges to the least fixed point and from the loops-full start (supply 1,
+-- demand 0) to the greatest; their network input and output flows agree (tested). It
+-- raises an error after MAX_SWEEPS sweeps.
 --
 -- Where this can differ from the engine (Task 5 measures the engine):
 -- - Steady state only: no transients, belt lengths, item spacing or discrete items. A
 --   real splitter alternates item by item per lane; the model uses the long-run average.
 -- - The model assumes every edge reaches the full belt rate 1.0 when supplied and not
 --   blocked. A linked-belt pair or a splitter that loses compression would cap below 1.0.
--- - Lanes are not modelled; the network treats the belt as one stream.
+-- - flow.solve treats the belt as one stream. flow.solve_lanes splits it into two lanes of
+--   0.5 each, assuming a splitter splits each lane independently (F3) and a lane splitter
+--   water-fills between lanes like a splitter between belts (F5 measured only 1:2).
 -- - If a network had several steady states the model returns the one reached from the
 --   initial values (default: no supply on inner edges, full demand). The tests also start
 --   from the all-blocked state.
@@ -39,7 +51,7 @@
 local flow = {}
 
 flow.TOLERANCE = 1e-13
-flow.MAX_SWEEPS = 1000000
+flow.MAX_SWEEPS = 100000
 
 local function index(net)
   local idx = {
@@ -189,6 +201,63 @@ function flow.input_draw(net, out_capacity, init)
     draw[i] = state.f[state.in_edge[i]]
   end
   return draw, state
+end
+
+-- Lane-aware variant. Every belt edge becomes two lane edges of 0.5 belt each. A splitter
+-- keeps lanes, so it becomes two independent splitters, one per lane. A lane splitter
+-- becomes a splitter between the two lanes (equal split and equal draw, as above). The
+-- lane network is solved by flow.solve in half-belt units (capacity 1 per lane).
+-- left[i], right[i]: supply of input i's lanes in belts (0..0.5). out_capacity: what each
+-- output takes in belts, half per lane. Returns { out = { [j] = {left, right} },
+-- draw = { [i] = belts }, state } in belts.
+---@return { out: { left: number, right: number }[], draw: number[], state: table }
+function flow.solve_lanes(net, left, right, out_capacity)
+  local n_splitters = 0
+  for _, s in ipairs(net.splitters) do
+    n_splitters = math.max(n_splitters, s.id)
+  end
+  local function lane_port(p, lane)
+    if p.kind == "in" or p.kind == "out" then
+      return { kind = p.kind, id = 2 * p.id - 2 + lane, port = 1 }
+    elseif p.kind == "splitter" then
+      return { kind = "splitter", id = 2 * p.id - 2 + lane, port = p.port }
+    end
+    -- Lane splitter: lane 1 on port 1, lane 2 on port 2.
+    return { kind = "splitter", id = 2 * n_splitters + p.id, port = lane }
+  end
+  local lnet = { n_in = 2 * net.n_in, n_out = 2 * net.n_out, splitters = {}, edges = {} }
+  for _, s in ipairs(net.splitters) do
+    lnet.splitters[#lnet.splitters + 1] = { id = 2 * s.id - 1 }
+    lnet.splitters[#lnet.splitters + 1] = { id = 2 * s.id }
+  end
+  for _, l in ipairs(net.lane_splitters or {}) do
+    lnet.splitters[#lnet.splitters + 1] = { id = 2 * n_splitters + l.id }
+  end
+  for _, ed in ipairs(net.edges) do
+    for lane = 1, 2 do
+      lnet.edges[#lnet.edges + 1] = { from = lane_port(ed.from, lane), to = lane_port(ed.to, lane) }
+    end
+  end
+
+  local supply, demand = {}, {}
+  for i = 1, net.n_in do
+    supply[2 * i - 1], supply[2 * i] = 2 * (left[i] or 0), 2 * (right[i] or 0)
+  end
+  for j = 1, 2 * net.n_out do
+    demand[j] = out_capacity
+  end
+  local state = flow.solve(lnet, supply, demand)
+  local result = { out = {}, draw = {}, state = state }
+  for j = 1, net.n_out do
+    result.out[j] = {
+      left = state.f[state.out_edge[2 * j - 1]] / 2,
+      right = state.f[state.out_edge[2 * j]] / 2,
+    }
+  end
+  for i = 1, net.n_in do
+    result.draw[i] = (state.f[state.in_edge[2 * i - 1]] + state.f[state.in_edge[2 * i]]) / 2
+  end
+  return result
 end
 
 -- Max flow (Edmonds-Karp) from the inputs `ins` to the outputs `outs` (index lists).

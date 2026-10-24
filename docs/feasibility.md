@@ -5,8 +5,9 @@ Measured in Factorio 2.1.23 with fdev (`fdev test`, MCP `server_start` / `exec_l
 
 Spike code lives in `spikes/`. It loads only when the hidden startup setting `mb-spikes` is on.
 That setting is forced on when two things hold: the git-ignored file `spikes/local-enable.lua`
-exists (it returns `true`, or `{ variant = "<name>" }` to pick a prototype variant), and the
-`factorio-test` mod is enabled. Otherwise it is forced off. See `settings.lua`.
+exists (it returns `true`, or `{ variant = "<name>" }` to pick a prototype variant), and the dev
+gate `mb-dev` is on (the `factorio-test` mod enabled and the dev marker `tests/dev.lua` present,
+Plan 2 Task 5). Otherwise it is forced off. See `settings.lua`.
 
 Commands:
 
@@ -644,20 +645,22 @@ So whatever output j does not take re-enters the network and is spread over all 
 In steady state each output takes min(its demand, x), and x is the same for every output that
 is not limited ("water filling").
 
-**Measured in game** (express, 3 600 ticks after a 3 000-tick warm-up, items/s; full log in
-`feasibility/t5-results-vanilla.txt`):
+**Measured in game** (express, 3 600 ticks after a 3 000-tick warm-up, items/s; from the run
+at `f90270a`, full log in `feasibility/t5-results-vanilla.txt`; refreshed in Plan 2 Task 2,
+final review M6. The prototype suite `tests/game/recirculation.lua` was removed in Plan 2 Task 2:
+the v2 generator recirculates by itself, see F9):
 
 | case | 2:3 | 3:5 |
 | --- | --- | --- |
-| all outputs free | 30.000 x3 = 90.000 (plain network: 90) | 27.000 / 26.983 / 27.000 x3 = 134.983 (135) |
-| input 1 at a third | 20.000 x3 = 60.000 (supply 60) | 21.000 x5 = 105.000 (105) |
+| all outputs free | 30.000 x3 = 90.000 (plain network: 90) | 27.000 26.967 26.983 27.000 27.000 = 134.950 (135) |
+| input 1 at a third | 20.000 x3 = 60.000 (supply 60) | 21.000 x3, 21.017, 21.000 = 105.017 (105) |
 | output 1 slow (15) | 15.000; others 37.500 37.500 (expected 37.5) | 15.000; others 30.000 x4 (30) |
-| inserter port slow (2.733) | belts 29.083 x3 (expected 29.089) | belts 26.450 x5 (26.453) |
-| only outputs 1, 2 open | 45.000 / 44.983 | 45.000 / 45.000 |
+| inserter port slow (2.733) | belts 29.100 x3 (expected 29.089) | belts 26.450 x5 (26.453) |
+| only outputs 1, 2 open | 45.000 / 45.000; draw 45.000 / 45.000 | 45.000 / 45.000; draw 45.000 / 22.500 / 22.483 |
 
 - No loss or duplication: every F8 test checks at its end that sources + belts + network +
   recirculation entities + sinks + port equal the stock. All passed. All F8 tests pass in
-  vanilla and Space Age (44/44 in Space Age).
+  vanilla and Space Age (whole suite at `f90270a`: 47/47 vanilla, 48/48 Space Age).
 - Throughput with all outputs free is unchanged against the plain network, within 0.02 %.
 - **It takes longer to settle.** From an empty rig, the total reaches steady state after about
   2 400-3 000 ticks, against 600 for the plain network. Per 600-tick window, 2:3 with a slow
@@ -686,6 +689,9 @@ with n + m ≤ 16):
     unequally.
   - The plain network draws equally in that regime (`inputs_drawn_equally_*`).
   - Plan 2 must decide whether this is acceptable or add a fix.
+  - **Resolved in Plan 2 Task 1:** the generator v2 puts an exact N:N front core before the
+    recirculating (N+M):M core, so every input is drawn equally with any subset of outputs open
+    (offline `recirc_f8_case_draws_equally`; in game F9 "equal draw").
 
 **Size cost** (splitters / hidden entities; recirculation = the (n + M):M network + M priority
 splitters + 4 entities per output):
@@ -710,7 +716,247 @@ the largest ratios shrink to n + M ≤ 16 (8:8 fits, 9:8 and 16:16 do not). The 
 (n + M):M. Merging several overflows into fewer loop inputs would make it smaller, but that
 changes when the overflow backs up and needs its own measurement.
 
+## F9: builder v2 in the engine (Plan 2 Task 2)
+
+Logs: `feasibility/p2-t2-results-vanilla.txt` (53/53) and `p2-t2-results-space-age.txt`
+(55/55). Express tier unless noted. All rates are items/s over 3 600 ticks.
+
+**Vanilla output priority behaves like the model's priority node, per lane.** A single
+priority splitter is fed a full belt (iron on the left lane, copper on the right). Port 1 has
+priority and its sink is throttled:
+
+| port 1 sink | port 1 iron / copper | port 2 iron / copper | `flow.solve` port 1 / port 2 |
+| --- | --- | --- | --- |
+| half speed (22.5) | 11.250 / 11.250 | 11.250 / 11.250 | 22.5 / 22.5 |
+| basic (15) | 7.500 / 7.500 | 15.000 / 15.000 | 15 / 30 |
+
+Each lane is prioritized on its own: port 1 takes what it can from each lane, and port 2 gets
+the rest of that lane.
+
+**v2 networks (recirculation on) are exact on every Plan 1 ratio.**
+- 2:3, 3:5, 8:3, 1:5, 5:1 and 1:1 give equal outputs, equal draw and full throughput. For
+  example 3:5: outputs 26.983-27.000; draw 37.500-37.517 against 5 x 22.5 delivered.
+- Unequal inputs, mixed lanes, lane balance and the belt port all hold.
+- `recirc_slow_belt`: 2:3 gives 15.000 / 37.500 / 37.500; 3:5 gives 15.000 / 30.000 x4.
+- Throttled `inserter_share` 2:3: belts 29.083 / 29.100 / 29.083, port 2.717; `flow.solve`
+  gives 29.094 x3.
+
+**Settling.** v2 3:5 with one slow output, total per 600-tick window from an empty rig:
+
+  33.4, 125.8, 134.6, 134.8, 135.2, ...
+
+It is within 1 % of 135 from the third window, about 1 800 ticks. The F8 prototype needed
+2 400-3 000. The suites still warm up for 3 000 ticks.
+
+**Backpressure reaches the full state** (final review M2). In a 3:5 with every output blocked,
+no input draws anything in the last 120 of 2 400 blocked ticks, and the network then holds
+1 528 items. After the release the outputs run at 29.5 each, flushing above the 27 steady
+state, and are equal.
+
+**Dead ends are closed by a filter.**
+- A plain splitter with one unconnected output gets output priority on the dead end, with
+  `splitter_filter` set to `mb-hidden-never`, a hidden item that never exists. So no item
+  enters the dead end.
+- Without the filter (first try, priority on the live side only), a 3:1 network kept 12 items
+  on its dead ends after the shrink drain: they fill whenever the live output backs up, and
+  never leave.
+- With the filter, after the shrink every item came out (0 left in the network).
+
+**A loader only serves a container with the `player-creation` flag.** Measured on nauvis with a
+test loader and steel-chest copies:
+- `loader_container` stays nil when the chest's flags are the hidden set or only
+  `placeable-neutral`;
+- it is set with the vanilla flags, or with `player-creation` plus `not-selectable-in-game`;
+- `hidden`, `minable = nil`, `allow_copy_paste = false`, `inventory_size = 1` and
+  `quality_affects_inventory_size = false` make no difference.
+
+`mb-hidden-buffer` therefore keeps `player-creation`.
+
+**Rebuild and carry-over** (`builder.rebuild`). The new network is placed, the old network's
+items are copied onto its belts (not onto closed dead ends), the rest go into its buffer chest
+(grown with `set_inventory_size_override`), and then the old network is destroyed.
+
+| case | items in the network | after the rebuild | buffer |
+| --- | --- | --- | --- |
+| backed-up 3:5 -> 3:5 | 1 528 | 1 528 | 28 |
+| backed-up 3:5 -> 3:1 (shrink) | 1 528 | 1 528 | 1 460 (15 slots) |
+| backed-up 3:1 -> 3:8 (grow) | 110 | 110 | 0 |
+| 3:5 with 680 plates -> 1:1 | 680 | 680, normal and uncommon kept (Space Age) | 664 |
+
+- After the shrink, with feeding stopped, the single output delivered 1 688 items in 6 000
+  ticks and the network was empty.
+- While the buffer drains, the output still runs at 45.000. The buffer shares input 1 through
+  a merge splitter: input 1 is drawn at up to half a belt until the buffer is empty.
+- A rebuild that fails to place (test hook) leaves the old network untouched.
+
+**Item stacks are carried, not recreated** (Task 2 review I1, fix round 1). `rebuild` reads
+the old network's stacks with `get_detailed_contents` (belts) and slot by slot (buffer), and
+inserts the `LuaItemStack`s themselves.
+- 20 blueprints (one entity each, labelled) and a modular armor with a solar panel in its grid
+  go from a 3:5 to a 1:1 (16 stacks onto the new belts, 5 into the buffer). Every blueprint
+  keeps its label and entity, and the armor keeps its equipment.
+- 340 yumako with spoil fractions 0.2-0.8 (Space Age): total spoilage 169.4000 before and
+  169.4164 after. Items on the new belts keep their own fraction (the freshest is still 0.2000);
+  stacks merged in the buffer average theirs, as in any chest.
+- No item kind was refused by a belt in these tests. A stack refused at a free belt position
+  goes into the buffer as a stack.
+- A rebuild needing more buffer slots than allowed (test: `builder.max_buffer_slots = 1`)
+  returns `nil, "too-many-items"`. The old network's contents and the region count are
+  unchanged.
+- `mb-hidden-never` (cheat-only) is left out of `contents` and dropped by a rebuild.
+- Fix round 2:
+  - **Belt copies are explicit.** Belt copies use `insert_at(pos, stack, 1)`, and a copy that
+    takes more items than the stack has left raises an error (the rebuild then fails cleanly).
+  - **Second rebuild with a full buffer.** A backed-up 3:5 shrunk to 3:1 (1 460 in the buffer)
+    and at once rebuilt as 3:2 still holds exactly 1 528 plates; 1 256 were left in the buffer,
+    after splitting its 100-plate stacks onto the new belts.
+  - **Stacks with per-item state stay whole.** Stacks of several items with per-item state go
+    into the buffer whole (ammo, tools and repair packs, damaged items): copying one item would
+    copy the top item's partial state. The remainder of a split plain stack is a `set_stack`
+    copy with its count lowered, so it keeps every field.
+  - **Measured.** 10 magazines (top at 3 of 10 rounds), 5 repair packs (top at half durability)
+    and 50 plates in the old buffer give 93 rounds, durability 1 350 and 50 plates after the
+    rebuild, with the plates split onto belts.
+
+**Rebuild cost at 64:64** (recorded; `helpers.create_profiler`).
+- An empty `place` of the 4 677-entity network takes 54-57 ms.
+- A rebuild of the same network with every hidden linked-belt position full (14 856 plates, all
+  carried onto the new belts) takes 217-221 ms.
+- So carrying costs about 160 ms, about 11 µs per item (two `get_item_count` calls and one
+  `insert_at` per item), on top of `network.build`. The UPS budget and Task 4 rebuild policy
+  should account for it.
+
+**Atomic placement.** A failure while creating entity 1, 2, 40 or 120 of a 3:5 leaves no
+entity on the hidden surface, and its region is released.
+
+**Tier speeds come from the final prototypes** (final review M3). The hidden prototypes are
+built in `data-final-fixes.lua`. With the test mod `tests/mods/mb-test-speed` (express belt
+26/256 in its data-final-fixes), every hidden express entity had speed 0.1015625 (MCP check,
+`feasibility/p2-t2-speed-mod.txt`).
+
+**Lane splitters per tier** (final review M8). A 1:1 with balance lanes, left lane only:
+
+| tier | left / right lane |
+| --- | --- |
+| basic | 3.750 / 3.750 |
+| fast | 7.500 / 7.500 |
+| express | 11.250 / 11.250 |
+| turbo | 15.000 / 15.000 |
+
+Each is exactly half a belt of its tier.
+
+## F10: lifecycle in the engine (Plan 2 Task 5)
+
+Suite `tests/game/lifecycle.lua` (22 tests after the final fix round, both presets; full runs `feasibility/p2-t5-results-vanilla.txt` 181/181, `p2-t5-results-space-age.txt` 183/183, spikes on); MCP checks in
+`feasibility/p2-t5-mcp-checks.txt`. fdev test is headless and has no player, so the player-only
+events (on_player_setup_blueprint, on_undo_applied, rotate and flip) are driven by calling the
+mod's handlers with the event fields they read, after doing to the world what the game would do.
+
+**Blueprints.** `LuaItemCommon::create_blueprint` over a running balancer records each edge as
+itself (`mb-edge-in-express-transport-belt`, `type = "input"`), as F1 found. After the rewrite
+(`lifecycle.clean_blueprint`, run from on_player_setup_blueprint, which copy and cut raise too)
+a 2:3 holds 2 blocks and 15 plain belts and nothing else of the mod; the block-tile linked belt is
+`not-blueprintable`; a wired input belt (Ruling 7) keeps its wire. Pasted (build_blueprint with
+raise_built) and revived, it is a 2:3 again and its outputs measure 29.967 / 30.000 / 30.000. A blueprint made
+without the rewrite pastes too: its edge ghosts become belt ghosts as they are placed.
+- The harness loaders and chests (`minable = nil`) are not blueprinted; the tests rebuild them.
+
+**Edges cannot follow the upgrade planner.** `order_upgrade` on an edge with another edge
+prototype as target (same `fast_replaceable_group`, `placeable_by` the new belt) returns false
+(prototype, name or `{name, quality}`). Design instead: on on_marked_for_upgrade of a transport
+belt, an edge of the same belt that it feeds or is fed by is swapped back to its belt and that
+belt gets the same order (player kept for the undo queue). A belt marked for upgrade is not a
+port, so the order survives; once robots (here `apply_upgrade`, which raises
+script_raised_destroy/_built) upgrade it, it becomes an edge of the new belt. Items kept.
+
+**Block upgrades.** `order_upgrade` + `apply_upgrade` of a basic block to fast: the fast block is
+already in a fast group when `apply_upgrade` returns (the old block is gone before the new one's
+build event: no overlap refusal, Task 3 note). A fast-replace `create_entity` of an express block
+over it behaves the same. The old network's items reach the new tier's network through the
+retire-by-tile rule (`scripts/balancer.lua`); measured equal before and after.
+
+**Removing a block.** With the network's last block mined by a construction robot, the network's
+items go into the robot's logistic network (a storage chest got all 26; nothing on the ground).
+A player's inventory gets them the same way (not testable headless). A block destroyed with no
+miner still spills them at its tile.
+- Undo of that removal rebuilds the block from its ghost on that tile. The spilled items lie on
+  the tile, and a script `revive` without `overflow` deletes the item-on-ground entities it
+  collides with (measured: 26 of 600 plates gone). The test passes an overflow inventory. A
+  player or robot build moves colliding items rather than deleting them, but this was not measured.
+
+**Edges and rotation.** A connected edge can be rotated (`rotate` returns true and keeps its
+link). Turned round it becomes the other role, turned sideways a plain belt again.
+
+**Deconstruction marks** survive the swaps in both directions (`order_deconstruction` on the new
+entity).
+
+**The hidden surface deleted.** `delete_surface` returns true and the surface is gone on the next
+tick; on_pre_surface_deleted comes first, so the networks' items are spilled at their blocks, and
+the next flush places every network on a new `mb-hidden`, which can get the same surface index
+as the old one.
+
+**Space Age removed (Review Focus 5).** With the turbo block and hidden turbo prototypes defined
+without Space Age, a save with a backed-up turbo 1:1 (1 000 plates in all, 26 in the network)
+loads in vanilla: on_configuration_changed replaces both turbo blocks by express blocks, the next
+tick carries the turbo network's items into a new express network, total 1 000.
+- Edges of turbo belts, like the player's turbo belts, are deleted by the game with their items
+  (as vanilla deletes turbo belts).
+
+**Speed changed by a mod.** Existing hidden entities and edges follow their changed prototypes
+after a load with `mb-test-speed` added (express 0.1015625 everywhere, items kept). A
+configuration change refreshes every group without rebuilding an unchanged one.
+
+**Fix round 1 (review of Task 5).**
+- *Pending work rule (I1).* The flush handler is armed whenever `balancer.pending` is true (dirty
+  groups or loose edges) and `on_load` re-arms from the same rule. MCP: a lone loose edge saved in
+  its build tick is swapped back on the first tick after loading (`p2-t5-mcp-checks.txt` 5).
+- *Spills never land on the group's tiles (I2).* A destroyed group's network (and any sink
+  overflow, and the hidden-surface drop) is spilled stack by stack on the nearest free tile
+  outside every tile the group occupied, marked for deconstruction by the group's force.
+  `destroyed_group_rebuilt_by_robots_keeps_items`: two backed-up blocks `die()` with ghosts on
+  death; 26 plates spilled, none on a block tile, all marked; robots rebuilt both blocks from
+  their death ghosts and carried all 26 into the storage chest; 600 of 600 (robot cargo bonus 10 in
+  the test; with cargo 1 the pick-up of one 11-plate stack took over 4 000 ticks). The undo test
+  now revives the block without an `overflow` inventory and loses nothing.
+- *Space platform sink:* a platform's hub gets the items (`platform_sink_gets_items`, Space Age).
+- *Leftover orphan blocks:* without Space Age, a turbo block or ghost placed later becomes an
+  express block or ghost at once.
+- *Undo of an upgrade:* `upgraded-entity` on an edge's tile swaps the edge back and orders the
+  original belt. The belt ghost that replaces an edge ghost is created for the player who placed
+  it (so it should join that player's undo item; not verifiable headless).
+- *Surface clear:* `hidden_surface_cleared` (LuaSurface::clear): spilled first, placed again,
+  items kept, runs.
+- *Blueprint sources:* event.record (or a book record's selected record), event.stack (or a
+  book's active blueprint), blueprint_to_setup and the cursor (or its book's active blueprint) are
+  all cleaned; `set_blueprint_entities(entities, false)` keeps positions. A real Ctrl+C / book /
+  library session is still not run (no player headless).
+
+**Final fix round (Plan 2 final review).**
+- *No inventory is sized by item count (I1).* `builder.take` fills script inventories of at most
+  `builder.max_take_slots` (65 535, the uint16 limit of `create_inventory`) slots, merging as it
+  inserts and opening a new inventory only when one is full even merged. `carry_into` caps the
+  buffer at `builder.max_buffer_slots` and lets the inserts merge, refusing only when the merged
+  items do not fit. Tests: `take_uses_bounded_inventories` (cap 1, iron and copper: at least two
+  inventories, every plate kept, none on the block tile) and `carry_merges_into_a_capped_buffer`
+  (a 1:2 shrunk to 1:1 with more single belt items to buffer than its 3-slot cap: rebuilt, all
+  600 plates kept).
+- *Belts of another force* next to a block are never swapped or linked; one pointing into or away
+  from a block is refused ("other-force").
+- *Block-tile port items* of a removed group go to the miner or are spilled off the group's tiles,
+  marked for its robots (`block_tile_port_items_spilled_off_the_tile`).
+- *A cloned block-tile linked belt* is loose until a port claims it; else it is removed and its
+  items go to the network of the group on its tile, or are spilled
+  (`cloned_block_tile_belt_cleaned_up`).
+
+**Save mid-rebuild.** A save made in the tick the blocks and belts were built (groups dirty, no
+network yet) builds the balancer on the first tick after loading (on_load re-arms the flush),
+items kept (64 of 64).
+
 ## Concerns for Plan 2 from Task 5 (parked review minors)
+
+Status after Plan 2 Task 2: the first item is fixed (`builder.place` is all or nothing), and
+`Placed` now records origin, size, tier and force. The allocator and cross-force items are still
+open.
 
 - **A failed `builder.place` leaves a half-built network.** If a `create_entity` fails, the
   builder asserts after earlier entities already exist, and they are never destroyed. Review

@@ -107,6 +107,21 @@ local function merge_2_1()
   }
 end
 
+-- One priority splitter fed on input 1: port 1 to output 1, port 2 to output 2.
+local function one_priority()
+  return {
+    n_in = 1,
+    n_out = 2,
+    splitters = {},
+    priority = { { kind = "priority", id = 1 } },
+    edges = {
+      edge(port("in", 1), port("priority", 1, 1)),
+      edge(port("priority", 1, 1), port("out", 1)),
+      edge(port("priority", 1, 2), port("out", 2)),
+    },
+  }
+end
+
 local function assert_all(values, expected, what)
   for i, v in pairs(values) do
     assert(near(v, expected), string.format("%s[%d] = %.15g, expected %.15g", what, i, v, expected))
@@ -238,5 +253,106 @@ return {
       local o = assert(lanes.out[j], "missing output")
       assert(near(o.left, 0.125) and near(o.right, 0.125), "output " .. j)
     end
+  end,
+  priority_port_one_takes_what_it_can = function()
+    local state = flow.solve(one_priority(), { 1 }, { 0.3, 1 })
+    assert(near(state.f[2], 0.3) and near(state.f[3], 0.7), "0.3 / 0.7: " .. state.f[2] .. " / " .. state.f[3])
+    state = flow.solve(one_priority(), { 1 }, { 1, 1 })
+    assert(near(state.f[2], 1) and near(state.f[3], 0), "1.0 / 0")
+  end,
+
+  priority_overflow_blocked_backs_up = function()
+    -- Port 1 takes 0.3 and port 2 is blocked: the input is drawn at 0.3.
+    local state = flow.solve(one_priority(), { 1 }, { 0.3, 0 })
+    assert(near(state.f[1], 0.3) and near(state.f[2], 0.3) and near(state.f[3], 0), "backs up to 0.3")
+  end,
+
+  priority_draws_its_inputs_equally = function()
+    local net = one_priority()
+    net.n_in = 2
+    table.insert(net.edges, edge(port("in", 2), port("priority", 1, 2)))
+    local state = flow.solve(net, { 1, 1 }, { 0.5, 0.3 })
+    assert(near(state.f[1], 0.4) and near(state.f[4], 0.4), "inputs 0.4 each")
+    assert(near(state.f[2], 0.5) and near(state.f[3], 0.3), "0.5 / 0.3")
+  end,
+
+  priority_recirculation_loop_is_exact = function()
+    -- 1:2 splitter whose outputs pass priority splitters; overflow returns to the splitter's
+    -- second input. Output 1 takes 0.2: output 2 gets the remaining 0.8.
+    local net = {
+      n_in = 1,
+      n_out = 2,
+      splitters = { { id = 1 } },
+      priority = { { kind = "priority", id = 1 }, { kind = "priority", id = 2 } },
+      edges = {
+        edge(port("in", 1), port("splitter", 1, 1)),
+        edge(port("splitter", 1, 1), port("priority", 1, 1)),
+        edge(port("splitter", 1, 2), port("priority", 2, 1)),
+        edge(port("priority", 1, 1), port("out", 1)),
+        edge(port("priority", 2, 1), port("out", 2)),
+        edge(port("priority", 1, 2), port("priority", 2, 2)),
+        edge(port("priority", 2, 2), port("splitter", 1, 2)),
+      },
+    }
+    local state = flow.solve(net, { 1 }, { 0.2, 1 })
+    assert(near(state.f[4], 0.2) and near(state.f[5], 0.8), "0.2 / 0.8: " .. state.f[4] .. " / " .. state.f[5])
+    assert(near(flow.max_throughput(net, { 1 }, { 2 }), 1), "max flow through priority")
+    local lanes = flow.solve_lanes(net, { 0.5 }, { 0 }, { 0.2, 1 })
+    local o1, o2 = assert(lanes.out[1], "out 1"), assert(lanes.out[2], "out 2")
+    assert(near(o1.left, 0.1) and near(o2.left, 0.4), "lane-aware priority: " .. o1.left .. " / " .. o2.left)
+  end,
+
+  solve_accepts_an_options_table = function()
+    local a = flow.solve(one_priority(), { 1 }, { 0.3, 1 })
+    local b = flow.solve(one_priority(), { supply = { 1 }, demand = { 0.3, 1 } })
+    for e = 1, 3 do
+      assert(near(a.f[e], b.f[e]), "same flows")
+    end
+  end,
+  -- Engine agreement (docs/feasibility.md F8, measured in game): the F8 prototype, a plain
+  -- (n + M):M network whose output j passes a priority splitter with port 2 fed back into
+  -- input n + j. 3:5 with outputs 1 and 2 open drew 45 / 22.5 / 22.5 items/s (1 / 0.5 / 0.5
+  -- belts); 2:3 with output 1 slow (15 of 45) gave 15 / 37.5 / 37.5.
+  f8_prototype_matches_the_engine = function()
+    local network = require("scripts.network")
+    ---@param n integer
+    ---@param m integer
+    local function f8(n, m)
+      local plain = assert(network.build(n + m, m, { recirc = false }))
+      local net = { n_in = n, n_out = m, splitters = plain.splitters, priority = {}, edges = {} }
+      for j = 1, m do
+        net.priority[j] = { kind = "priority", id = j }
+        table.insert(net.edges, edge(port("priority", j, 1), port("out", j)))
+      end
+      for _, ed in ipairs(plain.edges) do
+        local from, to = ed.from, ed.to
+        if from.kind == "in" and from.id > n then
+          from = port("priority", from.id - n, 2)
+        end
+        if to.kind == "out" then
+          to = port("priority", to.id, 1)
+        end
+        table.insert(net.edges, edge(from, to))
+      end
+      return net
+    end
+    local function full(net)
+      local init = { s = {}, d = {} }
+      for e = 1, #net.edges do
+        init.s[e], init.d[e] = 1, 0
+      end
+      return init
+    end
+    local net = f8(3, 5)
+    for _, init in ipairs({ false, full(net) }) do
+      local state = flow.solve(net, { 1, 1, 1 }, { 1, 1, 0, 0, 0 }, init or nil)
+      local d = { state.f[state.in_edge[1]], state.f[state.in_edge[2]], state.f[state.in_edge[3]] }
+      table.sort(d)
+      assert(near(d[1], 0.5) and near(d[2], 0.5) and near(d[3], 1), "3:5 two open: " .. table.concat(d, " / "))
+    end
+    net = f8(2, 3)
+    local state = flow.solve(net, { 1, 1 }, { 1 / 3, 1, 1 })
+    local o = { state.f[state.out_edge[1]], state.f[state.out_edge[2]], state.f[state.out_edge[3]] }
+    assert(near(o[1], 1 / 3) and near(o[2], 2.5 / 3) and near(o[3], 2.5 / 3), "2:3 slow: " .. table.concat(o, " / "))
   end,
 }

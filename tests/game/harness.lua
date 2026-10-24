@@ -7,8 +7,9 @@
 -- Lane feeds put no loader in the input row; instead a feeder column (chest, loader, one belt)
 -- side-loads onto the second belt from the north (its left lane) and/or from the south (its right lane).
 local network = require("scripts.network")
-local surface = require("scripts.surface")
 local builder = require("scripts.builder")
+local groups = require("scripts.groups")
+local balancer = require("scripts.balancer")
 
 local H = {}
 
@@ -28,8 +29,12 @@ local BELTS = {
 }
 H.BELTS = BELTS
 
-local next_area = 0
-local live = {} -- rigs built and not torn down yet
+-- Harness state lives in storage (final review M5), so a save and reload on an MCP instance
+-- neither reuses an area nor forgets a rig.
+local function state()
+  storage.mb_test_harness = storage.mb_test_harness or { next_area = 0, live = {} }
+  return storage.mb_test_harness
+end
 
 local function ce(s, t)
   t.force = t.force or "player"
@@ -42,9 +47,10 @@ H.ce = ce
 -- A fresh, cleared, lab-tiled area of nauvis (w x h tiles), far from the others. Returns its
 -- top-left tile centre and the cleared box (with an 8-tile margin).
 function H.area(w, h)
-  next_area = next_area + 1
+  local st = state()
+  st.next_area = st.next_area + 1
   local s = game.surfaces.nauvis
-  local o = { x = 1000.5, y = next_area * 200 + 0.5 }
+  local o = { x = 1000.5, y = st.next_area * 200 + 0.5 }
   local box = { { o.x - 8, o.y - 8 }, { o.x + w + 8, o.y + h + 8 } }
   s.request_to_generate_chunks({ o.x + w / 2, o.y + h / 2 }, math.ceil(math.max(w, h) / 64) + 1)
   s.force_generate_chunk_requests()
@@ -63,7 +69,11 @@ function H.area(w, h)
   return o, box
 end
 
+-- Items on a belt-connectable entity's transport lines, or in a container.
 function H.items_on(e)
+  if e.type == "container" then
+    return e.get_item_count()
+  end
   local n = 0
   for i = 1, e.get_max_transport_line_index() do
     n = n + e.get_transport_line(i).get_item_count()
@@ -80,66 +90,37 @@ local function source_chest(s, p, item, stock)
 end
 
 -- Builds a rig.
--- opts.n, opts.m: ratio. opts.balance_lanes. opts.tier (default express).
+-- opts.n, opts.m: ratio. opts.balance_lanes. opts.tier (default express). opts.recirc: passed to
+--   network.build (default on).
 -- opts.feed[i]: "full" (default), "slow" (basic-speed loader, a third of express), "lanes"
 --   (iron left, copper right), "left" (iron on the left lane only).
 -- opts.sink: "full" (default, loader at the tier speed) or "half" (half express speed).
+-- opts.sinks[j]: per-output sink loader tier, overriding opts.sink (e.g. "basic").
 -- opts.port: number of extra outputs (after the first m) that end in a belt port (F3) with
 --   three inserters instead of a belt; default 0.
--- opts.recirc (F8, experimental, not the product design): equal redistribution. With M = m +
---   port outputs, the network is (n + M):M. Every network output j goes to a hidden splitter
---   with output priority: the priority side is the rig's output j (belt or port), the other
---   side loops back into network input n + j. What an output does not take is spread over all
---   outputs again.
--- opts.sinks[j]: per-output sink loader tier, overriding opts.sink (e.g. "basic").
+-- opts.rows: visible rows to make room for (default max(n, m + port)), for a later H.rebuild
+--   to more outputs.
+-- opts.net: a hand-built network to place instead of network.build(n, m + port).
 -- opts.item: item of full / slow feeds (default iron-plate). opts.stock: source stock.
----@param opts {n: integer, m: integer, port: integer?, recirc: boolean?, sinks: string[]?, tier: string?, balance_lanes: boolean?, feed: string[]?, sink: string?, item: string?, stock: integer?}
+---@param opts {net: table?, n: integer, m: integer, port: integer?, recirc: boolean?, sinks: string[]?, tier: string?, balance_lanes: boolean?, feed: string[]?, sink: string?, item: string?, stock: integer?, rows: integer?}
 function H.rig(opts)
   local n, m = opts.n, opts.m
   local ports = opts.port or 0
   local tier = opts.tier or H.TIER
   local belt = BELTS[tier]
-  local M = m + ports
-  local loops = opts.recirc and M or 0
-  local net = assert(network.build(n + loops, M, { balance_lanes = opts.balance_lanes }))
-  local w, h = builder.size(net)
-  local origin = surface.reserve(w, h)
-  local placed = builder.place(net, tier, origin)
-  -- what the rig's output j links to
-  local targets = {}
-  for j = 1, M do
-    targets[j] = placed.outputs[j]
-  end
-  local extra, extra_origin = {}, nil
-  if opts.recirc then
-    local hs = surface.get()
-    local lo = surface.reserve(4, 3 * M)
-    extra_origin = lo
-    local lb = "mb-hidden-linked-belt-" .. tier
-    for j = 1, M do
-      local x, y = lo.x, lo.y + 3 * (j - 1)
-      local head = ce(hs, { name = lb, position = { x + 0.5, y + 0.5 }, direction = D.east, type = "output" })
-      head.connect_linked_belts(placed.outputs[j])
-      local sp = ce(hs, { name = "mb-hidden-splitter-" .. tier, position = { x + 1.5, y + 1 }, direction = D.east })
-      sp.splitter_output_priority = "left" -- north: the rig's output
-      targets[j] = ce(hs, { name = lb, position = { x + 2.5, y + 0.5 }, direction = D.east, type = "input" })
-      local back = ce(hs, { name = lb, position = { x + 2.5, y + 1.5 }, direction = D.east, type = "input" })
-      back.connect_linked_belts(placed.inputs[n + j])
-      for _, e in ipairs({ head, sp, targets[j], back }) do
-        extra[#extra + 1] = e
-      end
-    end
-  end
+  local net = opts.net or assert(network.build(n, m + ports, { balance_lanes = opts.balance_lanes, recirc = opts.recirc }))
+  local placed, err = builder.place(net, tier)
+  assert(placed, "builder.place failed: " .. tostring(err))
   local s = game.surfaces.nauvis
-  local rows = math.max(n, m + ports)
+  local rows = opts.rows or math.max(n, m + ports)
   local o, box = H.area(24, rows * H.ROW)
   local stock = opts.stock or H.SOURCE_STOCK
   local rig = {
-    net = net, origin = origin, placed = placed, extra = extra, extra_origin = extra_origin, o = o, box = box,
-    n = n, m = m, stock = stock,
+    net = net, placed = placed, o = o, box = box, n = n, m = m, tier = tier, opts = opts, stock = stock,
     sources = {}, feeders = {}, sinks = {}, sink_loaders = {}, last_belts = {}, visible = {},
-    port_chests = {}, inserters = {},
+    in_edges = {}, out_edges = {}, port_chests = {}, inserters = {},
   }
+  local live = state().live
   live[#live + 1] = rig
 
   for i = 1, n do
@@ -151,6 +132,7 @@ function H.rig(opts)
     local edge = ce(s, { name = "mb-hidden-linked-belt-" .. tier, position = { o.x + 6, y }, direction = D.east, type = "input" })
     edge.connect_linked_belts(placed.inputs[i])
     rig.visible[#rig.visible + 1] = edge
+    rig.in_edges[i] = edge
     rig.sources[i] = {}
     if feed == "full" or feed == "slow" then
       local item = opts.item or "iron-plate"
@@ -178,43 +160,73 @@ function H.rig(opts)
     end
   end
 
+  for j = 1, m do
+    H.add_output(rig, j)
+  end
   local ox = o.x + 12
-  for j = 1, m + ports do
+  for j = m + 1, m + ports do
+    -- belt port: an output linked belt under a block, facing west (nothing in front of it),
+    -- a dead end; three inserters (north, east, south) take from it into chests
     local y = o.y + H.ROW * (j - 1)
-    if j <= m then
-      local edge = ce(s, { name = "mb-hidden-linked-belt-" .. tier, position = { ox, y }, direction = D.east, type = "output" })
-      edge.connect_linked_belts(targets[j])
-      rig.visible[#rig.visible + 1] = edge
-      for x = 1, 4 do
-        local b = ce(s, { name = belt, position = { ox + x, y }, direction = D.east })
-        rig.visible[#rig.visible + 1] = b
-        rig.last_belts[j] = b
-      end
-      rig.sink_loaders[j] = ce(s, {
-        name = "mb-test-loader-" .. (opts.sinks and opts.sinks[j] or (opts.sink == "half" and "half" or tier)),
-        position = { ox + 5, y }, direction = D.east, type = "input",
+    local k = { x = ox + 2, y = y }
+    ce(s, { name = "mb-test-block", position = k })
+    local port = ce(s, { name = "mb-hidden-linked-belt-" .. tier, position = k, direction = D.west, type = "output" })
+    port.connect_linked_belts(placed.outputs[j])
+    rig.visible[#rig.visible + 1] = port
+    rig.out_edges[j] = port
+    rig.port = port
+    for _, v in ipairs({ { 0, -1, D.south }, { 1, 0, D.west }, { 0, 1, D.north } }) do
+      rig.inserters[#rig.inserters + 1] = ce(s, {
+        name = "mb-test-inserter", position = { k.x + v[1], k.y + v[2] }, direction = v[3],
       })
-      rig.sinks[j] = ce(s, { name = "mb-test-chest", position = { ox + 6, y } })
-    else
-      -- belt port: an output linked belt under a block, facing west (nothing in front of it),
-      -- a dead end; three inserters (north, east, south) take from it into chests
-      local k = { x = ox + 2, y = y }
-      ce(s, { name = "mb-test-block", position = k })
-      local port = ce(s, { name = "mb-hidden-linked-belt-" .. tier, position = k, direction = D.west, type = "output" })
-      port.connect_linked_belts(targets[j])
-      rig.visible[#rig.visible + 1] = port
-      rig.port = port
-      for _, v in ipairs({ { 0, -1, D.south }, { 1, 0, D.west }, { 0, 1, D.north } }) do
-        rig.inserters[#rig.inserters + 1] = ce(s, {
-          name = "mb-test-inserter", position = { k.x + v[1], k.y + v[2] }, direction = v[3],
-        })
-        rig.port_chests[#rig.port_chests + 1] = ce(s, {
-          name = "mb-test-chest", position = { k.x + 2 * v[1], k.y + 2 * v[2] },
-        })
-      end
+      rig.port_chests[#rig.port_chests + 1] = ce(s, {
+        name = "mb-test-chest", position = { k.x + 2 * v[1], k.y + 2 * v[2] },
+      })
     end
   end
   return rig
+end
+
+-- Visible belt output j: placed.outputs[j] => [output linked belt][4 belts][loader ->][sink chest].
+function H.add_output(rig, j)
+  local s = game.surfaces.nauvis
+  local opts, tier = rig.opts, rig.tier
+  local ox, y = rig.o.x + 12, rig.o.y + H.ROW * (j - 1)
+  local edge = ce(s, { name = "mb-hidden-linked-belt-" .. tier, position = { ox, y }, direction = D.east, type = "output" })
+  edge.connect_linked_belts(rig.placed.outputs[j])
+  rig.visible[#rig.visible + 1] = edge
+  rig.out_edges[j] = edge
+  for x = 1, 4 do
+    local b = ce(s, { name = BELTS[tier], position = { ox + x, y }, direction = D.east })
+    rig.visible[#rig.visible + 1] = b
+    rig.last_belts[j] = b
+  end
+  rig.sink_loaders[j] = ce(s, {
+    name = "mb-test-loader-" .. (opts.sinks and opts.sinks[j] or (opts.sink == "half" and "half" or tier)),
+    position = { ox + 5, y }, direction = D.east, type = "input",
+  })
+  rig.sinks[j] = ce(s, { name = "mb-test-chest", position = { ox + 6, y } })
+end
+
+-- Rebuilds the rig's network as n:m (builder.rebuild) and relinks the visible edges. Outputs
+-- beyond the new m stay on nauvis, unlinked, with whatever they hold; new outputs get visible
+-- rows (make room with opts.rows).
+function H.rebuild(rig, m, opts)
+  local net = assert(network.build(rig.n, m, opts))
+  local placed, err = builder.rebuild(rig.placed, net, rig.tier)
+  assert(placed, "builder.rebuild failed: " .. tostring(err))
+  rig.net, rig.placed = net, placed
+  for i, edge in ipairs(rig.in_edges) do
+    edge.connect_linked_belts(placed.inputs[i])
+  end
+  for j = 1, m do
+    if rig.out_edges[j] then
+      rig.out_edges[j].connect_linked_belts(placed.outputs[j])
+    else
+      H.add_output(rig, j)
+    end
+  end
+  rig.m = m
 end
 
 -- Everything that left the network through the belt port: chests, hands and the port belt.
@@ -247,8 +259,18 @@ function H.drawn(rig, i)
   return #rig.sources[i] * rig.stock - left
 end
 
--- Every item the rig holds or delivered: sources, feeders, visible belts, network (and F8
--- recirculation entities), sinks, sink loaders, the port, its inserters' hands and chests.
+-- Items in the rig's hidden network (belts, splitters, loader and buffer chest).
+---@return number
+function H.network_items(rig)
+  local t = 0.0
+  for _, it in ipairs(builder.contents(rig.placed)) do
+    t = t + it.count
+  end
+  return t
+end
+
+-- Every item the rig holds or delivered: sources, feeders, visible belts, network, sinks, sink
+-- loaders, the port, its inserters' hands and chests.
 ---@return number
 function H.total_items(rig)
   local t = 0.0
@@ -257,11 +279,12 @@ function H.total_items(rig)
       t = t + ch.get_item_count()
     end
   end
-  for _, group in ipairs({ rig.feeders, rig.visible, rig.placed.entities, rig.extra, rig.sink_loaders }) do
+  for _, group in ipairs({ rig.feeders, rig.visible, rig.sink_loaders }) do
     for _, e in ipairs(group) do
       t = t + H.items_on(e)
     end
   end
+  t = t + H.network_items(rig)
   for _, ch in ipairs(rig.sinks) do
     t = t + ch.get_item_count()
   end
@@ -271,24 +294,15 @@ function H.total_items(rig)
   return t
 end
 
--- Removes the rig: its network (returning the list builder.destroy returned), the F8
--- recirculation entities, both hidden regions, and everything in its nauvis area. Count what is
--- outside the network before calling it. A second call returns an empty list.
+-- Removes the rig: its network (returning the list builder.destroy returned, which also frees
+-- its region) and everything in its nauvis area. Count what is outside the network before
+-- calling it. A second call returns an empty list.
 function H.teardown(rig)
   if rig.torn then
     return {}
   end
   rig.torn = true
   local items = builder.destroy(rig.placed)
-  surface.release(rig.origin)
-  for _, e in ipairs(rig.extra) do
-    if e.valid then
-      e.destroy()
-    end
-  end
-  if rig.extra_origin then
-    surface.release(rig.extra_origin)
-  end
   for _, e in ipairs(game.surfaces.nauvis.find_entities_filtered({ area = rig.box })) do
     if e.valid and e.type ~= "character" then
       e.destroy()
@@ -300,10 +314,11 @@ end
 -- Tears down every rig not torn down yet (each suite calls it in after_each, so a test's rig
 -- does not keep running through the rest of the suite).
 function H.teardown_all()
-  for _, rig in ipairs(live) do
+  local st = state()
+  for _, rig in ipairs(st.live) do
     H.teardown(rig)
   end
-  live = {}
+  st.live = {}
 end
 
 -- Starts a per-tick lane counter on each output's last belt (test only): every tick, it adds the
@@ -378,6 +393,208 @@ end
 
 function H.report(fmt, ...)
   log("MB-TEST " .. string.format(fmt, ...))
+end
+
+-- Visible balancer blocks (tests/game/groups.lua and the groups save/load check in remote.lua).
+
+-- Builds block `tier` at tile (o.x + dx, o.y + dy) with raise_built, as a player build would
+-- reach the mod's events.
+function H.block(o, dx, dy, tier, force)
+  return ce(game.surfaces.nauvis, {
+    name = "mb-balancer-" .. tier, position = { o.x + dx, o.y + dy }, force = force or "player", raise_built = true,
+  })
+end
+
+-- Recomputes the connected groups of the blocks in `box` from scratch (flood fill over the
+-- 4-neighbours with the same name and force) and asserts that scripts/groups.lua agrees: one
+-- group per part, holding exactly that part, with the right tier, surface and force. Returns the
+-- part sizes, largest first.
+function H.check_groups(box, what)
+  local s = game.surfaces.nauvis
+  local at, list = {}, {}
+  for _, e in ipairs(s.find_entities_filtered({ area = box, type = "simple-entity-with-owner" })) do
+    if groups.tier_of(e.name) then
+      local pos = e.position
+      at[math.floor(pos.x --[[@as number]]) .. "," .. math.floor(pos.y --[[@as number]])] = e
+      list[#list + 1] = e
+    end
+  end
+  local seen, sizes, ids = {}, {}, {}
+  for _, e in ipairs(list) do
+    if not seen[e.unit_number] then
+      local id = groups.of(e.unit_number)
+      assert(id, what .. ": block at " .. serpent.line(e.position) .. " has no group")
+      assert(not ids[id], what .. ": two separate parts share group " .. id)
+      ids[id] = true
+      local g = assert(groups.get(id), what .. ": group " .. id .. " missing")
+      assert(g.tier == groups.tier_of(e.name) and g.surface_index == s.index and g.force.index == e.force.index,
+        what .. ": group " .. id .. " has the wrong tier, surface or force")
+      local queue, n = { e }, 0
+      seen[e.unit_number] = true
+      while #queue > 0 do
+        local b = table.remove(queue)
+        n = n + 1
+        assert(groups.of(b.unit_number) == id, what .. ": block at " .. serpent.line(b.position) .. " is not in group " .. id)
+        local x, y = math.floor(b.position.x), math.floor(b.position.y)
+        for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+          local nb = at[(x + d[1]) .. "," .. (y + d[2])]
+          if nb and not seen[nb.unit_number] and nb.name == e.name and nb.force.index == e.force.index then
+            seen[nb.unit_number] = true
+            queue[#queue + 1] = nb
+          end
+        end
+      end
+      assert(table_size(g.blocks) == n and g.count == n,
+        what .. ": group " .. id .. " has " .. table_size(g.blocks) .. " blocks (count " .. g.count .. "), its part " .. n)
+      assert(g.force_index == g.force.index, what .. ": group " .. id .. " force_index differs from its force")
+      sizes[#sizes + 1] = n
+    end
+  end
+  table.sort(sizes, function(a, b) return a > b end)
+  return sizes
+end
+
+-- Player-side builds for the live balancer suites (tests/game/io.lua, play.lua). Tile offsets
+-- are relative to an area origin `o` (a tile centre); every entity is built with raise_built, as
+-- a player build would reach the mod's events.
+
+local VEC = { [D.north] = { 0, -1 }, [D.east] = { 1, 0 }, [D.south] = { 0, 1 }, [D.west] = { -1, 0 } }
+local OPPOSITE = { [D.north] = D.south, [D.east] = D.west, [D.south] = D.north, [D.west] = D.east }
+H.VEC, H.OPPOSITE = VEC, OPPOSITE
+
+-- Builds `name` at tile (o.x + dx, o.y + dy) with raise_built. `t` adds create_entity fields.
+function H.put(o, dx, dy, name, dir, t)
+  t = t or {}
+  t.name, t.position, t.direction, t.raise_built = name, { o.x + dx, o.y + dy }, dir, true
+  return ce(game.surfaces.nauvis, t)
+end
+
+-- The entity of `type` on tile (o.x + dx, o.y + dy), or nil.
+---@return LuaEntity?
+function H.at(o, dx, dy, type)
+  return game.surfaces.nauvis.find_entities_filtered({
+    area = { { o.x + dx - 0.4, o.y + dy - 0.4 }, { o.x + dx + 0.4, o.y + dy + 0.4 } }, type = type, limit = 1,
+  })[1]
+end
+
+-- An input on side `side` of the block at (bx, by): `len` belts pointing into the block, a
+-- loader and a source chest of `opts.stock` (default H.SOURCE_STOCK) `opts.item` behind them.
+-- opts.belt: belt name (default the tier's), opts.loader: loader tier (default H.TIER).
+function H.feed(o, bx, by, side, len, opts)
+  opts = opts or {}
+  local v, dir = VEC[side], OPPOSITE[side]
+  local r = { belts = {} }
+  for k = 1, len do
+    r.belts[k] = H.put(o, bx + v[1] * k, by + v[2] * k, opts.belt or H.BELT, dir)
+  end
+  r.loader = H.put(o, bx + v[1] * (len + 1), by + v[2] * (len + 1), "mb-test-loader-" .. (opts.loader or H.TIER), dir, { type = "output" })
+  r.chest = H.put(o, bx + v[1] * (len + 2), by + v[2] * (len + 2), "mb-test-chest")
+  r.stock = opts.stock or H.SOURCE_STOCK
+  if r.stock > 0 then
+    r.chest.insert({ name = opts.item or "iron-plate", count = r.stock })
+  end
+  return r
+end
+
+-- An output on side `side` of the block at (bx, by): `len` belts leaving the block, a sink
+-- loader and a sink chest. opts.belt, opts.loader as for H.feed.
+function H.sink(o, bx, by, side, len, opts)
+  opts = opts or {}
+  local v = VEC[side]
+  local r = { belts = {} }
+  for k = 1, len do
+    r.belts[k] = H.put(o, bx + v[1] * k, by + v[2] * k, opts.belt or H.BELT, side)
+  end
+  r.loader = H.put(o, bx + v[1] * (len + 1), by + v[2] * (len + 1), "mb-test-loader-" .. (opts.loader or H.TIER), side, { type = "input" })
+  r.chest = H.put(o, bx + v[1] * (len + 2), by + v[2] * (len + 2), "mb-test-chest")
+  return r
+end
+
+local BELTISH = {
+  ["transport-belt"] = true, ["underground-belt"] = true, splitter = true, ["lane-splitter"] = true,
+  ["linked-belt"] = true, loader = true, ["loader-1x1"] = true,
+}
+
+-- Every `item` (all items when nil) in `box`: containers, belt-connectables and loaders,
+-- inserter hands and items on the ground, plus the networks of the live balancers anchored in
+-- the box (their buffers included).
+---@return number
+function H.count_box(box, item)
+  local s = game.surfaces.nauvis
+  local n = 0.0
+  for _, e in ipairs(s.find_entities_filtered({ area = box })) do
+    if e.valid then
+      if e.type == "container" then
+        n = n + (item and e.get_item_count(item) or e.get_item_count())
+      elseif e.type == "inserter" then
+        local h = e.held_stack
+        if h.valid_for_read and (not item or h.name == item) then
+          n = n + h.count
+        end
+      elseif e.type == "item-entity" then
+        local st = e.stack
+        if not item or st.name == item then
+          n = n + st.count
+        end
+      elseif BELTISH[e.type] then
+        for i = 1, e.get_max_transport_line_index() do
+          local line = e.get_transport_line(i --[[@as defines.transport_line]])
+          n = n + (item and line.get_item_count(item) or line.get_item_count())
+        end
+      end
+    end
+  end
+  local recs = storage.balancer and storage.balancer.recs or {}
+  for _, rec in pairs(recs) do
+    local a = rec.anchor
+    if a and a.position.x >= box[1][1] and a.position.x <= box[2][1] and a.position.y >= box[1][2] and a.position.y <= box[2][2] then
+      local nets = { table.unpack(rec.extra) }
+      nets[#nets + 1] = rec.placed
+      for _, p in ipairs(nets) do
+        for _, it in ipairs(builder.contents(p)) do
+          if not item or it.name == item then
+            n = n + it.count
+          end
+        end
+      end
+    end
+  end
+  return n
+end
+
+-- Items in the network of group `id` (and in networks merged into it but not carried in yet).
+---@return number
+function H.network_of(id)
+  ---@type mb.Balancer?
+  local rec = storage.balancer and storage.balancer.recs[id] or nil
+  local n = 0.0
+  if rec then
+    local nets = { table.unpack(rec.extra) }
+    nets[#nets + 1] = rec.placed
+    for _, p in ipairs(nets) do
+      for _, it in ipairs(builder.contents(p)) do
+        n = n + it.count
+      end
+    end
+  end
+  return n
+end
+
+-- Removes the blocks in `box` with raise_destroy (so their balancers are retired and their
+-- networks freed), flushes, then clears the box.
+function H.clear_blocks(box)
+  local s = game.surfaces.nauvis
+  for _, e in ipairs(s.find_entities_filtered({ area = box, type = "simple-entity-with-owner" })) do
+    if e.valid and groups.tier_of(e.name) then
+      e.destroy({ raise_destroy = true })
+    end
+  end
+  balancer.flush()
+  for _, e in ipairs(s.find_entities_filtered({ area = box })) do
+    if e.valid and e.type ~= "character" then
+      e.destroy()
+    end
+  end
 end
 
 return H

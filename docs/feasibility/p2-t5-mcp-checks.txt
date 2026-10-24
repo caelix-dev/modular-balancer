@@ -1,0 +1,60 @@
+Plan 2 Task 5 MCP checks (save_load_mid_rebuild, space_age_removed, belt_speed_changed_by_mod).
+Factorio 2.1.23. Hand-written transcript of the MCP calls and the exec_lua results (JSON restated),
+not raw tool output. Entities built from exec_lua console code with raise_built = true (as a
+player build reaches the mod's events); no factorio-test, so the mb-dev gate is off on these
+instances. Item totals count iron plates on every belt-connectable, container and item-on-ground
+in the area on nauvis plus every entity on the hidden surface mb-hidden.
+
+1. save_load_mid_rebuild (instance mb2-t5, vanilla, dev_mods = modular-balancer)
+   One exec_lua call, tick 23: an express block, 4 express belts into it (west), 4 out (east), 1 out
+   (south), all with raise_built; 64 plates inserted on the belts; mb-edge count 0 (the groups are
+   only marked dirty, the flush is the next tick); game.server_save("t5-midrebuild") in the same
+   call, so the save holds the dirty marks and no network.
+   server_stop; server_start save = E:\factorio-dev\instances\mb2-t5\saves\t5-midrebuild.zip
+   after the load, tick 23: visible 64, hidden 0, edges 0
+   run_ticks 1, tick 24: edges = in, out, out, all linked to mb-hidden; visible 62 + hidden 2 = 64
+     -> on_load re-armed the flush handler from storage, the first tick built the 1:2
+   run_ticks 300, tick 324: visible 36 + hidden 28 = 64; east output belts 32, south output 4
+
+2. space_age_removed (instance mb2-t5sa)
+   space-age preset, fresh map: two mb-balancer-turbo blocks (0,0) and (0,1); 4 express belts into
+   (0,0) from a loader-1x1 and a steel chest of 1000 plates; 4 express belts out of (0,1) east,
+   ending in nothing (backed up). run_ticks 900, tick 902:
+     visible 974 + hidden 26 = 1000; hidden entities mb-hidden-linked-belt-turbo x4,
+     mb-hidden-splitter-turbo, mb-hidden-loader-turbo, mb-hidden-buffer
+   game.server_save("t5-turbo"); server_stop
+   server_start preset = vanilla (no space-age, quality, elevated-rails), save t5-turbo.zip:
+     log: "modular-balancer: 2 blocks of a removed tier replaced by express blocks"
+     tick 902: blocks mb-balancer-express x2 at the same tiles, edges kept; visible 974 + hidden 26
+       = 1000 (the turbo network survived the load: its prototypes exist without Space Age)
+   run_ticks 2, tick 904: hidden entities mb-hidden-linked-belt-express x4, splitter, loader and
+     buffer of the express tier (the turbo network's items carried into it, the turbo network
+     removed); both edges linked; visible 972 + hidden 28 = 1000
+
+3. belt_speed_changed_by_mod (same instance, continued)
+   vanilla save t5-speed.zip of the express balancer above (tick 904); server_stop; server_start with
+   dev_mods = modular-balancer and tests/mods/mb-test-speed (express belt 26/256 in its
+   data-final-fixes, before modular-balancer's), same save. run_ticks 2, tick 906:
+     script.active_mods["mb-test-speed"] = 0.0.1; express belt speed 0.1015625
+     mb-hidden-linked-belt-express, -splitter-express, -loader-express, mb-edge-in- and
+     mb-edge-out-express-transport-belt: all 0.1015625 (the existing entities follow their changed
+     prototypes); both edges linked; total 1000
+server_stop
+
+4. release hygiene (instance mb2-t5rel, space-age preset)
+   `git archive HEAD` extracted to a scratch folder: .gitattributes, .gitignore, CLAUDE.md,
+   README.md, control.lua, data-final-fixes.lua, data.lua, info.json, locale/, prototypes/,
+   scripts/, settings.lua (no spikes/, tests/, docs/). server_start with dev_mods = that folder and
+   portal_mods = factorio-test (3.1.2, enabled): mb-dev false, mb-spikes false, no mb-test-chest
+   prototype, no "mb-test" remote interface; the mod loads (mb-balancer-turbo exists).
+server_stop
+
+5. loose edge across a save (fix round 1, I1; instance mb2-t5f, vanilla, dev_mods = modular-balancer)
+   One exec_lua call, tick 18: a lone mb-edge-in-express-transport-belt created with raise_built far
+   from any block (no group is marked dirty; only storage.balancer.loose holds it), 1 plate on it;
+   game.server_save("t5-loose") in the same call.
+   server_stop; server_start save = E:\factorio-dev\instances\mb2-t5f\saves\t5-loose.zip
+   tick 18: the edge is still there; run_ticks 1, tick 19: an express-transport-belt in its place,
+   1 item on it -> on_load re-armed the flush from the loose list (balancer.pending), as the players
+   already in the game would have it armed.
+server_stop

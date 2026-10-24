@@ -55,6 +55,11 @@ function surface.get()
     return s
   end
   s = game.get_surface(NAME)
+  if not s then
+    -- a new surface (first use, or the old one was deleted): every region is free
+    storage.regions = nil
+  end
+  s = s
     or game.create_surface(NAME, {
       default_enable_all_autoplace_controls = false,
       autoplace_settings = {

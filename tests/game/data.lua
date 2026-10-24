@@ -1,9 +1,11 @@
--- Test harness prototypes for the in-game suites (tests/game/). Loaded from data.lua only when
--- the factorio-test mod is enabled; never part of the product.
+-- Test harness prototypes for the in-game suites (tests/game/). Loaded from data.lua only with the
+-- dev gate `mb-dev` (settings.lua: factorio-test and the dev marker tests/dev.lua, which release
+-- zips leave out); never part of the product.
 --   mb-test-loader-<tier>  loader-1x1 at the belt speed of basic / fast / express (/ turbo)
 --   mb-test-loader-half    loader-1x1 at half the express belt speed (a throttled sink)
 --   mb-test-chest          a large chest, used as a finite source and as a counting sink
 --   mb-test-inserter       a bulk inserter that needs no power
+--   mb-test-roboport       a roboport that needs no power (robot builds in tests/game/groups.lua)
 --   mb-test-block          stand-in for the visible block: not belt-connectable, so a belt
 --                          port (a linked belt) can share its tile (docs/feasibility.md F1, F3)
 
@@ -46,5 +48,12 @@ block.name = "mb-test-block"
 block.collision_mask = { layers = { item = true, player = true, is_object = true } }
 block.minable = nil
 protos[#protos + 1] = block
+
+local roboport = table.deepcopy(data.raw["roboport"]["roboport"])
+roboport.name = "mb-test-roboport"
+roboport.energy_source = { type = "void" }
+roboport.minable = nil
+roboport.next_upgrade = nil
+protos[#protos + 1] = roboport
 
 data:extend(protos)

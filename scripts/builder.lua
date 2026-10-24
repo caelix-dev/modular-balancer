@@ -54,6 +54,9 @@ local TIER_BELTS = {
 
 -- Largest buffer (set_inventory_size_override takes a uint16). A field so a test can lower it.
 builder.max_buffer_slots = 65535
+-- Largest script inventory builder.take creates (create_inventory takes a uint16). Never sized by
+-- item count: a full 96:96 holds about 65 000 single items. A field so a test can lower it.
+builder.max_take_slots = 65535
 
 -- Test hook (tests/game/placement.lua): when set to k, place fails while creating entity k.
 ---@type integer?
@@ -398,17 +401,16 @@ local function carry_into(placed, sources, tmp)
     return true
   end
   local buffer = placed.buffer
-  -- one slot per remaining stack after what the buffer already holds is enough before merging
+  -- one slot per remaining stack after what the buffer already holds is always enough, but that
+  -- counts unmerged stacks (one per belt item): the size is capped at builder.max_buffer_slots
+  -- and the inserts merge as they go, so it refuses only when the merged items do not fit
   local inv = buffer.get_inventory(defines.inventory.chest)
   inv.sort_and_merge()
   local held = #inv - inv.count_empty_stacks()
-  if held + rest > builder.max_buffer_slots then
-    return false
-  end
-  buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, held + rest))
+  buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, math.min(held + rest, builder.max_buffer_slots)))
   inv = buffer.get_inventory(defines.inventory.chest)
   for i, src in ipairs(sources) do
-    local n = left[i]
+    local n = left[i] --[[@as integer]]
     if n > 0 then
       local stack = src
       if n < src.count then
@@ -416,8 +418,18 @@ local function carry_into(placed, sources, tmp)
         tmp[1].count = n
         stack = tmp[1]
       end
-      if inv.insert(stack) ~= n then
-        return false
+      local moved = inv.insert(stack)
+      if moved ~= n then
+        local rest_n = (n - moved) --[[@as uint32]]
+        inv.sort_and_merge()
+        if moved > 0 then
+          tmp[1].set_stack(src)
+          tmp[1].count = rest_n
+          stack = tmp[1]
+        end
+        if inv.insert(stack) ~= rest_n then
+          return false -- the caller destroys the new network: nothing was taken from the old one
+        end
       end
       tmp[1].clear()
     end
@@ -524,29 +536,50 @@ function builder.stash(placed, inv)
   return true
 end
 
--- Destroys `placed` and returns every item it held in a new script inventory, merged into whole
--- stacks (item data and spoilage kept), and the number of items. The caller empties and destroys
--- the inventory (a balancer removed with items inside: scripts/balancer.lua gives them to whoever
--- removed it, or spills them).
+-- Destroys `placed` and returns every item it held in script inventories of at most
+-- builder.max_take_slots slots each (item data and spoilage kept), and the number of items. The
+-- items are inserted one source stack at a time, so they merge as they go (a full network of
+-- tens of thousands of single plates fits in a few hundred slots); an inventory that is full even
+-- merged is closed and a new one opened. The caller empties and destroys every inventory (a
+-- balancer removed with items inside: scripts/balancer.lua gives them to whoever removed it, or
+-- spills them).
 ---@param placed table
----@return LuaInventory, integer
+---@return LuaInventory[], integer
 function builder.take(placed)
   local sources = stacks_of(placed)
-  local inv = game.create_inventory(math.max(1, #sources))
+  local cap = math.max(1, math.min(builder.max_take_slots, 65535))
+  local invs = {}
+  local inv = game.create_inventory(math.max(1, math.min(#sources, cap)))
+  invs[1] = inv
+  local tmp = game.create_inventory(1)
   local n = 0
   for _, st in ipairs(sources) do
-    local k = inv.insert(st)
     n = n + st.count
-    if k < st.count then
-      -- cannot happen with one slot per source stack; grow the inventory, never drop it
-      inv.resize(#inv + 1)
-      local rest = { name = st.name, count = st.count - k, quality = st.quality.name } --[[@as ItemStackIdentification]]
-      inv.insert(rest)
+    local moved = inv.insert(st)
+    if moved < st.count then
+      inv.sort_and_merge()
+      -- the rest as a full copy of the stack (set_stack keeps every field), its count lowered
+      tmp[1].set_stack(st)
+      tmp[1].count = (st.count - moved) --[[@as uint32]]
+      local more = inv.insert(tmp[1])
+      if more < tmp[1].count then
+        tmp[1].count = tmp[1].count - more
+        inv = game.create_inventory(cap)
+        invs[#invs + 1] = inv
+        local last = inv.insert(tmp[1])
+        if last < tmp[1].count then
+          error("builder.take: a stack does not fit in an empty inventory")
+        end
+      end
+      tmp[1].clear()
     end
   end
-  inv.sort_and_merge()
+  tmp.destroy()
+  for _, v in ipairs(invs) do
+    v.sort_and_merge()
+  end
   builder.destroy(placed)
-  return inv, n
+  return invs, n
 end
 
 -- Destroys `placed` and spills every item it held (merged into whole stacks first, item data and
@@ -557,14 +590,16 @@ end
 ---@param position MapPosition
 ---@return integer
 function builder.spill(placed, surf, position)
-  local inv, n = builder.take(placed)
-  for i = 1, #inv do
-    local st = inv[i] --[[@as LuaItemStack]]
-    if st.valid_for_read then
-      surf.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true })
+  local invs, n = builder.take(placed)
+  for _, inv in ipairs(invs) do
+    for i = 1, #inv do
+      local st = inv[i] --[[@as LuaItemStack]]
+      if st.valid_for_read then
+        surf.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true })
+      end
     end
+    inv.destroy()
   end
-  inv.destroy()
   return n
 end
 

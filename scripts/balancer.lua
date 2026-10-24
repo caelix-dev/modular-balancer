@@ -599,8 +599,10 @@ function balancer.flush()
     local s = a and game.get_surface(a.surface_index)
     for _, p in ipairs(sp.nets) do
       if s then
-        local inv = builder.take(p)
-        balancer.give(inv, sp.sink, s, a.position, sp.tiles, sp.force_index and game.forces[sp.force_index])
+        local invs = builder.take(p)
+        for _, inv in ipairs(invs) do
+          balancer.give(inv, sp.sink, s, a.position, sp.tiles, sp.force_index and game.forces[sp.force_index])
+        end
       else
         builder.destroy(p) -- the surface is gone, and its blocks and belts with it
       end
@@ -783,7 +785,9 @@ function balancer.drop_networks()
     local s = a and game.get_surface(a.surface_index)
     for _, p in ipairs(nets) do
       if s and s.valid then
-        balancer.spill_clear((builder.take(p)), s, a.position, rec.tiles, rec.force_index and game.forces[rec.force_index])
+        for _, inv in ipairs((builder.take(p))) do
+          balancer.spill_clear(inv, s, a.position, rec.tiles, rec.force_index and game.forces[rec.force_index])
+        end
       else
         builder.destroy(p)
       end

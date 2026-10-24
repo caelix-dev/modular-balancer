@@ -704,7 +704,7 @@ describe("lifecycle", function()
             serpent.line((function()
               local l = {}
               for _, g in ipairs(ground) do
-                l[#l + 1] = { g.stack.name, g.stack.count, g.position.x - o.x, g.position.y - o.y, g.to_be_deconstructed() }
+                l[#l + 1] = { g.stack.name, g.stack.count, g.position, g.to_be_deconstructed() }
               end
               return l
             end)()), serpent.line({ b1.valid }))

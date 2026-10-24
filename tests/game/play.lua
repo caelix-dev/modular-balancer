@@ -13,6 +13,32 @@ local WARMUP, WINDOW = 3000, 3600
 local RATE = H.RATE
 
 local default_notify = balancer.notify
+local default_flush = balancer.flush
+
+-- Counts the flushes from now on (the on_nth_tick handler calls balancer.flush through the
+-- module table, so this sees every tick it runs). Restored in after_each.
+---@return { n: integer }
+local function count_flushes()
+  ---@type { n: integer }
+  local c = { n = 0 }
+  balancer.flush = function()
+    c.n = c.n + 1
+    return default_flush()
+  end
+  return c
+end
+
+-- Asserts the steady state: nothing dirty, and no flush in the next `ticks` ticks (no tick
+-- handler left armed). Then calls `k`.
+local function settles(c, ticks, what, k)
+  assert(next(storage.balancer.dirty) == nil, what .. ": groups still dirty")
+  local n0 = c.n
+  after_ticks(ticks, function()
+    assert(c.n == n0, what .. ": " .. (c.n - n0) .. " flushes in " .. ticks .. " idle ticks")
+    assert(next(storage.balancer.dirty) == nil, what .. ": groups dirty again")
+    k()
+  end)
+end
 
 local boxes = {}
 local function area(w, h)
@@ -60,6 +86,8 @@ describe("play", function()
   end)
   after_each(function()
     game.forces.player.bulk_inserter_capacity_bonus = saved_bonus
+    balancer.flush = default_flush
+    builder.fail_after = nil
     for _, box in ipairs(boxes) do
       H.clear_blocks(box)
     end
@@ -470,9 +498,13 @@ describe("play", function()
       assert(#rec.extra == 0, "old networks left over")
       local gone = g == ga and gb or ga
       assert(balancer.get(gone) == nil, "the merged-away balancer still exists")
-      local total = H.count_box(box, "iron-plate")
-      H.report("merge: networks held %d + %d, after the merge %d in the box (network %d)", in_a, in_b, total, H.network_of(g))
+      local total, held = H.count_box(box, "iron-plate"), H.network_of(g)
+      H.report("merge: networks held %d + %d, after the merge %d in the box (network %d)", in_a, in_b, total, held)
       assert(total == 1000, "after the merge: " .. total .. " of 1000")
+      -- carried, not spilled: the merged network holds at least both old networks' items, and
+      -- nothing lies on the ground
+      assert(held >= in_a + in_b, "the merged network holds " .. held .. ", the old ones " .. in_a .. " + " .. in_b)
+      assert(#game.surfaces.nauvis.find_entities_filtered({ area = box, type = "item-entity" }) == 0, "items spilled on the ground")
       after_ticks(600, function()
         assert(H.count_box(box, "iron-plate") == 1000, "600 ticks after the merge: " .. H.count_box(box, "iron-plate"))
         done()
@@ -595,6 +627,151 @@ describe("play", function()
         assert(H.count_box(box, "iron-plate") == 2000, "at the end: " .. H.count_box(box, "iron-plate"))
         done()
       end)
+    end)
+  end)
+
+  -- A merge whose surviving group is dormant (no network yet): a row of three port-less blocks
+  -- (the larger group keeps its id) is joined to a running, backed-up 1:1 balancer. The running
+  -- network is carried in as the first network of the merged group, not spilled.
+  test("merge_into_dormant_group_carries_network", function()
+    async(1000)
+    local o, box = area(12, 12)
+    local dormant = {}
+    for x = 1, 3 do
+      dormant[#dormant + 1] = H.block(o, x, 4, H.TIER)
+    end
+    local r = H.block(o, 5, 4, H.TIER)
+    H.feed(o, 5, 4, D.north, 3, { stock = 500 })
+    for y = 5, 7 do
+      H.put(o, 5, y, H.BELT, D.south)
+    end
+    balancer.flush()
+    local gd, gr = groups.of(dormant[1].unit_number), groups.of(r.unit_number)
+    local rd, rr = balancer.get(gd), balancer.get(gr)
+    assert(gd ~= gr and not (rd and rd.placed) and rr and rr.placed, "test setup: a dormant group and a running one expected")
+    after_ticks(600, function()
+      local held0 = H.network_of(gr)
+      assert(held0 > 0, "test setup: the running network holds nothing")
+      assert(H.count_box(box, "iron-plate") == 500, "before the merge: " .. H.count_box(box, "iron-plate"))
+      H.block(o, 4, 4, H.TIER)
+      balancer.flush()
+      local g, rec = rec_of(r)
+      assert(g == gd, "test setup: the dormant group did not keep its id (" .. g .. ", dormant " .. gd .. ")")
+      assert(balancer.get(gr) == nil, "the merged-away balancer still exists")
+      assert(rec.placed and rec.n == 1 and rec.m == 1, "network " .. rec.n .. ":" .. rec.m .. ", expected 1:1")
+      assert(#rec.extra == 0, "old networks left over")
+      local held = H.network_of(g)
+      H.report("merge into dormant: network held %d, after the merge %d", held0, held)
+      assert(held >= held0, "the merged network holds " .. held .. ", the old one " .. held0)
+      assert(#game.surfaces.nauvis.find_entities_filtered({ area = box, type = "item-entity" }) == 0, "items spilled on the ground")
+      assert(H.count_box(box, "iron-plate") == 500, "after the merge: " .. H.count_box(box, "iron-plate"))
+      after_ticks(300, function()
+        assert(H.count_box(box, "iron-plate") == 500, "300 ticks after the merge: " .. H.count_box(box, "iron-plate"))
+        done()
+      end)
+    end)
+  end)
+
+  -- An output edge rotated twice (as a player would) points into the block: the role-change
+  -- branch swaps it back to its belt and then for an input edge. 1:2 becomes 2:1, nothing lost,
+  -- and the re-check settles.
+  test("edge_turned_round_becomes_input", function()
+    async(700)
+    local o, box = area(10, 10)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3, { stock = 2000 })
+    H.sink(o, 4, 4, D.east, 3)
+    H.sink(o, 4, 4, D.south, 3)
+    balancer.flush()
+    after_ticks(300, function()
+      local edge = H.at(o, 5, 4, "linked-belt")
+      assert(edge and edge.name == "mb-edge-out-" .. H.BELT, "no output edge")
+      assert(edge.rotate() and edge.rotate(), "the edge did not rotate")
+      assert(edge.direction == D.west, "test setup: the edge faces " .. edge.direction)
+      local c = count_flushes()
+      balancer.mark_near(edge)
+      balancer.flush()
+      local e = H.at(o, 5, 4, "linked-belt")
+      assert(e and e.name == "mb-edge-in-" .. H.BELT and e.linked_belt_type == "input" and e.direction == D.west,
+        "the tile is not an input edge facing the block: " .. (e and (e.name .. " " .. e.direction) or "none"))
+      local _, rec = rec_of(b)
+      assert(rec.n == 2 and rec.m == 1, "network " .. rec.n .. ":" .. rec.m .. ", expected 2:1")
+      assert(H.count_box(box, "iron-plate") == 2000, "after the turn: " .. H.count_box(box, "iron-plate"))
+      after_ticks(3, function()
+        settles(c, 30, "after the turn", function()
+          assert(H.count_box(box, "iron-plate") == 2000, "at the end: " .. H.count_box(box, "iron-plate"))
+          done()
+        end)
+      end)
+    end)
+  end)
+
+  -- N1: a rebuild that keeps failing (test hook left on) with a new output port waiting. The
+  -- flush swaps the new tile, fails, and swaps it back: no net change, so nothing is re-marked
+  -- and the tick handler is gone after the first flush. The old network keeps working.
+  test("failing_rebuild_does_not_rearm", function()
+    async(800)
+    local o, box = area(10, 10)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3, { stock = 2000 })
+    H.sink(o, 4, 4, D.east, 3)
+    balancer.flush()
+    after_ticks(300, function()
+      local _, rec = rec_of(b)
+      local old = rec.placed
+      builder.fail_after = 1
+      local c = count_flushes()
+      H.sink(o, 4, 4, D.south, 3) -- marks the group; the tick handler flushes it
+      assert(next(storage.balancer.dirty) ~= nil, "test setup: the build marked nothing")
+      after_ticks(3, function()
+        assert(c.n >= 1, "the tick handler did not flush")
+        local _, after = rec_of(b)
+        assert(after.placed == old and after.n == 1 and after.m == 1, "the old network was not kept")
+        local t = H.at(o, 4, 5, "transport-belt")
+        assert(t and t.name == H.BELT, "the refused output tile is not a plain belt")
+        settles(c, 60, "failing rebuild", function()
+          assert(builder.fail_after == 1, "test setup: the hook was cleared")
+          builder.fail_after = nil
+          assert(H.count_box(box, "iron-plate") == 2000, "at the end: " .. H.count_box(box, "iron-plate"))
+          done()
+        end)
+      end)
+    end)
+  end)
+
+  -- N1: a group whose only output (an inserter port on block B) has no free side. A's input
+  -- port is placed and dropped again in the same flush, so the group stays dormant with no net
+  -- change and is not re-marked.
+  --   B (4,4): the belts north, south and west of it run alongside (a port facing them would
+  --   side-load them). East is A, whose input port faces east, away from B (its north is taken:
+  --   the curved belt south of A feeds that way), so a port of B facing east would feed it.
+  test("no_free_side_does_not_rearm", function()
+    async(200)
+    local o = area(10, 10)
+    local bb = H.block(o, 4, 4, H.TIER)
+    H.block(o, 5, 4, H.TIER)
+    H.put(o, 4, 5, H.BELT, D.east) -- alongside B, and makes (5,5) a curve
+    H.put(o, 5, 5, H.BELT, D.north) -- curved input into A: refused, but it feeds A's tile
+    H.put(o, 4, 3, H.BELT, D.east)
+    H.put(o, 3, 4, H.BELT, D.north)
+    H.put(o, 4, 2, "long-handed-inserter", D.south) -- takes from B
+    H.put(o, 4, 0, "mb-test-chest")
+    H.put(o, 5, 3, "mb-test-inserter", D.north) -- puts into A
+    H.put(o, 5, 2, "mb-test-chest")
+    local c = count_flushes()
+    after_ticks(3, function()
+      assert(c.n >= 1, "the tick handler did not flush")
+      local _, rec = rec_of(bb)
+      local why = {}
+      for _, r in ipairs(rec.refused) do
+        why[r.reason] = true
+      end
+      assert(why["no-free-side"], "test setup: not refused for no free side: " .. serpent.line(rec.refused))
+      assert(not rec.placed and #rec.inputs == 0 and #rec.outputs == 0, "the group is not dormant")
+      for x = 4, 5 do
+        assert(not H.at(o, x, 4, "linked-belt"), "a port was left on block tile " .. x)
+      end
+      settles(c, 60, "no free side", done)
     end)
   end)
 end)

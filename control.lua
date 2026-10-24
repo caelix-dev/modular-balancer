@@ -7,7 +7,7 @@ end)
 ---@diagnostic disable-next-line: unnecessary-if
 if script.active_mods["factorio-test"] then
   require("tests.game.remote")
-  local suites = { "tests/game/smoke", "tests/game/placement", "tests/game/exactness" }
+  local suites = { "tests/game/smoke", "tests/game/placement", "tests/game/exactness", "tests/game/recirculation" }
   if settings.startup["mb-spikes"].value then
     suites[#suites + 1] = "spikes/multi_belt/test"
     suites[#suites + 1] = "spikes/hidden_surface/test"

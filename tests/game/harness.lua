@@ -85,41 +85,55 @@ end
 -- opts.sink: "full" (default, loader at the tier speed) or "half" (half express speed).
 -- opts.port: number of extra outputs (after the first m) that end in a belt port (F3) with
 --   three inserters instead of a belt; default 0.
--- opts.port_loop (experimental, with port = 1): the network is (n + 1):(m + 1), and its last
---   output goes to a hidden splitter with output priority: the priority side feeds the port,
---   the other side loops back into network input n + 1, so what the port does not take is
---   spread over all outputs again.
+-- opts.recirc (F8, experimental, not the product design): equal redistribution. With M = m +
+--   port outputs, the network is (n + M):M. Every network output j goes to a hidden splitter
+--   with output priority: the priority side is the rig's output j (belt or port), the other
+--   side loops back into network input n + j. What an output does not take is spread over all
+--   outputs again.
+-- opts.sinks[j]: per-output sink loader tier, overriding opts.sink (e.g. "basic").
 -- opts.item: item of full / slow feeds (default iron-plate). opts.stock: source stock.
----@param opts {n: integer, m: integer, port: integer?, port_loop: boolean?, tier: string?, balance_lanes: boolean?, feed: string[]?, sink: string?, item: string?, stock: integer?}
+---@param opts {n: integer, m: integer, port: integer?, recirc: boolean?, sinks: string[]?, tier: string?, balance_lanes: boolean?, feed: string[]?, sink: string?, item: string?, stock: integer?}
 function H.rig(opts)
   local n, m = opts.n, opts.m
   local ports = opts.port or 0
   local tier = opts.tier or H.TIER
   local belt = BELTS[tier]
-  local loop = opts.port_loop and 1 or 0
-  local net = assert(network.build(n + loop, m + ports, { balance_lanes = opts.balance_lanes }))
+  local M = m + ports
+  local loops = opts.recirc and M or 0
+  local net = assert(network.build(n + loops, M, { balance_lanes = opts.balance_lanes }))
   local w, h = builder.size(net)
   local origin = surface.reserve(w, h)
   local placed = builder.place(net, tier, origin)
-  local port_target = placed.outputs[m + 1]
-  if loop == 1 then
+  -- what the rig's output j links to
+  local targets = {}
+  for j = 1, M do
+    targets[j] = placed.outputs[j]
+  end
+  local extra = {}
+  if opts.recirc then
     local hs = surface.get()
-    local lo = surface.reserve(4, 3)
+    local lo = surface.reserve(4, 3 * M)
     local lb = "mb-hidden-linked-belt-" .. tier
-    local head = ce(hs, { name = lb, position = { lo.x + 0.5, lo.y + 0.5 }, direction = D.east, type = "output" })
-    head.connect_linked_belts(placed.outputs[m + 1])
-    local sp = ce(hs, { name = "mb-hidden-splitter-" .. tier, position = { lo.x + 1.5, lo.y + 1 }, direction = D.east })
-    sp.splitter_output_priority = "left" -- north, the port
-    port_target = ce(hs, { name = lb, position = { lo.x + 2.5, lo.y + 0.5 }, direction = D.east, type = "input" })
-    local back = ce(hs, { name = lb, position = { lo.x + 2.5, lo.y + 1.5 }, direction = D.east, type = "input" })
-    back.connect_linked_belts(placed.inputs[n + 1])
+    for j = 1, M do
+      local x, y = lo.x, lo.y + 3 * (j - 1)
+      local head = ce(hs, { name = lb, position = { x + 0.5, y + 0.5 }, direction = D.east, type = "output" })
+      head.connect_linked_belts(placed.outputs[j])
+      local sp = ce(hs, { name = "mb-hidden-splitter-" .. tier, position = { x + 1.5, y + 1 }, direction = D.east })
+      sp.splitter_output_priority = "left" -- north: the rig's output
+      targets[j] = ce(hs, { name = lb, position = { x + 2.5, y + 0.5 }, direction = D.east, type = "input" })
+      local back = ce(hs, { name = lb, position = { x + 2.5, y + 1.5 }, direction = D.east, type = "input" })
+      back.connect_linked_belts(placed.inputs[n + j])
+      for _, e in ipairs({ head, sp, targets[j], back }) do
+        extra[#extra + 1] = e
+      end
+    end
   end
   local s = game.surfaces.nauvis
   local rows = math.max(n, m + ports)
   local o = H.area(24, rows * H.ROW)
   local stock = opts.stock or H.SOURCE_STOCK
   local rig = {
-    net = net, origin = origin, placed = placed, o = o, n = n, m = m, stock = stock,
+    net = net, origin = origin, placed = placed, extra = extra, o = o, n = n, m = m, stock = stock,
     sources = {}, feeders = {}, sinks = {}, sink_loaders = {}, last_belts = {}, visible = {},
     port_chests = {}, inserters = {},
   }
@@ -165,7 +179,7 @@ function H.rig(opts)
     local y = o.y + H.ROW * (j - 1)
     if j <= m then
       local edge = ce(s, { name = "mb-hidden-linked-belt-" .. tier, position = { ox, y }, direction = D.east, type = "output" })
-      edge.connect_linked_belts(placed.outputs[j])
+      edge.connect_linked_belts(targets[j])
       rig.visible[#rig.visible + 1] = edge
       for x = 1, 4 do
         local b = ce(s, { name = belt, position = { ox + x, y }, direction = D.east })
@@ -173,7 +187,7 @@ function H.rig(opts)
         rig.last_belts[j] = b
       end
       rig.sink_loaders[j] = ce(s, {
-        name = "mb-test-loader-" .. (opts.sink == "half" and "half" or tier),
+        name = "mb-test-loader-" .. (opts.sinks and opts.sinks[j] or (opts.sink == "half" and "half" or tier)),
         position = { ox + 5, y }, direction = D.east, type = "input",
       })
       rig.sinks[j] = ce(s, { name = "mb-test-chest", position = { ox + 6, y } })
@@ -183,7 +197,7 @@ function H.rig(opts)
       local k = { x = ox + 2, y = y }
       ce(s, { name = "mb-test-block", position = k })
       local port = ce(s, { name = "mb-hidden-linked-belt-" .. tier, position = k, direction = D.west, type = "output" })
-      port.connect_linked_belts(port_target)
+      port.connect_linked_belts(targets[j])
       rig.visible[#rig.visible + 1] = port
       rig.port = port
       for _, v in ipairs({ { 0, -1, D.south }, { 1, 0, D.west }, { 0, 1, D.north } }) do
@@ -227,6 +241,30 @@ function H.drawn(rig, i)
     left = left + ch.get_item_count()
   end
   return #rig.sources[i] * rig.stock - left
+end
+
+-- Every item the rig holds or delivered: sources, feeders, visible belts, network (and F8
+-- recirculation entities), sinks, sink loaders, the port, its inserters' hands and chests.
+---@return number
+function H.total_items(rig)
+  local t = 0.0
+  for _, list in ipairs(rig.sources) do
+    for _, ch in ipairs(list) do
+      t = t + ch.get_item_count()
+    end
+  end
+  for _, group in ipairs({ rig.feeders, rig.visible, rig.placed.entities, rig.extra, rig.sink_loaders }) do
+    for _, e in ipairs(group) do
+      t = t + H.items_on(e)
+    end
+  end
+  for _, ch in ipairs(rig.sinks) do
+    t = t + ch.get_item_count()
+  end
+  if rig.port then
+    t = t + H.port_count(rig) - H.items_on(rig.port) -- the port belt is in rig.visible
+  end
+  return t
 end
 
 -- Removes the rig's network and visible entities; returns the items builder.destroy returned.

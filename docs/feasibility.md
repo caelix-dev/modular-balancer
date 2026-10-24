@@ -610,3 +610,88 @@ saving, so everything is saturated):
   `transportLinesUpdate`: +0.066 ms over the empty map for 50 saturated 8:3 networks plus their
   harness belts, about the same as 1 200 vanilla splitters in series (+0.071).
 - Numbers only. The gate is Plan 3's comparison with Better Belt Balancer.
+
+## F8: equal redistribution option, recirculation (Task 5, experimental)
+
+**Not the Plan 1 design.** Ruling 6: in Plan 1 a slow output (belt or inserter port) behaves like
+a vanilla splitter output. Its unused share goes to its last-stage sibling, exactly as
+`flow.solve` predicts. `inserter_share_*` asserts that match, measured throttled 2:3: belts
+22.500 / 42.283 / 22.500, port 2.717, flow model identical. The user chose the recirculation
+design below for every output in Plan 2. Prototype: harness option `recirc`
+(`tests/game/harness.lua`). Tests: `tests/game/recirculation.lua`. Offline model check: a
+fixed point over `flow.solve` (see below).
+
+**Design.** For a ratio n:m with M outputs (belt outputs plus inserter ports):
+
+- Build the network as (n + M):M.
+- Network output j goes to a hidden splitter with `splitter_output_priority = "left"`. The
+  priority side is the real output j: the edge's linked belt, or the port.
+- The other side is linked back into network input n + j.
+
+So whatever output j does not take re-enters the network and is spread over all outputs again.
+In steady state each output takes min(its demand, x), and x is the same for every output that
+is not limited ("water filling").
+
+**Measured in game** (express, 3 600 ticks after a 3 000-tick warm-up, items/s; full log in
+`feasibility/t5-results-vanilla.txt`):
+
+| case | 2:3 | 3:5 |
+| --- | --- | --- |
+| all outputs free | 30.000 x3 = 90.000 (plain network: 90) | 27.000 / 26.983 / 27.000 x3 = 134.983 (135) |
+| input 1 at a third | 20.000 x3 = 60.000 (supply 60) | 21.000 x5 = 105.000 (105) |
+| output 1 slow (15) | 15.000; others 37.500 37.500 (expected 37.5) | 15.000; others 30.000 x4 (30) |
+| inserter port slow (2.733) | belts 29.083 x3 (expected 29.089) | belts 26.450 x5 (26.453) |
+| only outputs 1, 2 open | 45.000 / 44.983 | 45.000 / 45.000 |
+
+- No loss or duplication: every F8 test checks at its end that sources + belts + network +
+  recirculation entities + sinks + port equal the stock. All passed. All F8 tests pass in
+  vanilla and Space Age (44/44 in Space Age).
+- Throughput with all outputs free is unchanged against the plain network, within 0.02 %.
+- **It takes longer to settle.** From an empty rig, the total reaches steady state after about
+  2 400-3 000 ticks, against 600 for the plain network. Per 600-tick window, 2:3 with a slow
+  belt: 25.5, 74.3, 85.3, 89.1, 89.8, 90.0. With the 600-tick warm-up of the other suites it
+  measured 1-4 % low (for example the 3:5 slow port at 129.7 instead of 135).
+
+**Flow model check** (offline, `lua52`; a fixed point that alternates `flow.solve` on the
+(n + M):M network with loop supplies = max(0, x_j − d_j); 360 random cases over every ratio
+with n + m ≤ 16):
+
+- Any input mix with outputs free: outputs equal, total min(S, m). **0 failures.**
+- One slow output (random demand): the others equal at min(1, (n − d)/(m − 1)). **0 failures.**
+- Throughput unlimited (random fed inputs, random open outputs, the rest demand 0): open
+  outputs total min(fed, open). **0 failures.**
+  - In 98 of these cases the overflow is larger than its loop input accepts, so the priority
+    splitter backs up. The model ignores that back-up, so in those cases it is only
+    approximate.
+  - The engine case "3:5, only 2 outputs open" (which backs up like this) still delivered 2
+    full belts.
+- **Input balance under backpressure is lost: 144 failures.** When the open outputs cannot take
+  everything, the loop inputs compete with the real inputs, and the real inputs are no longer
+  drawn equally.
+  - Flow model, 3:5 with 2 outputs open: 45 / 33.75 / 33.75.
+  - Engine: **45.000 / 22.500 / 22.500**.
+  - The model's simplest case: 2:1 (a 3:1 network with an empty loop input) also draws
+    unequally.
+  - The plain network draws equally in that regime (`inputs_drawn_equally_*`).
+  - Plan 2 must decide whether this is acceptable or add a fix.
+
+**Size cost** (splitters / hidden entities; recirculation = the (n + M):M network + M priority
+splitters + 4 entities per output):
+
+| ratio | plain | recirculation |
+| --- | --- | --- |
+| 1:1 | 0 / 2 | 2 / 8 |
+| 2:3 | 8 / 39 | 31 / 150 |
+| 2:4 (2:3 + port) | 7 / 33 | 27 / 129 |
+| 3:5 | 28 / 138 | 40 / 192 |
+| 3:6 (3:5 + port) | 27 / 132 | 81 / 396 |
+| 4:4 | 8 / 40 | 24 / 112 |
+| 5:1 | 23 / 111 | 23 / 109 |
+| 1:5 | 23 / 111 | 41 / 199 |
+| 8:3 | 24 / 115 | 66 / 319 |
+| 8:8 | 24 / 120 | 60 / 284 |
+
+The (n + M):M network must fit `network.MAX_SIDE` = 16 inputs, so with recirculation the largest
+ratios shrink to n + M ≤ 16 (8:8 fits, 9:8 and 16:16 do not). Raising MAX_SIDE, or merging
+several overflows into fewer loop inputs, is a Plan 2 design question. Merging changes when the
+overflow backs up and needs its own measurement.

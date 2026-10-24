@@ -23,17 +23,23 @@ MB-TEST outputs_equal_unequal_inputs 3:5 (input 1 at a third): outputs 20.967 20
 MB-TEST mixed_items_keep_lanes 2:3: iron (left) 15.000 15.000 15.000, copper (right) 15.000 15.000 15.000 items/s
 MB-TEST backpressure_then_release 3:5: after release, outputs 28.517 28.500 28.500 28.500 28.500 items/s, total 142.517
 MB-TEST inserter_share 2:3: belt outputs 22.500 22.500 22.500, port 22.500 items/s
-MB-TEST inserter_share 2:3 throttled: belt outputs 22.500 42.283 22.500, port 2.717 items/s
-MB-TEST inserter_share_loop 2:3: belt outputs 22.500 22.500 22.500, port 22.500 items/s
-MB-TEST inserter_share_loop 2:3 throttled: belt outputs 29.083 29.083 29.067, port 2.717 items/s
+MB-TEST inserter_share 2:3 throttled: belt outputs 22.500 42.283 22.500, port 2.717 items/s; flow model 22.500 42.283 22.500 2.717
 MB-TEST inserter_share_lanes 2:3: iron 11.250 11.250 11.250 11.250, copper 11.250 11.250 11.250 11.250 items/s (last = port)
-MB-TEST inserter_share 3:5: belt outputs 22.500 22.467 22.500 22.500 22.467, port 22.467 items/s
-MB-TEST inserter_share 3:5 throttled: belt outputs 22.517 42.283 22.500 22.517 22.500, port 2.717 items/s
-MB-TEST inserter_share_loop 3:5: belt outputs 22.500 22.500 22.500 22.467 22.500, port 22.500 items/s
-MB-TEST inserter_share_loop 3:5 throttled: belt outputs 26.450 26.467 26.433 26.433 26.467, port 2.717 items/s
-MB-TEST inserter_share_lanes 3:5: iron 11.250 11.250 11.250 11.250 11.250 11.250, copper 11.250 11.250 11.250 11.250 11.250 11.250 items/s (last = port)
+MB-TEST inserter_share 3:5: belt outputs 22.500 22.483 22.483 22.500 22.483, port 22.483 items/s
+MB-TEST inserter_share 3:5 throttled: belt outputs 22.517 42.283 22.500 22.500 22.500, port 2.717 items/s; flow model 22.500 42.283 22.500 22.500 22.500 2.717
+MB-TEST inserter_share_lanes 3:5: iron 11.250 11.250 11.250 11.267 11.250 11.250, copper 11.250 11.250 11.250 11.250 11.250 11.250 items/s (last = port)
 MB-TEST lane_balance 2:3 (left lanes only): lanes (left right per output) 7.500 7.500 7.500 7.500 7.500 7.500 items/s, total 45.000 (expected 45.000)
 MB-TEST lane_balance 8:3 (left lanes only): lanes (left right per output) 22.500 22.500 22.500 22.500 22.500 22.500 items/s, total 135.000 (expected 135.000)
+MB-TEST F8 free 2:3: outputs 30.000 30.000 30.000, total 90.000 (plain network: 90.000)
+MB-TEST F8 unequal inputs 2:3 (input 1 at a third): outputs 20.000 20.000 20.000, total 60.000 (supply 60.000)
+MB-TEST F8 slow belt 2:3 (output 1 at 15): output 1 15.000, others 37.500 37.500 (expected 37.500 each), total 90.000
+MB-TEST F8 slow port 2:3: belt outputs 29.083 29.083 29.083 (expected 29.089 each), port 2.733, total 89.983
+MB-TEST F8 blocked outputs 2:3 (only 1 and 2 open): outputs 45.000 44.983 0.000, inputs drawn 45.000 45.000
+MB-TEST F8 free 3:5: outputs 27.000 26.983 27.000 27.000 27.000, total 134.983 (plain network: 135.000)
+MB-TEST F8 unequal inputs 3:5 (input 1 at a third): outputs 21.000 21.000 21.000 21.000 21.000, total 105.000 (supply 105.000)
+MB-TEST F8 slow belt 3:5 (output 1 at 15): output 1 15.000, others 30.000 30.000 30.000 30.000 (expected 30.000 each), total 135.000
+MB-TEST F8 slow port 3:5: belt outputs 26.450 26.450 26.450 26.450 26.450 (expected 26.453 each), port 2.733, total 134.983
+MB-TEST F8 blocked outputs 3:5 (only 1 and 2 open): outputs 45.000 45.000 0.000 0.000 0.000, inputs drawn 45.000 22.500 22.500
 
 PASSED: tests/game/smoke > modular-balancer smoke > nauvis exists
 PASSED: tests/game/placement > placement > place_then_destroy_leaves_nothing
@@ -62,12 +68,20 @@ PASSED: tests/game/exactness > exactness > outputs_equal_unequal_inputs_2_4
 PASSED: tests/game/exactness > exactness > outputs_equal_unequal_inputs_3_5
 PASSED: tests/game/exactness > exactness > mixed_items_keep_lanes
 PASSED: tests/game/exactness > exactness > backpressure_then_release_moves_again
-FAILED: tests/game/exactness > exactness > inserter_share_2_3
-PASSED: tests/game/exactness > exactness > inserter_share_loop_2_3
+PASSED: tests/game/exactness > exactness > inserter_share_2_3
 PASSED: tests/game/exactness > exactness > inserter_share_lanes_2_3
-FAILED: tests/game/exactness > exactness > inserter_share_3_5
-PASSED: tests/game/exactness > exactness > inserter_share_loop_3_5
+PASSED: tests/game/exactness > exactness > inserter_share_3_5
 PASSED: tests/game/exactness > exactness > inserter_share_lanes_3_5
 PASSED: tests/game/exactness > exactness > lane_balance_2_3
 PASSED: tests/game/exactness > exactness > lane_balance_8_3
-33 passed, 2 failed, 0 skipped (35 total)
+PASSED: tests/game/recirculation > F8 recirculation > f8_free_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_unequal_inputs_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_slow_belt_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_slow_port_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_blocked_outputs_2_3
+PASSED: tests/game/recirculation > F8 recirculation > f8_free_3_5
+PASSED: tests/game/recirculation > F8 recirculation > f8_unequal_inputs_3_5
+PASSED: tests/game/recirculation > F8 recirculation > f8_slow_belt_3_5
+PASSED: tests/game/recirculation > F8 recirculation > f8_slow_port_3_5
+PASSED: tests/game/recirculation > F8 recirculation > f8_blocked_outputs_3_5
+43 passed, 0 failed, 0 skipped (43 total)

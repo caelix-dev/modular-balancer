@@ -4,6 +4,9 @@
 -- ticks after a WARMUP-tick warm-up; every bound is 1 %. Results are logged with the prefix
 -- MB-TEST (factorio-current.log). Plain assert, not luassert.
 local H = require("tests.game.harness")
+-- Test code only: the flow model is offline in the product (scripts/flow.lua header), but
+-- inserter_share compares the engine with it (Ruling 6).
+local flow = require("scripts.flow")
 
 local WARMUP, WINDOW = 600, 3600
 local RATE = H.RATE
@@ -189,38 +192,31 @@ describe("exactness", function()
         rig.inserters[2].disabled_by_script = true
         rig.inserters[3].inserter_stack_size_override = 1
         H.measure(counts, WARMUP, WINDOW, function(slow)
+          -- Ruling 6: the port behaves like a belt output. Its unused share goes where a slow
+          -- belt output's would (vanilla splitter behaviour), so the result must match the flow
+          -- model with the port's demand set to its measured rate, and nothing is lost.
           local belts = { table.unpack(slow, 1, m) }
-          H.report("inserter_share %d:%d throttled: belt outputs %s, port %.3f items/s", n, m, fmt(belts), slow[m + 1])
+          local net = rig.net
+          local supply, demand = {}, {}
+          for i = 1, n do
+            supply[i] = 1
+          end
+          for j = 1, m do
+            demand[j] = 1
+          end
+          demand[m + 1] = slow[m + 1] / RATE
+          local state = flow.solve(net, supply, demand)
+          local model = {}
+          for j = 1, m + 1 do
+            model[j] = state.f[state.out_edge[j]] * RATE
+          end
+          H.report("inserter_share %d:%d throttled: belt outputs %s, port %.3f items/s; flow model %s",
+            n, m, fmt(belts), slow[m + 1], fmt(model))
           assert(slow[m + 1] < rates[m + 1] * 0.5, "the port was not throttled")
-          H.assert_equal(belts, "belt output")
-          near(H.sum(slow), n * RATE, "belts plus port")
-          done()
-        end)
-      end)
-    end)
-
-    -- Experimental (not in the plan): the port with a priority splitter that loops its unused
-    -- share back into the network (harness opts.port_loop). Same assertions as inserter_share.
-    test("inserter_share_loop_" .. tag, function()
-      async(2 * (WARMUP + WINDOW) + 300)
-      local rig = H.rig({ n = n, m = m, port = 1, port_loop = true })
-      local function counts()
-        local c = sink_counts(rig)()
-        c[#c + 1] = H.port_count(rig)
-        return c
-      end
-      H.measure(counts, WARMUP, WINDOW, function(rates)
-        H.report("inserter_share_loop %d:%d: belt outputs %s, port %.3f items/s", n, m, fmt({ table.unpack(rates, 1, m) }), rates[m + 1])
-        H.assert_equal(rates, "output (the last is the port)")
-        rig.inserters[1].disabled_by_script = true
-        rig.inserters[2].disabled_by_script = true
-        rig.inserters[3].inserter_stack_size_override = 1
-        H.measure(counts, WARMUP, WINDOW, function(slow)
-          local belts = { table.unpack(slow, 1, m) }
-          H.report("inserter_share_loop %d:%d throttled: belt outputs %s, port %.3f items/s", n, m, fmt(belts), slow[m + 1])
-          assert(slow[m + 1] < rates[m + 1] * 0.5, "the port was not throttled")
-          H.assert_equal(belts, "belt output")
-          near(H.sum(slow), n * RATE, "belts plus port")
+          near(H.sum(slow), H.sum(rates), "belts plus port against the free phase")
+          for j = 1, m do
+            near(slow[j], model[j], "belt output " .. j .. " against the flow model")
+          end
           done()
         end)
       end)

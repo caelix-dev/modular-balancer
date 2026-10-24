@@ -270,12 +270,18 @@ describe("lifecycle", function()
       assert(before > 3, "test setup: only " .. before .. " in the network")
       builder.max_buffer_slots = 3
       -- the south output goes: 1:2 -> 1:1, the network shrinks
-      for _, e in ipairs(out2.belts) do
-        e.destroy({ raise_destroy = true })
-      end
+      -- its last tile is an edge now; mined with its items into a chest of the box
+      local edge = assert(H.at(o, 4, 5, "linked-belt"), "no south edge")
+      local keep = H.ce(game.surfaces.nauvis, { name = "mb-test-chest", position = { o.x + 8, o.y + 8 } })
+      assert(edge.mine({ inventory = keep.get_inventory(defines.inventory.chest), raise_destroyed = true }), "edge not mined")
       balancer.flush()
       local rec2 = rec_of(b)
       assert(nm(rec2) == "1:1", "the shrink was refused: " .. nm(rec2) .. " " .. serpent.line(rec2.refused))
+      -- more single belt items went to the buffer than it has slots: the old pre-check refused this
+      local buffered = rec2.placed.buffer.get_item_count()
+      if buffered <= 3 then
+        error("test setup: only " .. buffered .. " items went to the buffer")
+      end
       assert(H.count_box(box, ITEM) == stock, "after the shrink: " .. H.count_box(box, ITEM) .. " of " .. stock)
       done()
     end)

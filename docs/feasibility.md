@@ -689,6 +689,9 @@ with n + m ≤ 16):
     unequally.
   - The plain network draws equally in that regime (`inputs_drawn_equally_*`).
   - Plan 2 must decide whether this is acceptable or add a fix.
+  - **Resolved in Plan 2 Task 1:** the generator v2 puts an exact N:N front core before the
+    recirculating (N+M):M core, so every input is drawn equally with any subset of outputs open
+    (offline `recirc_f8_case_draws_equally`; in game F9 "equal draw").
 
 **Size cost** (splitters / hidden entities; recirculation = the (n + M):M network + M priority
 splitters + 4 entities per output):

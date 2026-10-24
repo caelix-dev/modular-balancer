@@ -8,7 +8,11 @@
 --                                   for the balance-lanes option (F5)
 --   mb-hidden-loader-<tier>         loader-1x1 that drains the network's buffer chest
 --   mb-hidden-never                 an item that never exists: the splitter filter that closes a
---                                   splitter's dead-end output (scripts/builder.lua)
+--                                   splitter's dead-end output (scripts/builder.lua). It is
+--                                   hidden and has no recipe; only a cheat (a console insert, an
+--                                   editor filter) can create it. Such an item takes the closed
+--                                   side and jams that splitter lane; builder.contents and
+--                                   builder.rebuild drop it, so the next rebuild clears the jam
 --   mb-hidden-buffer                the buffer chest (one per network) that holds what a rebuild
 --                                   could not put back on the belts; its size is set per network
 --                                   at runtime with set_inventory_size_override
@@ -51,31 +55,39 @@ local function hide(p, name)
   return p
 end
 
+local function raw(kind, name)
+  local p = data.raw[kind] and data.raw[kind][name]
+  if not p then
+    error("modular-balancer: prototype " .. kind .. "/" .. name .. " is missing")
+  end
+  return p
+end
+
 local protos = {}
 for _, tier in ipairs(TIERS) do
-  local speed = data.raw["transport-belt"][tier.belt].speed
+  local speed = raw("transport-belt", tier.belt).speed
 
-  local sp = hide(table.deepcopy(data.raw["splitter"][tier.splitter]), "mb-hidden-splitter-" .. tier.name)
+  local sp = hide(table.deepcopy(raw("splitter", tier.splitter)), "mb-hidden-splitter-" .. tier.name)
   sp.speed = speed
   protos[#protos + 1] = sp
 
-  local lb = hide(table.deepcopy(data.raw["linked-belt"]["linked-belt"]), "mb-hidden-linked-belt-" .. tier.name)
+  local lb = hide(table.deepcopy(raw("linked-belt", "linked-belt")), "mb-hidden-linked-belt-" .. tier.name)
   lb.speed = speed
   lb.allow_side_loading = false
   lb.allow_clone_connection = false
   lb.allow_blueprint_connection = false
   protos[#protos + 1] = lb
 
-  local ls = hide(table.deepcopy(data.raw["lane-splitter"]["lane-splitter"]), "mb-hidden-lane-splitter-" .. tier.name)
+  local ls = hide(table.deepcopy(raw("lane-splitter", "lane-splitter")), "mb-hidden-lane-splitter-" .. tier.name)
   ls.speed = speed
   protos[#protos + 1] = ls
 
-  local loader = hide(table.deepcopy(data.raw["loader-1x1"]["loader-1x1"]), "mb-hidden-loader-" .. tier.name)
+  local loader = hide(table.deepcopy(raw("loader-1x1", "loader-1x1")), "mb-hidden-loader-" .. tier.name)
   loader.speed = speed
   protos[#protos + 1] = loader
 end
 
-local buffer = hide(table.deepcopy(data.raw["container"]["steel-chest"]), "mb-hidden-buffer")
+local buffer = hide(table.deepcopy(raw("container", "steel-chest")), "mb-hidden-buffer")
 -- A loader only takes from a container with "player-creation" (measured: a steel chest without
 -- it, or with only "placeable-neutral", gets no loader_container).
 buffer.flags[#buffer.flags + 1] = "player-creation"
@@ -83,7 +95,7 @@ buffer.inventory_size = 1
 buffer.quality_affects_inventory_size = false
 protos[#protos + 1] = buffer
 
-local never = table.deepcopy(data.raw["item"]["iron-plate"])
+local never = table.deepcopy(raw("item", "iron-plate"))
 never.name = "mb-hidden-never"
 never.hidden = true
 never.hidden_in_factoriopedia = true

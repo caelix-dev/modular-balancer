@@ -785,6 +785,30 @@ items are copied onto its belts (not onto closed dead ends), the rest go into it
   a merge splitter: input 1 is drawn at up to half a belt until the buffer is empty.
 - A rebuild that fails to place (test hook) leaves the old network untouched.
 
+**Item stacks are carried, not recreated** (Task 2 review I1, fix round 1). `rebuild` reads
+the old network's stacks with `get_detailed_contents` (belts) and slot by slot (buffer), and
+inserts the `LuaItemStack`s themselves.
+- 20 blueprints (one entity each, labelled) and a modular armor with a solar panel in its grid
+  go from a 3:5 to a 1:1 (16 stacks onto the new belts, 5 into the buffer). Every blueprint
+  keeps its label and entity, and the armor keeps its equipment.
+- 340 yumako with spoil fractions 0.2-0.8 (Space Age): total spoilage 169.4000 before and
+  169.4164 after. Items on the new belts keep their own fraction (the freshest is still 0.2000);
+  stacks merged in the buffer average theirs, as in any chest.
+- No item kind was refused by a belt in these tests. A stack refused at a free belt position
+  goes into the buffer as a stack.
+- A rebuild needing more buffer slots than allowed (test: `builder.max_buffer_slots = 1`)
+  returns `nil, "too-many-items"`. The old network's contents and the region count are
+  unchanged.
+- `mb-hidden-never` (cheat-only) is left out of `contents` and dropped by a rebuild.
+
+**Rebuild cost at 64:64** (recorded; `helpers.create_profiler`).
+- An empty `place` of the 4 677-entity network takes 54-57 ms.
+- A rebuild of the same network with every hidden linked-belt position full (14 856 plates, all
+  carried onto the new belts) takes 217-221 ms.
+- So carrying costs about 160 ms, about 11 µs per item (two `get_item_count` calls and one
+  `insert_at` per item), on top of `network.build`. The UPS budget and Task 4 rebuild policy
+  should account for it.
+
 **Atomic placement.** A failure while creating entity 1, 2, 40 or 120 of a 3:5 leaves no
 entity on the hidden surface, and its region is released.
 

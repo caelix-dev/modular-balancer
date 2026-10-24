@@ -192,6 +192,9 @@ describe("placement", function()
           tostring(p and p.belt_speed), tostring(belt)))
       end
     end
+    -- the runtime check control.lua runs on init and configuration change (review M6)
+    local mismatches = builder.speed_mismatches()
+    assert(#mismatches == 0, "speed mismatches: " .. serpent.line(mismatches))
     ---@diagnostic disable-next-line: unnecessary-if
     if script.active_mods["mb-test-speed"] then
       local express = prototypes.entity["express-transport-belt"].belt_speed
@@ -203,7 +206,8 @@ describe("placement", function()
 
   -- No loss and no duplication: a finite stock (1 000 per input) through a running network whose
   -- outputs are then blocked, so it is full of items when it is destroyed. 8:3 (N > M) has
-  -- splitters with an unconnected output (Ruling 5), closed by a filter; the test checks that
+  -- splitters with an unconnected output, closed by output priority plus the mb-hidden-never
+  -- filter (scripts/builder.lua; this supersedes Plan 1's Ruling 5); the test checks that
   -- those splitters hold items before the teardown and that destroy returns them.
   ---@type {[1]: integer, [2]: integer}[]
   local CONSERVATION = { { 3, 5 }, { 8, 3 } }

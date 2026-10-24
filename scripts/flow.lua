@@ -9,7 +9,8 @@
 --   same way: equally, except that an input that cannot supply its half (starved) gives
 --   what it has and the other input gives the rest.
 -- - An unconnected splitter input supplies nothing. An unconnected splitter output takes
---   nothing (in the game it is a dead end that fills with a few items and then blocks).
+--   nothing (in the game scripts/builder.lua closes it with output priority on the dead end
+--   plus a splitter filter for the never-existing item mb-hidden-never, so it takes nothing).
 -- - A lane splitter passes belt totals through unchanged. flow.solve_lanes models lanes.
 -- - A priority splitter (kind "priority", splitter_output_priority on output port 1) sends
 --   what port 1 can take to port 1 and only the rest to port 2. It draws its inputs like

@@ -13,8 +13,9 @@
 -- Every input, output and lane splitter port has exactly one edge. A splitter has at least
 -- three connected ports: for N ~= M some splitters must have one unconnected port, because a
 -- splitter has as many inputs as outputs (N + 2s edge tails = M + 2s edge heads otherwise).
--- An unconnected input supplies nothing; an unconnected output is a dead end that fills
--- with a few items and then blocks.
+-- An unconnected input supplies nothing; an unconnected output is a dead end, which
+-- scripts/builder.lua closes (output priority on it plus a filter for the never-existing item
+-- mb-hidden-never), so it takes nothing.
 --
 -- Plain network (recirc = false), for N <= M (N > M is the transpose of M:N):
 -- - Core(S, b): S = 2^k wires, b butterflies of k stages (stage t pairs wires w and

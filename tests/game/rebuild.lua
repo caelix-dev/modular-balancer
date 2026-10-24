@@ -59,6 +59,8 @@ end
 
 describe("rebuild", function()
   after_each(function()
+    builder.fail_after = nil
+    builder.max_buffer_slots = 65535
     H.teardown_all()
   end)
 
@@ -103,6 +105,9 @@ describe("rebuild", function()
         H.report("shrink 3:5 -> 3:1: %d items left through the single output in 6 000 ticks, %d left in the network",
           out, H.network_items(rig))
         assert(H.network_items(rig) == 0, H.network_items(rig) .. " items still in the network after 6 000 ticks")
+        -- review M5: the drained buffer shrinks back to one slot
+        assert(builder.compact(rig.placed), "compact did not shrink the drained buffer")
+        assert(#rig.placed.buffer.get_inventory(defines.inventory.chest) == 1, "buffer not back to one slot")
         assert(out >= inside, "only " .. out .. " of " .. inside .. " came out")
         assert_conserved(rig, "6 000 ticks after the shrink")
         done()
@@ -192,5 +197,221 @@ describe("rebuild", function()
         done()
       end)
     end)
+  end)
+
+  -- Item data survives a rebuild (review I1): blueprints with entities and labels, and a modular
+  -- armor with equipment in its grid, on the belts of a 3:5 rebuilt as a 1:1 (so most of them go
+  -- through the buffer). Every stack is found again, on the new belts or in the buffer.
+  test("item_data_kept_on_rebuild", function()
+    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local inv = game.create_inventory(40)
+    local want = {}
+    for i = 1, 20 do
+      inv[i].set_stack({ name = "blueprint" })
+      inv[i].set_blueprint_entities({ { entity_number = 1, name = "iron-chest", position = { 0.5, 0.5 } } })
+      inv[i].label = "bp-" .. i
+      want["bp-" .. i] = true
+    end
+    inv[21].set_stack({ name = "modular-armor" })
+    local grid = inv[21].grid or inv[21].create_grid()
+    assert(grid and grid.put({ name = "solar-panel-equipment" }), "could not put equipment into the armor")
+    local lines = {}
+    for _, e in ipairs(old.entities) do
+      if e.type == "linked-belt" then
+        for _, li in ipairs(H.LINES) do
+          lines[#lines + 1] = e.get_transport_line(li)
+        end
+      end
+    end
+    for i = 1, 21 do
+      assert(lines[i].insert_at(0.1, inv[i]), "could not put stack " .. i .. " (" .. inv[i].name .. ") on an old belt")
+    end
+    inv.destroy()
+    local new = assert(builder.rebuild(old, assert(network.build(1, 1)), "express"))
+    local found, on_belts, in_buffer = {}, 0, 0
+    local armor = nil ---@type table?
+    local function look(st, where)
+      if st.name == "blueprint" then
+        assert(st.get_blueprint_entity_count() == 1, (st.label or "?") .. " lost its entities (" .. where .. ")")
+        found[st.label] = true
+      elseif st.name == "modular-armor" then
+        armor = st.grid and st.grid.get_contents() or {}
+      end
+      if where == "belt" then
+        on_belts = on_belts + 1
+      else
+        in_buffer = in_buffer + 1
+      end
+    end
+    for _, e in ipairs(new.entities) do
+      if e.type == "container" then
+        local binv = e.get_inventory(defines.inventory.chest)
+        for i = 1, #binv do
+          if binv[i].valid_for_read then
+            look(binv[i], "buffer")
+          end
+        end
+      else
+        for i = 1, e.get_max_transport_line_index() do
+          for _, d in ipairs(e.get_transport_line(i).get_detailed_contents()) do
+            look(d.stack, "belt")
+          end
+        end
+      end
+    end
+    H.report("item_data_kept_on_rebuild: 20 blueprints and 1 armor; %d stacks on the new belts, %d in the buffer; armor grid %s",
+      on_belts, in_buffer, serpent.line(armor))
+    for label in pairs(want) do
+      assert(found[label], label .. " was not found after the rebuild")
+    end
+    assert(armor and #armor == 1 and armor[1].name == "solar-panel-equipment", "armor lost its equipment: " .. serpent.line(armor))
+    builder.destroy(new)
+  end)
+
+  -- Space Age: spoilage survives a rebuild (review I1). Yumako at known spoil fractions on the
+  -- belts of a 3:5 rebuilt as a 1:1. Items carried onto belts keep their own fraction; stacks
+  -- merged in the buffer average theirs (as in any chest). So the test checks the total spoilage
+  -- (sum of spoil_percent x count), that nothing came back fresher than any item put in, and
+  -- that the items on the new belts still show the spread (the freshest one, 0.2, is among the
+  -- first on the belts).
+  test("spoilage_kept_on_rebuild", function()
+    ---@diagnostic disable-next-line: unnecessary-if
+    if not prototypes.item["yumako"] then
+      H.report("spoilage_kept_on_rebuild: skipped (no Space Age)")
+      return
+    end
+    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local put, sum_before = 0, 0.0
+    for _, e in ipairs(old.entities) do
+      if e.type == "linked-belt" then
+        for _, li in ipairs(H.LINES) do
+          local f = 0.2 + 0.6 * ((put % 7) / 6)
+          if e.get_transport_line(li).insert_at(0.1, { name = "yumako", count = 1, spoil_percent = f }) then
+            put = put + 1
+            sum_before = sum_before + f
+          end
+        end
+      end
+    end
+    local new = assert(builder.rebuild(old, assert(network.build(1, 1)), "express"))
+    local count, sum_after, freshest = 0, 0.0, 1.0
+    local function look(st)
+      count = count + st.count
+      sum_after = sum_after + st.spoil_percent * st.count
+      freshest = math.min(freshest, st.spoil_percent)
+    end
+    for _, e in ipairs(new.entities) do
+      if e.type == "container" then
+        local binv = e.get_inventory(defines.inventory.chest)
+        for i = 1, #binv do
+          if binv[i].valid_for_read then
+            look(binv[i])
+          end
+        end
+      else
+        for i = 1, e.get_max_transport_line_index() do
+          for _, d in ipairs(e.get_transport_line(i).get_detailed_contents()) do
+            look(d.stack)
+          end
+        end
+      end
+    end
+    H.report("spoilage_kept_on_rebuild: %d yumako, total spoilage %.4f before, %.4f after, freshest after %.4f (freshest put 0.2)",
+      put, sum_before, sum_after, freshest)
+    assert(count == put, count .. " of " .. put .. " yumako after the rebuild")
+    assert(math.abs(sum_after - sum_before) <= sum_before * 0.01, "total spoilage changed")
+    assert(freshest >= 0.19, "an item came back fresher than any put in: " .. freshest)
+    assert(freshest <= 0.21, "no item kept its own spoil fraction on the belts (freshest " .. freshest .. ")")
+    builder.destroy(new)
+  end)
+
+  -- Review M2: a rebuild that needs more buffer slots than allowed is refused and leaves the old
+  -- network (and the region count) as it was.
+  test("too_many_items_keeps_the_old_network", function()
+    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local put = 0
+    for _, e in ipairs(old.entities) do
+      if e.type == "linked-belt" then
+        for k, li in ipairs(H.LINES) do
+          if e.get_transport_line(li).insert_at(0.1, { name = k == 1 and "iron-plate" or "copper-plate", count = 1 }) then
+            put = put + 1
+          end
+        end
+      end
+    end
+    local before = serpent.line(builder.contents(old))
+    local regions = 0
+    for _ in pairs(storage.regions.used) do
+      regions = regions + 1
+    end
+    builder.max_buffer_slots = 1
+    local new, err = builder.rebuild(old, assert(network.build(1, 1)), "express")
+    builder.max_buffer_slots = 65535
+    local after_regions = 0
+    for _ in pairs(storage.regions.used) do
+      after_regions = after_regions + 1
+    end
+    H.report("too_many_items: %d items, rebuild returned %s, %s", put, tostring(new), tostring(err))
+    assert(new == nil and err == "too-many-items", "rebuild was not refused: " .. tostring(err))
+    assert(serpent.line(builder.contents(old)) == before, "the old network changed: " .. serpent.line(builder.contents(old)))
+    assert(after_regions == regions, "region count changed: " .. regions .. " -> " .. after_regions)
+    builder.destroy(old)
+  end)
+
+  -- Review M3: mb-hidden-never can only appear by cheating. contents leaves it out and a rebuild
+  -- drops it (so a jam it causes clears), while every other item is kept.
+  test("never_item_is_dropped_on_rebuild", function()
+    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local lines = {}
+    for _, e in ipairs(old.entities) do
+      if e.type == "linked-belt" then
+        lines[#lines + 1] = e.get_transport_line(1)
+      end
+    end
+    assert(lines[1].insert_at(0.1, { name = "mb-hidden-never", count = 1 }), "could not put the never item on a belt")
+    assert(lines[2].insert_at(0.1, { name = "iron-plate", count = 1 }), "could not put a plate on a belt")
+    local before = builder.contents(old)
+    local new = assert(builder.rebuild(old, assert(network.build(3, 5)), "express"))
+    local after = builder.contents(new)
+    assert(#before == 1 and before[1].name == "iron-plate", "contents listed: " .. serpent.line(before))
+    assert(serpent.line(after) == serpent.line(before), "after the rebuild: " .. serpent.line(after))
+    builder.destroy(new)
+  end)
+
+  -- Review M7: cost of a rebuild of a large, full network (recorded). A 64:64 with every
+  -- position of every hidden linked belt holding a plate, rebuilt as a 64:64.
+  test("rebuild_cost_at_64_64", function()
+    local net = assert(network.build(64, 64))
+    local old = assert(builder.place(net, "express"))
+    local put = 0
+    for _, e in ipairs(old.entities) do
+      if e.type == "linked-belt" then
+        for _, li in ipairs(H.LINES) do
+          for _, pos in ipairs({ 0, 0.25 }) do
+            if e.get_transport_line(li).insert_at(pos, { name = "iron-plate", count = 1 }) then
+              put = put + 1
+            end
+          end
+        end
+      end
+    end
+    -- an empty place of the same network, for comparison: the rest of the rebuild is carrying the
+    -- items and destroying the old network
+    local place_only = helpers.create_profiler()
+    local empty = assert(builder.place(net, "express"))
+    place_only.stop()
+    builder.destroy(empty)
+    local profiler = helpers.create_profiler()
+    local new = assert(builder.rebuild(old, net, "express"))
+    profiler.stop()
+    log({ "", "MB-TEST rebuild_cost_at_64_64: an empty place of the same network took ", place_only })
+    local after = 0
+    for _, it in ipairs(builder.contents(new)) do
+      after = after + it.count
+    end
+    log({ "", "MB-TEST rebuild_cost_at_64_64: ", tostring(#new.entities), " entities, ", tostring(put),
+      " items carried, ", tostring(new.buffer.get_item_count()), " into the buffer; rebuild took ", profiler })
+    assert(after == put, after .. " of " .. put .. " items after the rebuild")
+    builder.destroy(new)
   end)
 end)

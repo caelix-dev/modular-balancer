@@ -32,6 +32,7 @@
 --   empties the chest (row y0 + 1); x0 + 2: a merge splitter; x0 + 3: an input-type linked belt
 --   (row y0) linked to the network's own input 1. The merge splitter's lower output is a dead
 --   end, closed with the same filter as any other dead end.
+-- After a big shrink the chest can be very large; builder.compact shrinks it back once empty.
 -- So input 1 and the buffer share one network input: while the buffer holds items, input 1 is
 -- drawn at up to half a belt; once it is empty, input 1 runs at full speed and the network is
 -- unchanged. (A separate network input for the buffer would sit empty in the steady state, and
@@ -43,7 +44,16 @@ local builder = {}
 local CELL_W, CELL_H = 4, 3
 local BUFFER_W = 5
 local EAST = defines.direction.east
-local MAX_BUFFER_SLOTS = 65535 -- uint16, set_inventory_size_override
+local NEVER = "mb-hidden-never"
+local TIER_BELTS = {
+  basic = "transport-belt",
+  fast = "fast-transport-belt",
+  express = "express-transport-belt",
+  turbo = "turbo-transport-belt",
+}
+
+-- Largest buffer (set_inventory_size_override takes a uint16). A field so a test can lower it.
+builder.max_buffer_slots = 65535
 
 -- Test hook (tests/game/placement.lua): when set to k, place fails while creating entity k.
 ---@type integer?
@@ -181,6 +191,9 @@ local function build(net, tier, placed, s)
   merge.splitter_filter = { name = "mb-hidden-never" }
   placed.dead_ends[merge.unit_number] = true
   local tail = linked_belt({ bx + 3.5, by + 0.5 }, "input")
+  if not placed.inputs[1] then
+    error("builder: network has no input 1")
+  end
   tail.connect_linked_belts(placed.inputs[1])
   placed.inputs[1] = head
 end
@@ -220,12 +233,17 @@ function builder.place(net, tier, force)
 end
 
 -- The items on (and in) every entity of `placed`: one entry per item and quality, sorted by name
--- then quality: { {name = "iron-plate", quality = "normal", count = 10}, ... }.
+-- then quality: { {name = "iron-plate", quality = "normal", count = 10}, ... }. A count summary
+-- (rebuild carries the stacks themselves). `mb-hidden-never` is left out: it can only exist by
+-- cheating, and dropping it on destroy or rebuild clears the lane it jams.
 ---@param placed table
 ---@return {name: string, quality: string, count: integer}[] items
 function builder.contents(placed)
   local by_key, items = {}, {}
   local function add(stack)
+    if stack.name == NEVER then
+      return
+    end
     local quality = stack.quality or "normal"
     local key = stack.name .. "/" .. quality
     local entry = by_key[key]
@@ -279,17 +297,62 @@ function builder.destroy(placed)
   return items
 end
 
--- Puts `items` into `placed`: first onto its hidden belts wherever there is room, then the rest
--- into its buffer chest, grown to fit. Returns false if the buffer cannot hold the rest (more
--- than MAX_BUFFER_SLOTS stacks); the caller then throws `placed` away.
-local function carry_in(placed, items)
-  local pending = {}
-  for _, it in ipairs(items) do
-    pending[#pending + 1] = { name = it.name, quality = it.quality, count = it.count }
+-- Every item stack on (and in) the entities of `placed`, as LuaItemStack handles into those
+-- entities (not copies): belt items via get_detailed_contents, the buffer slot by slot. Items
+-- of `mb-hidden-never` are left out.
+local function stacks_of(placed)
+  local list = {}
+  for _, e in ipairs(placed.entities) do
+    if e.valid then
+      if e.type == "container" then
+        local inv = e.get_inventory(defines.inventory.chest)
+        for i = 1, #inv do
+          local st = inv[i]
+          if st.valid_for_read and st.name ~= NEVER then
+            list[#list + 1] = st
+          end
+        end
+      else
+        for i = 1, e.get_max_transport_line_index() do
+          for _, d in ipairs(e.get_transport_line(i).get_detailed_contents()) do
+            if d.stack.name ~= NEVER then
+              list[#list + 1] = d.stack
+            end
+          end
+        end
+      end
+    end
+  end
+  return list
+end
+
+-- Puts copies of `sources` (LuaItemStacks of the old network, left untouched) into `placed`,
+-- keeping item data and spoilage:
+-- - onto the hidden belts, one item at a time (insert_at with the stack itself, so each belt
+--   item keeps its own data and spoil fraction), wherever there is room. A stack that a free
+--   belt position refuses goes to the buffer.
+-- - the rest into the buffer chest, slot by slot. A whole stack is inserted as itself; the
+--   rest of a partly moved stack (only a belt stack of several plain items) as a definition
+--   with its spoil fraction. Inserting merges stacks like any chest: merged spoilables average
+--   their spoil fraction, so the total spoilage is kept. The chest is then sorted and shrunk to
+--   the slots it uses.
+-- Returns false if more than builder.max_buffer_slots slots would be needed.
+---@return boolean
+local function carry_in(placed, sources)
+  local left = {} -- items of sources[i] not yet carried
+  for i, st in ipairs(sources) do
+    left[i] = st.count
   end
   local k = 1
+  local function current()
+    while k <= #sources and left[k] == 0 do
+      k = k + 1
+    end
+    return k <= #sources and sources[k] or nil
+  end
+  local st = current()
   for _, e in ipairs(placed.entities) do
-    if k > #pending then
+    if not st then
       break
     end
     -- not onto a dead-end splitter: an item put on its closed output line would stay there
@@ -297,49 +360,58 @@ local function carry_in(placed, items)
       for i = 1, e.get_max_transport_line_index() do
         local line = e.get_transport_line(i)
         local pos = 0.0
-        while pos < line.line_length and k <= #pending do
-          local it = pending[k]
-          if line.insert_at(pos, { name = it.name, quality = it.quality, count = 1 }) then
-            it.count = it.count - 1
-            if it.count == 0 then
-              k = k + 1
+        while st and pos < line.line_length do
+          if line.can_insert_at(pos) then
+            local before = line.get_item_count()
+            local moved = line.insert_at(pos, st) and line.get_item_count() - before or 0
+            if moved > 0 then
+              left[k] = math.max(0, left[k] - moved)
+            else
+              k = k + 1 -- refused on a free position: this stack goes to the buffer
             end
+            st = current()
           end
           pos = pos + 0.25
         end
       end
     end
   end
-  if k > #pending then
-    return true
-  end
-  local slots = 0
-  for j = k, #pending do
-    local it = pending[j] ---@type {name: string, quality: string, count: integer}
-    local proto = prototypes.item[it.name] ---@type LuaItemPrototype
-    slots = slots + math.ceil(it.count / proto.stack_size)
-  end
-  if slots > MAX_BUFFER_SLOTS then
-    return false
-  end
-  -- the new network's buffer is empty, so it needs exactly `slots` slots
-  local buffer = placed.buffer
-  buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, slots))
-  local inv = buffer.get_inventory(defines.inventory.chest)
-  for j = k, #pending do
-    local it = pending[j] ---@type {name: string, quality: string, count: integer}
-    local n = inv.insert({ name = it.name, quality = it.quality, count = it.count })
-    if n ~= it.count then
-      return false
+  local rest = 0
+  for i = 1, #sources do
+    if left[i] > 0 then
+      rest = rest + 1
     end
   end
+  if rest == 0 then
+    return true
+  end
+  local buffer = placed.buffer
+  -- the new network's buffer is empty: one slot per remaining stack is enough before merging
+  buffer.set_inventory_size_override(defines.inventory.chest, math.min(rest, builder.max_buffer_slots))
+  local inv = buffer.get_inventory(defines.inventory.chest)
+  for i, src in ipairs(sources) do
+    local n = left[i]
+    if n > 0 then
+      local stack = src
+      if n < src.count then
+        stack = { name = src.name, quality = src.quality.name, count = n, spoil_percent = src.spoil_percent }
+      end
+      if inv.insert(stack) ~= n then
+        return false
+      end
+    end
+  end
+  inv.sort_and_merge()
+  local used = #inv - inv.count_empty_stacks()
+  buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, used))
   return true
 end
 
--- Replaces `old` by `net`: places the new network, copies every item of the old one into it
--- (carry_in) and then destroys the old one. All or nothing: if the new network cannot be placed
--- or cannot hold the items, the new one is destroyed, `old` is left as it was, and it returns
--- nil and the error. The caller relinks the visible edges to the new inputs and outputs.
+-- Replaces `old` by `net`: places the new network, copies every item stack of the old one into it
+-- (carry_in, item data and spoilage kept) and then destroys the old one. All or nothing: if the
+-- new network cannot be placed, cannot hold the items, or carrying them in raises an error, the
+-- new one is destroyed, `old` is left as it was, and it returns nil and the error. The caller
+-- relinks the visible edges to the new inputs and outputs.
 ---@param old table Placed
 ---@param net mb.Network
 ---@param tier string
@@ -351,12 +423,53 @@ function builder.rebuild(old, net, tier, force)
   if not new then
     return nil, err
   end
-  if not carry_in(new, builder.contents(old)) then
+  local carried, result = pcall(carry_in, new, stacks_of(old))
+  if not carried or not result then
     builder.destroy(new)
-    return nil, "too-many-items"
+    if carried then
+      return nil, "too-many-items"
+    end
+    return nil, tostring(result)
   end
   builder.destroy(old)
   return new
+end
+
+-- Shrinks `placed`'s buffer chest back to its prototype size once it is empty (after a big
+-- shrink it can have up to builder.max_buffer_slots slots). No per-tick work: call it from an
+-- event that touches the group (Plan 2 Task 4). Returns true if it shrank the chest.
+---@param placed table
+---@return boolean
+function builder.compact(placed)
+  local buffer = placed.buffer
+  if buffer and buffer.valid and buffer.get_item_count() == 0
+    and buffer.get_inventory_size_override(defines.inventory.chest) then
+    buffer.set_inventory_size_override(defines.inventory.chest, nil)
+    return true
+  end
+  return false
+end
+
+-- Hidden tier entities whose speed differs from their tier's belt (a mod changed a belt speed
+-- after modular-balancer's data-final-fixes read it). Returns a list of messages; control.lua
+-- logs them on init and configuration change.
+---@return string[]
+function builder.speed_mismatches()
+  local out = {}
+  for tier, belt in pairs(TIER_BELTS) do
+    local bp = prototypes.entity[belt]
+    ---@diagnostic disable-next-line: unnecessary-if
+    if bp and prototypes.entity["mb-hidden-linked-belt-" .. tier] then
+      for _, kind in ipairs({ "splitter", "linked-belt", "lane-splitter", "loader" }) do
+        local p = prototypes.entity["mb-hidden-" .. kind .. "-" .. tier]
+        if not p or p.belt_speed ~= bp.belt_speed then
+          out[#out + 1] = string.format("mb-hidden-%s-%s speed %s, %s speed %s", kind, tier,
+            tostring(p and p.belt_speed), belt, tostring(bp.belt_speed))
+        end
+      end
+    end
+  end
+  return out
 end
 
 return builder

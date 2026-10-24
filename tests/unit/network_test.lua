@@ -277,6 +277,75 @@ return {
     end
   end,
 
+  -- User requirement: outputs stay equal for any input mix. (a) Each input alone at 1.0
+  -- gives every output 1 / n_out of it. (b) 50 random input-rate vectors in [0, 1] give
+  -- equal outputs totalling min(sum, n_out). (c) The same with balance_lanes in the
+  -- lane-aware model: each input lane alone, and random lane rates in [0, 0.5], give equal
+  -- lanes on every output. Outputs unbounded throughout.
+  outputs_equal_for_any_input_mix = function()
+    local rand = lcg(777)
+    for _, r in ipairs(balance_ratios()) do
+      local n, m = r[1], r[2]
+      local net = build(n, m)
+      local lnet = build(n, m, { balance_lanes = true })
+      local open = {}
+      for j = 1, m do
+        open[j] = 1
+      end
+      local function check(supply, label)
+        local total = 0
+        for i = 1, n do
+          total = total + supply[i]
+        end
+        local expected = math.min(total, m) / m
+        local state = flow.solve(net, supply, open)
+        for j = 1, m do
+          local f = state.f[state.out_edge[j]]
+          assert(near(f, expected), string.format("%d:%d %s: output %d gets %.15g, expected %.15g", n, m, label, j, f, expected))
+        end
+      end
+      local function check_lanes(left, right, label)
+        local total = 0
+        for i = 1, n do
+          total = total + left[i] + right[i]
+        end
+        local expected = math.min(total, m) / (2 * m)
+        local lanes = flow.solve_lanes(lnet, left, right, 1)
+        for j = 1, m do
+          local o = assert(lanes.out[j], "missing output")
+          assert(
+            near(o.left, expected) and near(o.right, expected),
+            string.format("%d:%d lanes %s: output %d %.15g / %.15g, expected %.15g", n, m, label, j, o.left, o.right, expected)
+          )
+        end
+      end
+      for alone = 1, n do
+        local supply, left, right, zero = {}, {}, {}, {}
+        for i = 1, n do
+          supply[i] = i == alone and 1 or 0
+          left[i] = i == alone and 0.5 or 0
+          zero[i] = 0
+        end
+        check(supply, "input " .. alone .. " alone")
+        check_lanes(left, zero, "left lane of input " .. alone .. " alone")
+        for i = 1, n do
+          right[i] = left[i]
+        end
+        check_lanes(zero, right, "right lane of input " .. alone .. " alone")
+      end
+      for k = 1, 50 do
+        local supply, left, right = {}, {}, {}
+        for i = 1, n do
+          supply[i] = rand(1001) / 1000
+          left[i] = rand(501) / 1000
+          right[i] = rand(501) / 1000
+        end
+        check(supply, "random mix " .. k)
+        check_lanes(left, right, "random mix " .. k)
+      end
+    end
+  end,
+
   throughput_unlimited = function()
     for n = 1, 8 do
       for m = 1, 8 do

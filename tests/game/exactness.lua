@@ -1,4 +1,5 @@
--- Exactness of placed networks in the real engine (express tier). Each test builds a rig
+-- Exactness of placed v2 networks (recirculation on, scripts/network.lua) in the real engine
+-- (express tier). Each test builds a rig
 -- (tests/game/harness.lua): finite source chests and loaders on nauvis, linked into the hidden
 -- network, and loaders into counting chests at the outputs. Rates are measured over WINDOW
 -- ticks after a WARMUP-tick warm-up; every bound is 1 %. Results are logged with the prefix
@@ -8,7 +9,10 @@ local H = require("tests.game.harness")
 -- inserter_share compares the engine with it (Ruling 6).
 local flow = require("scripts.flow")
 
-local WARMUP, WINDOW = 600, 3600
+-- Recirculating networks settle in about 2 400-3 000 ticks from an empty rig (Plan 1 F8; v2:
+-- recirc_settling_3_5 below), so the warm-up is 3 000 ticks (the brief's 600 was for plain
+-- networks).
+local WARMUP, WINDOW = 3000, 3600
 -- inputs_drawn_equally only: behind half-speed outputs the network and harness fill up for a
 -- while (3:5: about 1 300 items at a 22.5/s surplus, roughly 3 500 ticks), and the claim is
 -- about the backed-up steady state, so that test warms up for DRAW_WARMUP ticks (a deviation
@@ -152,31 +156,128 @@ describe("exactness", function()
     end)
   end)
 
+  -- Final review M2: the network must really be full before the release. While every output
+  -- is blocked, the input draw stays the same over the last 120 ticks before the release.
   test("backpressure_then_release_moves_again", function()
-    async(WARMUP + 600 + WINDOW + 300)
+    local BLOCK = 2400
+    async(WARMUP + BLOCK + WINDOW + 300)
     local rig = H.rig({ n = 3, m = 5 })
+    local function draws()
+      local c = {}
+      for i = 1, 3 do
+        c[i] = H.drawn(rig, i)
+      end
+      return c
+    end
     after_ticks(WARMUP, function()
       for _, l in ipairs(rig.sink_loaders) do
         l.disabled_by_script = true
       end
-      local blocked = sink_counts(rig)()
-      after_ticks(600, function()
-        local still = sink_counts(rig)()
-        for j = 1, 5 do
-          assert(still[j] == blocked[j], "output " .. j .. " moved while blocked")
-        end
-        for _, l in ipairs(rig.sink_loaders) do
-          l.disabled_by_script = false
-        end
-        H.measure(sink_counts(rig), 1, WINDOW, function(rates)
-          H.report("backpressure_then_release 3:5: after release, outputs %s items/s, total %.3f", fmt(rates), H.sum(rates))
-          H.assert_equal(rates, "output")
-          assert(H.sum(rates) >= 3 * RATE * 0.99, "flow did not resume at full rate: " .. H.sum(rates))
-          done()
+      after_ticks(BLOCK - 120, function()
+        local before = draws()
+        after_ticks(120, function()
+          local at = draws()
+          for i = 1, 3 do
+            assert(at[i] == before[i], string.format("input %d still drew %d items in the 120 ticks before the release: not backed up",
+              i, at[i] - before[i]))
+          end
+          H.report("backpressure 3:5: no input draw in the last 120 of %d blocked ticks; %d items in the network", BLOCK, H.network_items(rig))
+          for _, l in ipairs(rig.sink_loaders) do
+            l.disabled_by_script = false
+          end
+          H.measure(sink_counts(rig), 1, WINDOW, function(rates)
+            H.report("backpressure_then_release 3:5: after release, outputs %s items/s, total %.3f", fmt(rates), H.sum(rates))
+            H.assert_equal(rates, "output")
+            assert(H.sum(rates) >= 3 * RATE * 0.99, "flow did not resume at full rate: " .. H.sum(rates))
+            done()
+          end)
         end)
       end)
     end)
   end)
+
+  -- Spec Update 3: recirculation. One output throttled to a third of a belt (a basic-speed sink
+  -- loader); the others share the rest equally.
+  for _, r in ipairs({ { 2, 3 }, { 3, 5 } }) do
+    local n, m = r[1], r[2]
+    test("recirc_slow_belt_" .. n .. "_" .. m, function()
+      async(WARMUP + WINDOW + 300)
+      local rig = H.rig({ n = n, m = m, sinks = { "basic" } })
+      H.measure(sink_counts(rig), WARMUP, WINDOW, function(rates)
+        local rest = { table.unpack(rates, 2, m) }
+        local expected = (n * RATE - RATE / 3) / (m - 1)
+        H.report("recirc_slow_belt %d:%d (output 1 at 15): output 1 %.3f, others %s (expected %.3f each), total %.3f",
+          n, m, rates[1], fmt(rest), expected, H.sum(rates))
+        near(rates[1], RATE / 3, "slow output")
+        H.assert_equal(rest, "other output")
+        near(H.sum(rest) / (m - 1), expected, "other outputs")
+        near(H.sum(rates), n * RATE, "total")
+        done()
+      end)
+    end)
+  end
+
+  -- Settling time of a recirculating network (recorded): 3:5 with output 1 slow, total delivered
+  -- per 600-tick window from an empty rig. The last window must be within 1 % of 135.
+  test("recirc_settling_3_5", function()
+    async(12 * 600 + 300)
+    local rig = H.rig({ n = 3, m = 5, sinks = { "basic" } })
+    local windows, prev = {}, 0.0
+    local function step(k)
+      after_ticks(600, function()
+        local t = H.sum(sink_counts(rig)())
+        windows[k] = (t - prev) / 10
+        prev = t
+        if k < 12 then
+          step(k + 1)
+        else
+          H.report("recirc_settling 3:5 (output 1 at 15): total items/s per 600-tick window: %s", fmt(windows))
+          near(windows[12], 3 * RATE, "last window")
+          done()
+        end
+      end)
+    end
+    step(1)
+  end)
+
+  -- Vanilla splitter output priority behaves as the model's priority node: a single priority
+  -- splitter fed a full belt (iron on the left lane, copper on the right). Port 1 (priority)
+  -- takes what its sink takes, per lane; port 2 gets the rest of each lane.
+  for _, c in ipairs({ { "half", 0.5 }, { "basic", 1 / 3 } }) do
+    test("priority_splitter_matches_model_" .. c[1], function()
+      async(WARMUP + WINDOW + 300)
+      local net = {
+        n_in = 1, n_out = 2, splitters = {}, priority = { { kind = "priority", id = 1 } },
+        edges = {
+          { from = { kind = "in", id = 1, port = 1 }, to = { kind = "priority", id = 1, port = 1 } },
+          { from = { kind = "priority", id = 1, port = 1 }, to = { kind = "out", id = 1, port = 1 } },
+          { from = { kind = "priority", id = 1, port = 2 }, to = { kind = "out", id = 2, port = 1 } },
+        },
+      }
+      local rig = H.rig({ n = 1, m = 2, net = net, feed = { "lanes" }, sinks = { c[1] } })
+      local state = flow.solve(net, { 1 }, { c[2], 1 })
+      local model = { state.f[state.out_edge[1]] * RATE, state.f[state.out_edge[2]] * RATE }
+      local function counts()
+        local r = {}
+        for j = 1, 2 do
+          r[#r + 1] = rig.sinks[j].get_item_count("iron-plate")
+          r[#r + 1] = rig.sinks[j].get_item_count("copper-plate")
+        end
+        return r
+      end
+      H.measure(counts, WARMUP, WINDOW, function(rates)
+        H.report("priority splitter (port 1 sink %s): port 1 iron %.3f copper %.3f, port 2 iron %.3f copper %.3f; model port 1 %.3f port 2 %.3f",
+          c[1], rates[1], rates[2], rates[3], rates[4], model[1], model[2])
+        near(rates[1] + rates[2], model[1], "port 1 against the model")
+        near(rates[3] + rates[4], model[2], "port 2 against the model")
+        near(rates[1], model[1] / 2, "port 1 iron (left lane)")
+        near(rates[2], model[1] / 2, "port 1 copper (right lane)")
+        near(rates[3], model[2] / 2, "port 2 iron (left lane)")
+        near(rates[4], model[2] / 2, "port 2 copper (right lane)")
+        done()
+      end)
+    end)
+  end
 
   -- F3: one extra network output feeds a belt port (an output linked belt under a block, a dead
   -- end) that three inserters take from. The port must get exactly a belt output's share.

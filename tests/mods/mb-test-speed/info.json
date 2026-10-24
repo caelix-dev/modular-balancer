@@ -1,0 +1,8 @@
+{
+  "name": "mb-test-speed",
+  "version": "0.0.1",
+  "title": "Modular Balancer test: faster express belt",
+  "author": "caelix",
+  "factorio_version": "2.1",
+  "dependencies": ["base >= 2.1"]
+}

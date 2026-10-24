@@ -644,20 +644,22 @@ So whatever output j does not take re-enters the network and is spread over all 
 In steady state each output takes min(its demand, x), and x is the same for every output that
 is not limited ("water filling").
 
-**Measured in game** (express, 3 600 ticks after a 3 000-tick warm-up, items/s; full log in
-`feasibility/t5-results-vanilla.txt`):
+**Measured in game** (express, 3 600 ticks after a 3 000-tick warm-up, items/s; from the run
+at `f90270a`, full log in `feasibility/t5-results-vanilla.txt`; refreshed in Plan 2 Task 2,
+final review M6. The prototype suite `tests/game/recirculation.lua` was removed in Plan 2 Task 2:
+the v2 generator recirculates by itself, see F9):
 
 | case | 2:3 | 3:5 |
 | --- | --- | --- |
-| all outputs free | 30.000 x3 = 90.000 (plain network: 90) | 27.000 / 26.983 / 27.000 x3 = 134.983 (135) |
-| input 1 at a third | 20.000 x3 = 60.000 (supply 60) | 21.000 x5 = 105.000 (105) |
+| all outputs free | 30.000 x3 = 90.000 (plain network: 90) | 27.000 26.967 26.983 27.000 27.000 = 134.950 (135) |
+| input 1 at a third | 20.000 x3 = 60.000 (supply 60) | 21.000 x3, 21.017, 21.000 = 105.017 (105) |
 | output 1 slow (15) | 15.000; others 37.500 37.500 (expected 37.5) | 15.000; others 30.000 x4 (30) |
-| inserter port slow (2.733) | belts 29.083 x3 (expected 29.089) | belts 26.450 x5 (26.453) |
-| only outputs 1, 2 open | 45.000 / 44.983 | 45.000 / 45.000 |
+| inserter port slow (2.733) | belts 29.100 x3 (expected 29.089) | belts 26.450 x5 (26.453) |
+| only outputs 1, 2 open | 45.000 / 45.000; draw 45.000 / 45.000 | 45.000 / 45.000; draw 45.000 / 22.500 / 22.483 |
 
 - No loss or duplication: every F8 test checks at its end that sources + belts + network +
   recirculation entities + sinks + port equal the stock. All passed. All F8 tests pass in
-  vanilla and Space Age (44/44 in Space Age).
+  vanilla and Space Age (whole suite at `f90270a`: 47/47 vanilla, 48/48 Space Age).
 - Throughput with all outputs free is unchanged against the plain network, within 0.02 %.
 - **It takes longer to settle.** From an empty rig, the total reaches steady state after about
   2 400-3 000 ticks, against 600 for the plain network. Per 600-tick window, 2:3 with a slow
@@ -710,7 +712,103 @@ the largest ratios shrink to n + M ≤ 16 (8:8 fits, 9:8 and 16:16 do not). The 
 (n + M):M. Merging several overflows into fewer loop inputs would make it smaller, but that
 changes when the overflow backs up and needs its own measurement.
 
+## F9: builder v2 in the engine (Plan 2 Task 2)
+
+Logs: `feasibility/p2-t2-results-vanilla.txt` (53/53) and `p2-t2-results-space-age.txt`
+(55/55). Express tier unless noted. All rates are items/s over 3 600 ticks.
+
+**Vanilla output priority behaves like the model's priority node, per lane.** A single
+priority splitter is fed a full belt (iron on the left lane, copper on the right). Port 1 has
+priority and its sink is throttled:
+
+| port 1 sink | port 1 iron / copper | port 2 iron / copper | `flow.solve` port 1 / port 2 |
+| --- | --- | --- | --- |
+| half speed (22.5) | 11.250 / 11.250 | 11.250 / 11.250 | 22.5 / 22.5 |
+| basic (15) | 7.500 / 7.500 | 15.000 / 15.000 | 15 / 30 |
+
+Each lane is prioritized on its own: port 1 takes what it can from each lane, and port 2 gets
+the rest of that lane.
+
+**v2 networks (recirculation on) are exact on every Plan 1 ratio.**
+- 2:3, 3:5, 8:3, 1:5, 5:1 and 1:1 give equal outputs, equal draw and full throughput. For
+  example 3:5: outputs 26.983-27.000; draw 37.500-37.517 against 5 x 22.5 delivered.
+- Unequal inputs, mixed lanes, lane balance and the belt port all hold.
+- `recirc_slow_belt`: 2:3 gives 15.000 / 37.500 / 37.500; 3:5 gives 15.000 / 30.000 x4.
+- Throttled `inserter_share` 2:3: belts 29.083 / 29.100 / 29.083, port 2.717; `flow.solve`
+  gives 29.094 x3.
+
+**Settling.** v2 3:5 with one slow output, total per 600-tick window from an empty rig:
+
+  33.4, 125.8, 134.6, 134.8, 135.2, ...
+
+It is within 1 % of 135 from the third window, about 1 800 ticks. The F8 prototype needed
+2 400-3 000. The suites still warm up for 3 000 ticks.
+
+**Backpressure reaches the full state** (final review M2). In a 3:5 with every output blocked,
+no input draws anything in the last 120 of 2 400 blocked ticks, and the network then holds
+1 528 items. After the release the outputs run at 29.5 each, flushing above the 27 steady
+state, and are equal.
+
+**Dead ends are closed by a filter.**
+- A plain splitter with one unconnected output gets output priority on the dead end, with
+  `splitter_filter` set to `mb-hidden-never`, a hidden item that never exists. So no item
+  enters the dead end.
+- Without the filter (first try, priority on the live side only), a 3:1 network kept 12 items
+  on its dead ends after the shrink drain: they fill whenever the live output backs up, and
+  never leave.
+- With the filter, after the shrink every item came out (0 left in the network).
+
+**A loader only serves a container with the `player-creation` flag.** Measured on nauvis with a
+test loader and steel-chest copies:
+- `loader_container` stays nil when the chest's flags are the hidden set or only
+  `placeable-neutral`;
+- it is set with the vanilla flags, or with `player-creation` plus `not-selectable-in-game`;
+- `hidden`, `minable = nil`, `allow_copy_paste = false`, `inventory_size = 1` and
+  `quality_affects_inventory_size = false` make no difference.
+
+`mb-hidden-buffer` therefore keeps `player-creation`.
+
+**Rebuild and carry-over** (`builder.rebuild`). The new network is placed, the old network's
+items are copied onto its belts (not onto closed dead ends), the rest go into its buffer chest
+(grown with `set_inventory_size_override`), and then the old network is destroyed.
+
+| case | items in the network | after the rebuild | buffer |
+| --- | --- | --- | --- |
+| backed-up 3:5 -> 3:5 | 1 528 | 1 528 | 28 |
+| backed-up 3:5 -> 3:1 (shrink) | 1 528 | 1 528 | 1 460 (15 slots) |
+| backed-up 3:1 -> 3:8 (grow) | 110 | 110 | 0 |
+| 3:5 with 680 plates -> 1:1 | 680 | 680, normal and uncommon kept (Space Age) | 664 |
+
+- After the shrink, with feeding stopped, the single output delivered 1 688 items in 6 000
+  ticks and the network was empty.
+- While the buffer drains, the output still runs at 45.000. The buffer shares input 1 through
+  a merge splitter: input 1 is drawn at up to half a belt until the buffer is empty.
+- A rebuild that fails to place (test hook) leaves the old network untouched.
+
+**Atomic placement.** A failure while creating entity 1, 2, 40 or 120 of a 3:5 leaves no
+entity on the hidden surface, and its region is released.
+
+**Tier speeds come from the final prototypes** (final review M3). The hidden prototypes are
+built in `data-final-fixes.lua`. With the test mod `tests/mods/mb-test-speed` (express belt
+26/256 in its data-final-fixes), every hidden express entity had speed 0.1015625 (MCP check,
+`feasibility/p2-t2-speed-mod.txt`).
+
+**Lane splitters per tier** (final review M8). A 1:1 with balance lanes, left lane only:
+
+| tier | left / right lane |
+| --- | --- |
+| basic | 3.750 / 3.750 |
+| fast | 7.500 / 7.500 |
+| express | 11.250 / 11.250 |
+| turbo | 15.000 / 15.000 |
+
+Each is exactly half a belt of its tier.
+
 ## Concerns for Plan 2 from Task 5 (parked review minors)
+
+Status after Plan 2 Task 2: the first item is fixed (`builder.place` is all or nothing), and
+`Placed` now records origin, size, tier and force. The allocator and cross-force items are still
+open.
 
 - **A failed `builder.place` leaves a half-built network.** If a `create_entity` fails, the
   builder asserts after earlier entities already exist, and they are never destroyed. Review

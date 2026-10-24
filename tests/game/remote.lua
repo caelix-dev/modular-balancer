@@ -10,7 +10,6 @@
 --   exec_lua: return remote.call("mb-test", "bench_vanilla", 50)  -- 50 x 24 vanilla splitters
 -- Loaded from control.lua only with factorio-test. Results: docs/feasibility.md F6, F7.
 local network = require("scripts.network")
-local surface = require("scripts.surface")
 local builder = require("scripts.builder")
 local H = require("tests.game.harness")
 
@@ -21,7 +20,7 @@ local STOCK = 1000
 local function build()
   local rig = H.rig({ n = 3, m = 5, stock = STOCK })
   storage.mb_test = rig
-  return { built = true, entities = #rig.placed.entities, region = rig.origin }
+  return { built = true, entities = #rig.placed.entities, region = rig.placed.origin }
 end
 
 local function count()
@@ -93,8 +92,7 @@ local function bench_hidden(copies)
   local entities = 0
   for _ = 1, copies do
     local net = assert(network.build(8, 3))
-    local w, h = builder.size(net)
-    local placed = builder.place(net, "express", surface.reserve(w, h))
+    local placed = assert(builder.place(net, "express"))
     entities = entities + #placed.entities
     local o = H.area(16, 8 * 2)
     for i = 1, 8 do

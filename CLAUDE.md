@@ -31,12 +31,12 @@ Build a release zip from `git archive` (committed files only), never from the wo
 
 ## File map
 
-- `info.json`, `settings.lua`, `data.lua`, `control.lua` - mod entry points. `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
-- `prototypes/hidden.lua` - hidden per-tier entities of the balancing network (`mb-hidden-splitter-<tier>`, `mb-hidden-linked-belt-<tier>`, `mb-hidden-lane-splitter-<tier>`).
+- `info.json`, `settings.lua`, `data.lua`, `data-final-fixes.lua`, `control.lua` - mod entry points (`data-final-fixes.lua` builds the hidden prototypes). `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
+- `prototypes/hidden.lua` - hidden per-tier entities of the balancing network (`mb-hidden-splitter-<tier>`, also the priority splitter, `mb-hidden-linked-belt-<tier>`, `mb-hidden-lane-splitter-<tier>`, `mb-hidden-loader-<tier>`), the buffer chest `mb-hidden-buffer` and the dead-end filter item `mb-hidden-never`; required from `data-final-fixes.lua`.
 - `scripts/network.lua` - network generator (pure Lua). `scripts/flow.lua` - offline flow model, never required by product code (only test code: `tests/unit`, and `tests/game/exactness.lua` for Ruling 6).
-- `scripts/surface.lua` - the hidden surface `mb-hidden` and its region allocator. `scripts/builder.lua` - places a network on it (`place`, `size`, `destroy`).
+- `scripts/surface.lua` - the hidden surface `mb-hidden` and its region allocator. `scripts/builder.lua` - places a network on it, all or nothing (`place`, `contents`, `destroy`, `rebuild` with item carry-over through a buffer chest).
 - `tests/unit/` - offline tests and `run.lua` runner.
-- `tests/game/` - FactorioTest suites run by `fdev test` (`placement.lua`, `exactness.lua`, `recirculation.lua` for the experimental F8 design, shared rig `harness.lua`). Loaded only with `factorio-test`: `data.lua` (harness prototypes `mb-test-*`) and `remote.lua` (remote interface `mb-test` for the F6 save/load check and the F7 benchmark saves on an MCP instance).
+- `tests/game/` - FactorioTest suites run by `fdev test` (`placement.lua`, `exactness.lua`, `rebuild.lua`, shared rig `harness.lua`). `tests/mods/mb-test-speed` is a test-only mod for the tier-speed MCP check (F9). Loaded only with `factorio-test`: `data.lua` (harness prototypes `mb-test-*`) and `remote.lua` (remote interface `mb-test` for the F6 save/load check and the F7 benchmark saves on an MCP instance).
 - `spikes/` - throwaway research spikes, loaded (prototypes and test suites) only when the hidden startup setting `mb-spikes` is on. It is forced on only when the git-ignored `spikes/local-enable.lua` exists (`return true`, or `return { variant = "<name>" }` for a prototype variant) and the `factorio-test` mod is enabled; otherwise forced off. An MCP `server_start` instance without `factorio-test` therefore has no spike prototypes. `spikes/multi_belt/repro-load-errors.sh` reproduces the prototype-stage errors of F1. `spikes/hidden_surface/save_load.lua` registers the remote interface `mb-spike-s2` (only with `mb-spikes`) for the F2 save/load check on an MCP instance.
 - `docs/feasibility.md` - spike findings (F1..), screenshots in `docs/feasibility/`.
 - `.emmyrc.json` - editor config (FactorioTest globals whitelisted). `fdev lua check` ignores it and generates its own.

@@ -1,0 +1,16 @@
+Plan 2 Task 2, tier_speed_follows_final_prototypes with a speed-changing mod (MCP check).
+Factorio 2.1.23, vanilla preset. MCP instance "mb-p2t2": server_start with dev_mods =
+modular-balancer and tests/mods/mb-test-speed (sets the express belt speed to 26/256 in its
+data-final-fixes; its name sorts before modular-balancer, so that runs first), portal_mods =
+factorio-test. Hand-written transcript of one exec_lua call; the numbers are copied from its
+JSON result (LuaEntityPrototype.belt_speed, tiles per tick).
+
+script.active_mods["mb-test-speed"] = 0.0.1
+basic:   belt 0.03125   mb-hidden splitter / linked-belt / lane-splitter / loader 0.03125
+fast:    belt 0.0625    mb-hidden splitter / linked-belt / lane-splitter / loader 0.0625
+express: belt 0.1015625 (vanilla 0.09375) mb-hidden splitter / linked-belt / lane-splitter /
+         loader 0.1015625
+
+The FactorioTest test of the same name asserts the equality for every tier in every fdev test
+run (where the speeds are vanilla), and asserts the changed express speed when mb-test-speed is
+active.

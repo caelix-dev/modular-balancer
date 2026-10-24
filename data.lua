@@ -1,4 +1,4 @@
-require("prototypes.hidden")
+-- The hidden network prototypes are created in data-final-fixes.lua (speeds from the final belts).
 
 -- Test harness prototypes, only with factorio-test (never in the product).
 ---@diagnostic disable-next-line: unnecessary-if

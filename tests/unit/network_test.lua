@@ -219,6 +219,13 @@ local function loops_full(net)
   return full
 end
 
+-- Solves from the default (empty) start and from the loops-full start; calls
+-- check(state, label) for both.
+local function solve_both(net, supply, demand, check)
+  check(flow.solve(net, supply, demand), "empty start")
+  check(flow.solve(net, supply, demand, loops_full(net)), "loops-full start")
+end
+
 -- Any input mix, outputs unbounded: every input alone gives each output 1/m of it, and
 -- random rate vectors give equal outputs totalling min(sum, m).
 local function check_any_input_mix(net, rand, mixes, alone)
@@ -246,36 +253,53 @@ local function check_any_input_mix(net, rand, mixes, alone)
   end
 end
 
--- Lane-aware, with balance_lanes: one lane alone and random lane rates give equal lanes on
--- every output; only left lanes fed gives min(n / 2, m) in total.
-local function check_lanes(lnet, rand, mixes)
+-- Lane-aware, with balance_lanes. Each lane of every input alone and random lane rates give
+-- equal lanes on every output, totalling min(supply, m), and draw every input's lanes in
+-- full; all left lanes fed draws min(0.5, m / n) per input. Then one slow output: both lanes
+-- of every output water-fill (each lane network gets half of everything).
+local function check_lanes(lnet, rand, mixes, alone)
   local n, m = lnet.n_in, lnet.n_out
-  local function check(left, right, label)
+  local function check(left, right, label, caps)
     local total = 0
     for i = 1, n do
       total = total + left[i] + right[i]
     end
-    local per_lane = math.min(total, m) / (2 * m)
-    local lanes = flow.solve_lanes(lnet, left, right, 1)
+    caps = caps or filled(m, 1)
+    local half_caps = {}
+    for j = 1, m do
+      half_caps[j] = caps[j] / 2
+    end
+    local expected = water_fill(half_caps, total / 2)
+    local lanes = flow.solve_lanes(lnet, left, right, caps)
     for j = 1, m do
       local o = assert(lanes.out[j], "missing output")
       assert(
-        near(o.left, per_lane) and near(o.right, per_lane),
-        string.format("%s lanes %s: output %d %.15g / %.15g, expected %.15g", tag(lnet), label, j, o.left, o.right, per_lane)
+        near(o.left, expected[j]) and near(o.right, expected[j]),
+        string.format("%s lanes %s: output %d %.15g / %.15g, expected %.15g", tag(lnet), label, j, o.left, o.right, expected[j])
       )
     end
+    return lanes
   end
-  local zero, halves = filled(n, 0), filled(n, 0.5)
-  check(halves, zero, "all left lanes")
-  local one = filled(n, 0)
-  one[1] = 0.5
-  check(zero, one, "right lane of input 1 alone")
+  local zero = filled(n, 0)
+  local lanes = check(filled(n, 0.5), zero, "all left lanes")
+  assert_values(lanes.draw, filled(n, math.min(0.5, m / n)), tag(lnet) .. " lanes all left lanes, draw")
+  for a = 1, math.min(n, alone) do
+    local one = filled(n, 0)
+    one[a] = 0.5
+    check(one, zero, "left lane of input " .. a .. " alone")
+    check(zero, one, "right lane of input " .. a .. " alone")
+  end
   for k = 1, mixes do
     local left, right = {}, {}
     for i = 1, n do
       left[i], right[i] = rand(501) / 1000, rand(501) / 1000
     end
-    check(left, right, "random mix " .. k)
+    local caps = nil
+    if k % 2 == 0 and m >= 2 then
+      caps = filled(m, 1)
+      caps[1 + rand(m)] = rand(1001) / 1000
+    end
+    check(left, right, "random mix " .. k .. (caps and " with a slow output" or ""), caps)
   end
 end
 
@@ -317,8 +341,9 @@ local function check_one_slow_output(net, rand, cases)
     local total = math.min(supplied, 0.3 * share + (m - 1))
     local expected = filled(m, (total - 0.3 * share) / (m - 1))
     expected[slow] = 0.3 * share
-    local state = flow.solve(net, supply, caps)
-    assert_values(outputs_of(state, m), expected, tag(net) .. " slow output " .. slow .. " (case " .. k .. ")")
+    solve_both(net, supply, caps, function(state, start)
+      assert_values(outputs_of(state, m), expected, tag(net) .. " slow output " .. slow .. " (case " .. k .. ", " .. start .. ")")
+    end)
   end
 end
 
@@ -342,29 +367,43 @@ local function check_slow_subsets(net, rand, cases)
     for _, j in ipairs(random_subset(m, rand)) do
       caps[j] = rand(1001) / 1000
     end
-    local state = flow.solve(net, supply, caps)
-    assert_values(outputs_of(state, m), water_fill(caps, supplied), tag(net) .. " slow subset (case " .. k .. ")")
+    local expected = water_fill(caps, supplied)
+    solve_both(net, supply, caps, function(state, start)
+      assert_values(outputs_of(state, m), expected, tag(net) .. " slow subset (case " .. k .. ", " .. start .. ")")
+    end)
   end
 end
 
--- Inputs saturated: every output limited to the same value, or only a subset open.
-local function check_draw_under_backpressure(net, rand, subsets)
+-- Inputs saturated: every output limited to the same value (0.1, 0.9; inputs_are_drawn_equally
+-- runs the others), only a random subset open, or random uneven limits on every output. Each
+-- input draws min(n, sum of limits) / n, from both start states.
+local function check_draw_under_backpressure(net, rand, cases)
   local n, m = net.n_in, net.n_out
-  for _, cap in ipairs({ 0.1, 0.5, 0.9 }) do
-    check_inputs_equal(net, cap)
+  local function check(caps, label)
+    local sum = 0
+    for j = 1, m do
+      sum = sum + caps[j]
+    end
+    local expected = filled(n, math.min(n, sum) / n)
+    solve_both(net, filled(n, 1), caps, function(state, start)
+      assert_values(inputs_of(state, n), expected, tag(net) .. " " .. label .. ", " .. start)
+    end)
   end
-  for k = 1, subsets do
+  for _, cap in ipairs({ 0.1, 0.9 }) do
+    check(filled(m, cap), "every output at " .. cap)
+  end
+  for k = 1, cases do
     local open = random_subset(m, rand)
     local caps = filled(m, 0)
     for _, j in ipairs(open) do
       caps[j] = 1
     end
-    local state = flow.solve(net, filled(n, 1), caps)
-    assert_values(
-      inputs_of(state, n),
-      filled(n, math.min(1, #open / n)),
-      tag(net) .. " only {" .. table.concat(open, ",") .. "} open (case " .. k .. ")"
-    )
+    check(caps, "only {" .. table.concat(open, ",") .. "} open (case " .. k .. ")")
+    local uneven = {}
+    for j = 1, m do
+      uneven[j] = rand(1001) / 1000
+    end
+    check(uneven, "uneven limits (case " .. k .. ")")
   end
 end
 
@@ -426,17 +465,24 @@ local function check_structure(net)
   local function key(p)
     return (p.kind == "in" or p.kind == "out") and p.kind or (p.kind .. ":" .. p.id)
   end
+  local succ, pred = {}, {}
+  for _, ed in ipairs(net.edges) do
+    local a, b = key(ed.from), key(ed.to)
+    succ[a] = succ[a] or {}
+    table.insert(succ[a], b)
+    pred[b] = pred[b] or {}
+    table.insert(pred[b], a)
+  end
   local function reach(start, forward)
-    local seen_nodes, changed = { [start] = true }, true
-    while changed do
-      changed = false
-      for _, ed in ipairs(net.edges) do
-        local a, b = key(ed.from), key(ed.to)
-        if not forward then
-          a, b = b, a
-        end
-        if seen_nodes[a] and not seen_nodes[b] then
-          seen_nodes[b], changed = true, true
+    local adj = forward and succ or pred
+    local seen_nodes, queue, qi = { [start] = true }, { start }, 1
+    while qi <= #queue do
+      local a = queue[qi]
+      qi = qi + 1
+      for _, b in ipairs(adj[a] or {}) do
+        if not seen_nodes[b] then
+          seen_nodes[b] = true
+          queue[#queue + 1] = b
         end
       end
     end
@@ -476,7 +522,7 @@ return {
   inputs_are_drawn_equally = function()
     for _, ratios in ipairs({ exhaustive_ratios(), sampled_ratios() }) do
       for_each(ratios, function(net)
-        for _, cap in ipairs({ 0.1, 0.25, 0.5, 0.75, 0.99 }) do
+        for _, cap in ipairs({ 0.25, 0.5, 0.75, 0.99 }) do
           check_inputs_equal(net, cap)
         end
       end)
@@ -528,7 +574,7 @@ return {
 
   balance_lanes_lane_aware = function()
     local rand = lcg(4242)
-    for _, entry in ipairs({ { exhaustive_ratios(), 20 }, { sampled_ratios(), 3 } }) do
+    for _, entry in ipairs({ { exhaustive_ratios(), 50, math.huge }, { sampled_ratios(), 3, 2 } }) do
       for _, r in ipairs(entry[1]) do
         local n, m = r[1], r[2]
         local plain = build(n, m)
@@ -540,7 +586,9 @@ return {
             assert(ed.from.kind == "in", "lane splitter right after an input")
           end
         end
-        check_lanes(lnet, rand, entry[2])
+        check_outputs_equal(lnet)
+        check_inputs_equal(lnet, 0.5)
+        check_lanes(lnet, rand, entry[2], entry[3])
       end
     end
   end,
@@ -704,7 +752,7 @@ return {
 
   size_table = function()
     local parts = {}
-    for _, r in ipairs({ { 2, 3 }, { 3, 5 }, { 8, 3 }, { 9, 1 }, { 17, 2 }, { 33, 5 }, { 16, 16 }, { 64, 64 } }) do
+    for _, r in ipairs({ { 1, 2 }, { 2, 2 }, { 5, 2 }, { 2, 3 }, { 3, 5 }, { 8, 3 }, { 9, 1 }, { 17, 2 }, { 33, 5 }, { 16, 16 }, { 64, 64 } }) do
       local s = build(r[1], r[2]).stats
       parts[#parts + 1] = string.format(
         "%d:%d=%d+%dp/%de",

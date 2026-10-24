@@ -309,4 +309,50 @@ return {
       assert(near(a.f[e], b.f[e]), "same flows")
     end
   end,
+  -- Engine agreement (docs/feasibility.md F8, measured in game): the F8 prototype, a plain
+  -- (n + M):M network whose output j passes a priority splitter with port 2 fed back into
+  -- input n + j. 3:5 with outputs 1 and 2 open drew 45 / 22.5 / 22.5 items/s (1 / 0.5 / 0.5
+  -- belts); 2:3 with output 1 slow (15 of 45) gave 15 / 37.5 / 37.5.
+  f8_prototype_matches_the_engine = function()
+    local network = require("scripts.network")
+    ---@param n integer
+    ---@param m integer
+    local function f8(n, m)
+      local plain = assert(network.build(n + m, m, { recirc = false }))
+      local net = { n_in = n, n_out = m, splitters = plain.splitters, priority = {}, edges = {} }
+      for j = 1, m do
+        net.priority[j] = { kind = "priority", id = j }
+        table.insert(net.edges, edge(port("priority", j, 1), port("out", j)))
+      end
+      for _, ed in ipairs(plain.edges) do
+        local from, to = ed.from, ed.to
+        if from.kind == "in" and from.id > n then
+          from = port("priority", from.id - n, 2)
+        end
+        if to.kind == "out" then
+          to = port("priority", to.id, 1)
+        end
+        table.insert(net.edges, edge(from, to))
+      end
+      return net
+    end
+    local function full(net)
+      local init = { s = {}, d = {} }
+      for e = 1, #net.edges do
+        init.s[e], init.d[e] = 1, 0
+      end
+      return init
+    end
+    local net = f8(3, 5)
+    for _, init in ipairs({ false, full(net) }) do
+      local state = flow.solve(net, { 1, 1, 1 }, { 1, 1, 0, 0, 0 }, init or nil)
+      local d = { state.f[state.in_edge[1]], state.f[state.in_edge[2]], state.f[state.in_edge[3]] }
+      table.sort(d)
+      assert(near(d[1], 0.5) and near(d[2], 0.5) and near(d[3], 1), "3:5 two open: " .. table.concat(d, " / "))
+    end
+    net = f8(2, 3)
+    local state = flow.solve(net, { 1, 1 }, { 1 / 3, 1, 1 })
+    local o = { state.f[state.out_edge[1]], state.f[state.out_edge[2]], state.f[state.out_edge[3]] }
+    assert(near(o[1], 1 / 3) and near(o[2], 2.5 / 3) and near(o[3], 2.5 / 3), "2:3 slow: " .. table.concat(o, " / "))
+  end,
 }

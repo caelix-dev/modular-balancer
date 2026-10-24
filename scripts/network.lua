@@ -30,7 +30,13 @@
 --   draws equally from the network inputs. It is left out when N is a power of two: the
 --   M:M core's first log2 N stages already balance its N live wires.
 --
--- Recirculating network (the default), see recirculating() below.
+-- Recirculating network (the default), see recirculating() below. For two outputs the
+-- smaller of the plain and the recirculating network is used: the plain network's last
+-- splitter already passes one output's unused share to the other.
+--
+-- N:1 (both modes; with one output there is nothing to redistribute) is a merge tree with a
+-- priority splitter at its root, see merging() below. So even with recirc = false an N:1
+-- network for N not a power of two has one priority node, unlike Plan 1's plain N:1.
 --
 -- Splitters left with no input or no output are removed, and a splitter left with one input
 -- and one output becomes a plain edge; repeated until nothing changes.
@@ -527,8 +533,15 @@ function network.build(n_in, n_out, opts)
   opts = opts or {}
   ---@type mb.Network
   local net
-  if opts.recirc ~= false and n_out >= 2 then
+  if opts.recirc ~= false and n_out >= 3 then
     net = recirculating(n_in, n_out)
+  elseif opts.recirc ~= false and n_out == 2 then
+    -- The plain n:2 network ends in one splitter on both outputs, and a splitter already
+    -- gives what one output does not take to the other: it recirculates by itself. Keep
+    -- whichever is smaller (the plain one except for sizes just above a power of two,
+    -- such as 17:2).
+    local a, b = plain(n_in, 2), recirculating(n_in, 2)
+    net = (#b.splitters + #b.priority < #a.splitters + #a.priority) and b or a
   elseif n_out == 1 then
     net = merging(n_in)
   else

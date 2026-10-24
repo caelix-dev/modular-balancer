@@ -16,6 +16,9 @@
 --   a plain splitter (no input priority):
 --     s(out 1) = min(a1 + a2, 1)
 --     s(out 2) = min(max(0, a1 + a2 - b1), 1)
+--   This rule reproduces the F8 engine measurements of the recirculation prototype (3:5
+--   with two outputs open drew 45 / 22.5 / 22.5 items/s; 2:3 with a slow output gave
+--   15 / 37.5 / 37.5), pinned by flow_test.lua::f8_prototype_matches_the_engine.
 --
 -- Every edge e has a supply s[e] (what its upstream node could push into it if the edge
 -- took everything) and a demand d[e] (what its downstream node could take from it if the

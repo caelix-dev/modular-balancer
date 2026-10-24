@@ -341,17 +341,11 @@ describe("lifecycle", function()
       -- undo: the game places the block's ghost; the ghost is built
       local ghost = H.ce(s, { name = "entity-ghost", inner_name = "mb-balancer-" .. H.TIER, position = pos, raise_built = true })
       lifecycle.on_undo_redo({ player_index = 0, actions = { { type = "removed-entity", surface_index = s.index, target = { entity_number = 1, name = "mb-balancer-" .. H.TIER, position = pos } } } }, true)
-      -- the spilled items lie on the block's tile; a build there moves what it collides with
-      -- (here into a chest, as the player's or robot's inventory would take them)
-      local ov = game.create_inventory(64)
-      local _, nb = ghost.revive({ raise_revive = true, overflow = ov })
-      local keep = H.ce(s, { name = "mb-test-chest", position = { o.x + 8, o.y + 8 } })
-      for i = 1, #ov do
-        if ov[i].valid_for_read then
-          keep.insert(ov[i])
-        end
-      end
-      ov.destroy()
+      -- the network's items were spilled off the block's tile (fix round 1, I2), so a script
+      -- revive there (which deletes colliding items without an `overflow`) deletes nothing
+      local on_tile = s.find_entities_filtered({ area = { { pos.x - 0.5, pos.y - 0.5 }, { pos.x + 0.5, pos.y + 0.5 } }, type = "item-entity" })
+      assert(#on_tile == 0, #on_tile .. " spilled stacks on the block's tile")
+      local _, nb = ghost.revive({ raise_revive = true })
       assert(nb and groups.of(nb.unit_number), "the rebuilt block has no group")
       balancer.flush()
       local rec = rec_of(nb)
@@ -558,6 +552,19 @@ describe("lifecycle", function()
       assert(e2 and e2.name == "mb-edge-in-express-transport-belt", "the upgraded tile is not an express edge: " .. tostring(e2 and e2.name))
       assert(nm(rec_of(b)) == "1:1", "network " .. nm(rec_of(b)))
       assert(H.count_box(box, ITEM) == stock, "after the upgrade: " .. H.count_box(box, ITEM))
+      -- undo of that upgrade (UndoRedoAction upgraded-entity): the game finds no express belt on
+      -- the edge's tile, so the edge goes back to its belt with the order back to fast
+      local s = game.surfaces.nauvis
+      lifecycle.on_undo_redo({ player_index = 0, actions = { { type = "upgraded-entity", surface_index = s.index, original_name = "fast-transport-belt",
+        original_quality_name = "normal", target = { entity_number = 1, name = "express-transport-belt", position = e2.position, direction = D.east } } } }, true)
+      local back = H.at(o, 3, 4, "transport-belt")
+      local bt = back and back.get_upgrade_target()
+      assert(back and back.name == "express-transport-belt" and bt and bt.name == "fast-transport-belt", "undo of the upgrade did not order the edge's tile back to fast")
+      back.apply_upgrade()
+      balancer.flush()
+      local e3 = H.at(o, 3, 4, "linked-belt")
+      assert(e3 and e3.name == "mb-edge-in-fast-transport-belt", "after the undone upgrade: " .. tostring(e3 and e3.name))
+      assert(H.count_box(box, ITEM) == stock, "after the undo: " .. H.count_box(box, ITEM))
       release(out)
       after_ticks(600, function()
         assert(delivered({ out }) > 100, "does not run after the upgrade")
@@ -610,6 +617,9 @@ describe("lifecycle", function()
     local s = game.surfaces.nauvis
     local stray = H.ce(s, { name = "mb-edge-in-" .. H.BELT, position = { o.x + 1, o.y + 1 }, direction = D.east, type = "input", raise_built = true })
     stray.get_transport_line(1).insert_at(0.25, { name = ITEM, count = 1 })
+    -- no block near it: nothing is dirty, but the flush has work (I1): on_load must re-arm here
+    assert(next(storage.balancer.dirty) == nil, "test setup: a group is dirty")
+    assert(balancer.pending(storage.balancer), "a loose edge alone is not pending work")
     local b = H.block(o, 5, 5, H.TIER)
     H.sink(o, 5, 5, D.east, 2)
     local claimed = H.ce(s, { name = "mb-edge-in-" .. H.BELT, position = { o.x + 4, o.y + 5 }, direction = D.east, type = "input", raise_built = true })
@@ -619,6 +629,115 @@ describe("lifecycle", function()
     assert(H.items_on(belt) == 1, "the stray edge's item was lost")
     assert(claimed.valid and claimed.linked_belt_neighbour, "the edge into the block was not claimed")
     assert(nm(rec_of(b)) == "1:1", "network " .. nm(rec_of(b)))
+    assert(not balancer.pending(storage.balancer), "work left after the flush")
+  end)
+
+  -- Fix round 1, I2: a backed-up group killed (biters, here LuaEntity::die) with ghosts on death
+  -- and construction robots around. Nobody mined it, so its network's items are spilled, never on
+  -- the group's tiles, marked for the force's robots. The robots pick them up and rebuild the
+  -- blocks from their death ghosts: every item is accounted for, and the balancer runs again.
+  test("destroyed_group_rebuilt_by_robots_keeps_items", function()
+    async(5000)
+    local o, box = area(14, 12)
+    local s = game.surfaces.nauvis
+    local force = game.forces.player
+    local saved = force.create_ghost_on_entity_death
+    force.create_ghost_on_entity_death = true
+    local stock = 600
+    local b1 = H.block(o, 4, 4, H.TIER)
+    local b2 = H.block(o, 4, 5, H.TIER)
+    H.feed(o, 4, 4, D.west, 3, { stock = stock })
+    local out = H.sink(o, 4, 5, D.east, 3)
+    block(out)
+    local _, chest = robots(o, 4, 10)
+    chest.insert({ name = "mb-balancer-" .. H.TIER, count = 4 })
+    balancer.flush()
+    local function robot_items()
+      local n = 0
+      for _, r in ipairs(s.find_entities_filtered({ area = { { o.x - 80, o.y - 80 }, { o.x + 94, o.y + 92 } }, type = "construction-robot" })) do
+        local cargo = r.get_inventory(defines.inventory.robot_cargo)
+        n = n + (cargo and cargo.get_item_count(ITEM) or 0)
+      end
+      return n
+    end
+    local function total()
+      return H.count_box(box, ITEM) + chest.get_item_count(ITEM) + robot_items()
+    end
+    after_ticks(600, function()
+      local in_net = H.network_of(groups.of(b1.unit_number))
+      assert(in_net > 10, "test setup: only " .. in_net .. " in the network")
+      assert(total() == stock, "before: " .. total())
+      local tiles = { { b1.position.x, b1.position.y }, { b2.position.x, b2.position.y } }
+      b1.die()
+      b2.die()
+      balancer.flush()
+      for _, t in ipairs(tiles) do
+        local on = s.find_entities_filtered({ area = { { t[1] - 0.5, t[2] - 0.5 }, { t[1] + 0.5, t[2] + 0.5 } }, type = "item-entity" })
+        assert(#on == 0, #on .. " spilled stacks on a block tile")
+      end
+      local spilled, marked = 0, 0
+      for _, it in ipairs(s.find_entities_filtered({ area = box, type = "item-entity" })) do
+        if it.stack.name == ITEM then
+          spilled = spilled + it.stack.count
+          if it.to_be_deconstructed() then
+            marked = marked + it.stack.count
+          end
+        end
+      end
+      assert(spilled == in_net and marked == spilled, "spilled " .. spilled .. " (marked " .. marked .. ") of " .. in_net)
+      assert(total() == stock, "after the deaths: " .. total())
+      wait_for("robots rebuilding the blocks and collecting the items", 140, function()
+        local blocks = s.find_entities_filtered({ area = box, name = "mb-balancer-" .. H.TIER })
+        local ground = s.find_entities_filtered({ area = box, type = "item-entity" })
+        return #blocks == 2 and #ground == 0 and robot_items() == 0
+      end, function()
+        force.create_ghost_on_entity_death = saved
+        balancer.flush()
+        local list = blocks_in(box)
+        local rec = rec_of(list[1])
+        H.report("destroyed_group_rebuilt_by_robots: %d spilled, chest %d, total %d of %d", in_net, chest.get_item_count(ITEM), total(), stock)
+        assert(total() == stock, "after the robots: " .. total() .. " of " .. stock)
+        assert(chest.get_item_count(ITEM) == in_net, "the robots collected " .. chest.get_item_count(ITEM) .. " of " .. in_net)
+        assert(nm(rec) == "1:1", "rebuilt network " .. nm(rec))
+        done()
+      end)
+    end)
+  end)
+
+  -- Fix round 1, M3: without Space Age, a leftover turbo block item or ghost placed later becomes
+  -- an express block or ghost (only checked in vanilla, where turbo is orphaned).
+  test("leftover_orphan_tier_block_is_replaced", function()
+    ---@diagnostic disable-next-line: unnecessary-if
+    if script.active_mods["space-age"] then
+      return
+    end
+    local o = area(6, 6)
+    local s = game.surfaces.nauvis
+    s.create_entity({ name = "mb-balancer-turbo", position = { o.x + 2, o.y + 2 }, force = "player", raise_built = true })
+    local e = H.at(o, 2, 2, "simple-entity-with-owner")
+    assert(e and e.name == "mb-balancer-express" and groups.of(e.unit_number), "the turbo block was not replaced by a grouped express block")
+    s.create_entity({ name = "entity-ghost", inner_name = "mb-balancer-turbo", position = { o.x + 4, o.y + 2 }, force = "player", raise_built = true })
+    local g = H.at(o, 4, 2, "entity-ghost")
+    assert(g and g.ghost_name == "mb-balancer-express", "the turbo ghost was not replaced: " .. tostring(g and g.ghost_name))
+  end)
+
+  -- Fix round 1, M2: a space platform that mines the last block gets the network's items in its
+  -- hub (Space Age only; give() is driven directly with a platform sink).
+  test("platform_sink_gets_items", function()
+    ---@diagnostic disable-next-line: unnecessary-if
+    if not script.active_mods["space-age"] then
+      return
+    end
+    local p = game.forces.player.create_space_platform({ name = "mb-test-platform", planet = "nauvis", starter_pack = "space-platform-starter-pack" })
+    assert(p, "no platform")
+    p.apply_starter_pack()
+    local hub = assert(p.hub, "no hub")
+    local inv = game.create_inventory(2)
+    inv.insert({ name = ITEM, count = 150 })
+    local before = hub.get_item_count(ITEM)
+    balancer.give(inv, { platform = p }, p.surface, hub.position, {}, nil)
+    assert(hub.get_item_count(ITEM) - before == 150, "hub got " .. (hub.get_item_count(ITEM) - before) .. " of 150")
+    p.destroy()
   end)
 
   -- Rotating a belt next to a block (a passing belt turned into it becomes an input; an input
@@ -725,6 +844,36 @@ describe("lifecycle", function()
     local rec2 = rec_of(b)
     assert(rec2.placed == placed, "a configuration change rebuilt an unchanged balancer")
     assert(H.count_box(box, ITEM) == 100, "items: " .. H.count_box(box, ITEM))
+  end)
+
+  -- Fix round 1, M6: the hidden surface cleared by someone else (LuaSurface::clear): the items
+  -- are spilled first (on_pre_surface_cleared), the networks are placed again, nothing lost.
+  test("hidden_surface_cleared", function()
+    async(1500)
+    local o, box = area(10, 9)
+    local stock = 400
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3, { stock = stock })
+    local out = H.sink(o, 4, 4, D.east, 3)
+    block(out)
+    balancer.flush()
+    after_ticks(300, function()
+      local hs = assert(game.get_surface(storage.surface_index --[[@as integer]]), "no hidden surface")
+      hs.clear()
+      after_ticks(3, function()
+        balancer.flush()
+        local rec = rec_of(b)
+        assert(rec.placed and rec.placed.entities[1].valid, "no valid network after the clear")
+        assert(nm(rec) == "1:1", "network " .. nm(rec))
+        assert(H.count_box(box, ITEM) == stock, "after the clear: " .. H.count_box(box, ITEM))
+        release(out)
+        local before = delivered({ out })
+        after_ticks(600, function()
+          assert(delivered({ out }) > before + 100, "does not run after the clear")
+          done()
+        end)
+      end)
+    end)
   end)
 
   -- The hidden surface deleted by someone else: every network's items are spilled at its blocks

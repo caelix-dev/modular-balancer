@@ -250,9 +250,10 @@ A block takes up to four belts (all edges), with any mix of inputs and outputs.
 
 ## F2-F5: hidden surface, inserter access, inserter input, lane balancing (spike S2)
 
-Code: `spikes/hidden_surface/` (`data.lua`, `test.lua`), same gating as S1. Logs of the runs
-behind this section: `feasibility/f2-f5-results-vanilla.txt` (express, 45 items/s) and
-`feasibility/f2-f5-results-space-age.txt` (turbo, 60 items/s). The save/load check is in
+Code: `spikes/hidden_surface/` (`data.lua`, `test.lua`, and `save_load.lua` for the MCP
+save/load check), same gating as S1. Logs of the runs behind this section:
+`feasibility/f2-f5-results-vanilla.txt` (express, 45 items/s) and
+`feasibility/f2-f5-results-space-age.txt` (turbo, 60 items/s). The save/load checks are in
 `feasibility/f2-save-load.txt`. Where a cell shows two numbers, they are express / turbo.
 
 Setup used by every test: the player's side is `nauvis` (a cleared area with lab tiles). The
@@ -260,8 +261,9 @@ network side is a surface made with `game.create_surface`, `LuaSurface::generate
 and `LuaForce::set_surface_hidden(surface, true)` for the player force
 (`LuaForce::get_surface_hidden` reads back true).
 
-F1's interface does not change any answer here. Edges are ordinary linked belts (F2 covers
-them), and the block tile stays free for a non-belt entity, which F3 fills with the proxy.
+F1's interface matters for F3: the recommended inserter port (below) is a linked belt on the
+block tile, and F1 allows only one belt-connectable entity there. A block that needs F1's
+block-tile interface (a non-swappable neighbour) cannot also have an inserter port.
 
 ### F2: linked belts across surfaces
 
@@ -271,86 +273,163 @@ them), and the block tile stays free for a non-belt entity, which F3 fills with 
   linked belt, 6 belts, input linked belt, output linked belt, sink) built once with its middle
   on the hidden surface and once all on nauvis. Over 3 600 ticks after a 600-tick warm-up:
   45.000 vs 45.000 items/s (express), 60.000 vs 60.000 (turbo). 0 % difference.
-- Save and load (MCP `server_start` with `factorio-test` in `portal_mods`, `exec_lua`,
-  `game.server_save`, `server_stop`, `server_start` from the save): a ring of 4 linked belts
-  and 8 belts across nauvis and the hidden surface, with 32 plates on it.
-  - After the load, all four links point at the same partners, all 32 items are there with
-    identical per-entity counts, and the surface is still hidden for the player.
-  - After 1 000 more ticks the ring still circulates (13 + 19 = 32 items, positions changed).
+- Save and load, twice (MCP `server_start` with `factorio-test` in `portal_mods`, `exec_lua`,
+  `game.server_save`, `server_stop`, `server_start` from the save):
+  - Run 1 (express, by hand): a ring of 4 linked belts and 8 belts across nauvis and the
+    hidden surface with 32 plates. After the load, the links, all 32 items with identical
+    per-entity counts, and the hidden flag were unchanged, and the ring still circulated
+    1 000 ticks later. The mod's prototypes changed between save and load in this run.
+  - Run 2 (turbo, scripted with `spikes/hidden_surface/save_load.lua`, nothing changed
+    between save and load): the same ring plus a belt port (the F3 design) with 8 items of
+    two kinds and an inserter whose `pickup_target` was written. After the load: identical
+    counts (ring 19 + 13, port 4 + 4), identical links, still hidden, `pickup_target`
+    unchanged. Then the port inserter took all 8 items and the ring kept circulating.
 - For the restart, `server_start`'s `save` needs the absolute path
   `E:\factorio-dev\instances\<name>\saves\<save>.zip`.
 
 ### F3: inserter access
 
-**Result: exact, through a proxy container on the block tile whose target is a hidden buffer
-chest fed by one network output. The stop rule does not apply.**
+**Result: exact with a belt port. The first design, a proxy container over a buffer chest, is
+exact only for one item type. The stop rule does not apply, because an exact design exists.**
 
-- `inserter_takes_from_proxy_of_hidden_chest`: the vanilla `proxy-container` on nauvis
-  accepts `proxy_target_entity` set to a chest on the hidden surface
-  (`proxy_target_inventory = defines.inventory.chest`). It then reports the chest's items, and
-  an inserter took all 100 plates through it in 300 ticks (100 moved, 0 left).
-  Cross-surface targets are allowed, so the fallback tests (`inserter_takes_from_linked_belt`
-  and the same-surface alternatives) were not needed and were not written.
-- The proxy can be the visible block. `mb-spike-proxy` is the vanilla proxy-container with the
-  F1 block mask (`item`, `player`, `is_object`), so it shares its tile with one hidden linked
-  belt (F1's block-tile interface). The vanilla proxy-container mask includes `object`, which
-  collides with belts, so the product needs its own mask.
-- **Exactness** (`inserter_share_is_exact`): a splitter on the hidden surface, fed by a full
-  belt. Output A goes to a belt sink. Output B goes through a loader into a one-slot buffer
-  chest (`mb-spike-buffer`), which the proxy block on nauvis exposes to three bulk inserters.
-  Measured over 3 600 ticks per phase (items/s):
+#### The two designs
 
-  | phase | belt output A | inserter output B |
-  | --- | --- | --- |
-  | inserters free | 22.500 / 30.000 | 22.500 / 30.000 (exactly half) |
-  | inserters stopped (`disabled_by_script`) | 45.000 / 60.000 (the whole flow) | 0 |
+- **Chest port** (round 1's recommendation): one network output ends in a loader into a
+  buffer chest on the hidden surface, and the visible block is a proxy container whose
+  `proxy_target_entity` is that chest. The vanilla `proxy-container` accepts a target on
+  another surface (`inserter_takes_from_proxy_of_hidden_chest`: 100 of 100 plates taken
+  through it). Variants measured: `chest1` (1 slot), `chest2` (2 slots), `filtered` (2 slots,
+  `inventory_type = "with_filters_and_bar"`, one slot per item set with
+  `LuaInventory::set_filter`, which needs the items known in advance).
+- **Belt port** (recommended): one network output ends in a hidden input linked belt, linked to
+  an output linked belt on the block tile, under the visible block (a non-belt entity with
+  the F1 block mask). The port faces a side of the block and is a dead end: items stop at its
+  end. Inserters next to the block pick from it (their default `pickup_target` on that tile is
+  the linked belt). It behaves like a vanilla belt that ends at the inserters: each lane on its
+  own, and an inserter picks only the items it needs from the tile.
+- Control: `plain`, no port at all. The splitter output ends in a plain dead-end belt on the
+  same surface as the consumer. It shows what vanilla belts do in the same situation.
 
-  So the inserters behave exactly like one more splitter output. The network decides the
-  share, and the inserters can never take more than it. When they stop, the buffer fills, the
-  loader backs up, and the share goes to the others (the splitter's own behaviour). Several
-  inserters on one block share one buffer, so they split that block's share, as the spec
-  asks.
-- **Pickup target on a shared tile** (`proxy_block_shares_tile_with_linked_belt`): on a tile
-  with both the proxy and a linked belt, an inserter picks from the **linked belt** by
-  default. `pickup_target` is nil right after building and the linked belt after the first
-  update, and the inserter took the copper plate from the belt and nothing from the proxy.
-  Writing `LuaEntity::pickup_target` to the proxy works, sticks (still the proxy 300 ticks
-  later, 100 iron taken), and survives save and load (`f2-save-load.txt`). Taking from the
-  linked belt would be an inexact share (it reaches into the network), so Plan 2 must either
-  set `pickup_target` on every inserter next to a block that has a block-tile linked belt, or
-  not combine the two.
+Test rig (`build_rig` in `test.lua`): a splitter on the hidden surface, fed from the west,
+with output A to a belt sink and output B to the port. A correct port gives B exactly what a
+belt output would get: the same amount as A, per item.
 
-Also measured:
+#### One item type: partial demand, restart, backpressure (`inserter_share_phases_<port>`)
 
-- `pickup_target` and `drop_target` read nil until the inserter's first update. Read them a
-  tick later.
-- Up to one stack waits in the buffer when the inserters stop (100 plates here). It is part of
-  the network's contents: a rebuild must carry it over.
+Three bulk inserters on the block. Phases of 3 600 ticks each, after a 600-tick warm-up.
+B counts everything that left through the port: the inserters' chests, their hands, the
+buffer or the port belt. Items/s, express / turbo:
 
-**Recommended design.** For each block with at least one taking inserter, one network output
-(the block counts as one output of the N:M) ends in a loader into a one-slot buffer chest on
-the hidden surface, and the block entity itself is a proxy container targeting that chest.
-Blocks without taking inserters have no such output.
+| phase | chest1: A | chest1: B | belt: A | belt: B |
+| --- | --- | --- | --- | --- |
+| inserters free | 22.500 / 30.000 | 22.500 / 30.000 | 22.500 / 30.000 | 22.500 / 30.000 |
+| slow: 1 inserter, hand size 1 | 42.500 / 57.500 | 2.500 / 2.500 | 42.283 / 57.267 | 2.717 / 2.717 |
+| restarted (all 3, full hands) | 22.500 / 30.000 | 22.500 / 30.000 | 22.500 / 30.000 | 22.500 / 30.000 |
+| output A blocked | 0 | 45.000 / 60.000 | 0 | 41.000 / 47.000 |
+
+- Partial demand: the inserter gets exactly what it takes, and A gets the rest
+  (A + B = 45.000 / 60.000 in every case except the belt port at turbo, 59.983, which is one
+  item in transit over the window).
+- After the restart the split is exactly half again, so any extra the buffer gave at the start
+  of that phase is gone within the 600-tick warm-up.
+- With A blocked the inserters get everything up to their own speed. From a belt, three bulk
+  inserters manage 41 / 47 items/s, against 45 / 60 from a chest.
+- Per inserter (free phase), the three inserters' chests held 336 / 338 / 842 (chest1) and
+  300 / 912 / 300 (belt), so one inserter takes about half of the block's share. That is fine
+  for exactness, but the user may notice it.
+
+#### Two item types (`mixed_share_<feed>_<port>`, `mixed_assembler_<feed>_<port>`)
+
+Feeds: `lanes` (iron on the left lane, copper cable on the right, one full lane each),
+`lanes_late` (the same, with the cable lane starting 900 ticks after the iron lane), `mixed`
+(iron and cable in irregular clumps on one lane, dropped by five bulk inserters),
+`alternating` (iron and cable strictly alternating on one lane, from a side-loaded yellow
+column).
+
+Share with three free inserters (items/s, A / B per item, express; turbo in the logs):
+
+| feed | port | iron A / B | cable A / B |
+| --- | --- | --- | --- |
+| lanes | chest1 | 11.250 / 11.250 | **15.000 / 7.500** |
+| lanes | chest2 | 11.250 / 11.250 | 11.250 / 11.250 |
+| lanes | filtered | 11.250 / 11.250 (turbo: **30.000 / 0**) | 11.250 / 11.250 |
+| lanes | belt | 11.250 / 11.250 | 11.250 / 11.250 |
+| mixed | all four | 7.100 / 7.117-7.133 | 4.150 / 4.133 |
+| alternating | belt | **7.500 / 0** | **0 / 7.500** |
+
+- `chest1` with two lanes: while the one slot holds iron, cable cannot enter, the cable lane
+  backs up through the loader, and the splitter sends that cable to A. The block gets half its
+  cable share (turbo: 5 vs 25).
+- `filtered` at turbo: the cable slot is refilled so fast that the inserters always find cable
+  and never take iron; the full iron slot backs the iron lane up, and all iron goes to A. Which
+  item an inserter takes from a chest decides the per-item share, so a chest port is not exact
+  per item even with filters.
+- `alternating`: the splitter alternates per item, so a strictly alternating lane sends all
+  iron to one output and all cable to the other. This is vanilla splitter behaviour (counts
+  are exact, item types are not) and has nothing to do with the port. **It matters for Task 5
+  (`mixed_items_keep_lanes`, Review Focus 3, "no item type is starved")**: a perfectly
+  alternating single lane can starve an item type on an output of any splitter network.
+
+Assembler that needs both items (electronic circuit: 1 iron plate + 3 copper cable, max 1.5
+circuits/s), one inserter from the block, circuits/s over 3 600 ticks after 1 200 (express / turbo
+where they differ):
+
+| feed | chest1 | chest2 | filtered | belt | plain (vanilla) |
+| --- | --- | --- | --- | --- | --- |
+| lanes | **0** (slot holds 100 iron) | 1.500 | 1.500 | 1.500 | 1.500 |
+| lanes_late | **0** | **0** (both slots iron) | 1.500 | 1.500 | 1.500 |
+| mixed (one lane) | 0 | 0.050 / 0.117 | 0.033 / 0.167 | 0 | 0 |
+| alternating (one lane) | - | - | - | 0 | 0 |
+
+- With two lanes, the belt port never starves the assembler, like a vanilla belt. `chest1`
+  deadlocks at once. `chest2` deadlocks when one item arrives first and fills both slots.
+  `filtered` works only with the items known and set in advance.
+- With both items on one lane, every design starves, the vanilla dead-end belt included: the
+  item at the front of the lane is one the assembler does not need. The belt port is no worse
+  than vanilla here.
+
+**Recommended design: the belt port.** For each block with taking inserters, one network
+output ends in a hidden input linked belt linked to an output linked belt on the block tile.
+It is exact per lane and per item exactly where a vanilla belt is, and needs no knowledge of
+the items.
+
+#### Belt port details (measured)
+
+- `belt_port_ignores_edges`: an output port facing west with F1 output edges on all four
+  sides, and an input port with input edges on all four sides: 0 belt neighbours on the port
+  and on every edge. A port next to edges connects to nothing.
+- Picking from a belt is slower than from a chest (41 vs 45, 47 vs 60 items/s with three
+  bulk inserters, above). The share is still exact; it just caps the block at the inserters'
+  belt speed, as on a vanilla belt.
+- `proxy_block_shares_tile_with_linked_belt` (from round 1, now asserted): on a tile with a
+  proxy and a linked belt, an inserter's default `pickup_target` is the linked belt (both
+  inserters at tick 60; 0 items taken from the proxy). The control inserter, never written,
+  still had the linked belt after 360 ticks. Writing `LuaEntity::pickup_target` to the proxy
+  works, sticks, and survives save and load.
+- `drop_target_on_shared_tile`: the drop side defaults the other way. An inserter dropping
+  onto a tile with a proxy and an input linked belt drops into the **proxy** (`drop_target`
+  is the proxy; 144 items in the proxy target, 0 on the belt after 300 ticks). Writing
+  `drop_target` to the linked belt works and sticks (48 / 60 more items on the belt side in
+  200 ticks). With the belt port there is no proxy on the tile, so both defaults are the port.
+- `pickup_target` and `drop_target` read nil until the inserter's first update.
 
 ### F4: inserter input
 
-**Result: works and loses nothing, but one block can take inserter input or give inserter
-output, not both. Cheap enough if each block's proxy has one role at a time.**
+**Result: works and loses nothing, with either design. A block can take inserter input or give
+inserter output, not both.**
 
-- `inserter_puts_into_proxy`: an inserter drops into the proxy block (`drop_target` is the
-  proxy after its first update). The proxy's target is a hidden buffer chest drained by a
-  loader onto a belt (the stand-in for a network input). From a finite chest of 200 plates,
-  all 200 arrived on the network side in 2 400 ticks (0 left in the source, 0 in the buffer).
-  It is one more network input. When the network backs up, the buffer fills and the inserters
-  wait, like a backed-up belt input.
-- `put_and_take_on_one_proxy_bypass_the_network`: with one proxy on an output buffer, an
-  inserter dropping into the block puts items straight into the buffer that a taking inserter
-  empties. 100 of 100 plates went from one inserter to the other without passing the network.
-  A proxy exposes exactly one inventory, so one block cannot do both exactly.
-- Cost for Plan 2: decide each block's role from the inserters next to it (`drop_target` /
-  `pickup_target`) on build, rotate and mine events, and rebuild the block's network port when
-  the role changes. A block with inserters in both directions needs a rule. My suggestion:
-  allow inserter input, and refuse "both directions on one block" with a message.
+- `inserter_puts_onto_belt_port`: an inserter drops onto an input linked belt on the block
+  tile (its `drop_target` after the first update), linked to the network. From a finite chest
+  of 200 plates, all 200 arrived on the network side. It is one more network input: when the
+  network backs up, the port fills and the inserters wait, like at a backed-up belt.
+- `inserter_puts_into_proxy` (chest port): 200 of 200 through a proxy and a hidden buffer
+  drained by a loader.
+- `put_and_take_on_one_proxy_bypass_the_network`: with one proxy and its output buffer, 100 of
+  100 plates went from a putting inserter straight to a taking inserter, past the network. The
+  same holds for an output belt port: an inserter dropping onto it puts items on the dead end,
+  where the taking inserters pick them up. So each block has one role.
+- My suggestion: allow inserter input, and refuse "both directions on one block" with a
+  message.
 
 ### F5: lane balancing ("balance lanes" mode)
 
@@ -370,27 +449,56 @@ the test empties every tick. Expected per lane: a quarter of the input, 5.625 / 
 The express deviations (5.633 vs 5.617) are one item out of about 338 per lane in the
 3 600-tick window: the discrete item boundary of the count, not a drift.
 
-The vanilla `lane-splitter` exists in base 2.1.23 but runs at yellow speed (0.03125). The
-spike uses a copy at the tier speed (`mb-spike-lane-splitter`), so the product needs one lane
-splitter prototype per tier.
+The vanilla `lane-splitter` exists in base 2.1.23 but runs at yellow speed (0.03125) and is
+`hidden = true`, so it cannot be a visible or player-buildable piece. The spike uses a copy at
+the tier speed (`mb-spike-lane-splitter`), and the product needs one hidden lane splitter
+prototype per tier.
 
-**Recommended design for N:M.** Build the keep-lanes network and add a lane splitter on each
-output (M lane splitters). The keep-lanes network gives every output the same left share and
-the same right share, so each output lane gets (left + right) / 2 of an equal share. A lane
-splitter on each input (N of them) is also exact. Both placements were measured equal, in the
-1:2 case only; Task 5 should measure the chosen one in a real N:M network.
+**Recommended design for N:M:** put the lane splitters on whichever side has fewer belts, so
+min(N, M) of them. Either placement is exact:
+
+- A lane splitter on every input makes the left and right totals equal before the keep-lanes
+  network splits them.
+- A lane splitter on every output averages that output's left and right shares, which the
+  keep-lanes network makes equal across outputs.
+
+The choice only changes the entity count. Both placements were measured equal, in the 1:2
+case only; behaviour under partial backpressure was not compared. The plan owner assigns the
+N:M check to Task 5.
 
 ### Concerns for Plan 2
 
-- **An inserter next to a block with a block-tile linked belt picks from the belt by
-  default.** Fix it by script (`pickup_target`) on every relevant build, or avoid the layout.
-- **Block roles.** A block's proxy targets one buffer, so its inserter role (take, put or
-  none) must be tracked and the network rebuilt when it changes (F4).
-- **Buffer contents.** Up to one stack per inserter block sits in its buffer chest. Rebuilds
-  and removal must move it (no loss).
-- **Short-window lag.** When stopped inserters start again, they first empty the buffer, so
-  over a short window they take up to one stack more than their share. In steady state the
-  share is exact (measured above).
-- **Not measured here:** an N:M network with an inserter output (Task 5 measures exactness in
-  real networks), long-handed and filter inserters, and save/load at turbo speed (the
-  save/load check ran at express; F2 throughput was measured at both tiers).
+- **Inserter port and the block-tile interface share one tile.** A block with a non-swappable
+  neighbour (F1's block-tile interface) cannot have an inserter port. Refuse one of the two
+  with a message.
+- **Block roles.** Each block's port is either an output port (taking inserters) or an input
+  port (putting inserters) or absent. Inserters in both directions on one block need a rule
+  (F4).
+- **Finding the inserters of a block (role detection).** `inserter_positions_known_at_build`:
+  `LuaEntity::pickup_position` and `LuaEntity::drop_position` are correct the moment an
+  inserter is built (inserter and bulk inserter: pickup 1 tile behind, drop 1.2 tiles ahead;
+  long-handed: 2 and 2.2), while `pickup_target` / `drop_target` are still nil. So:
+  - on `on_built_entity` / `on_robot_built_entity` / `script_raised_built` of an inserter,
+    find the block on the tile under its pickup or drop position directly, without waiting a
+    tick and without anything stored for a later tick;
+  - on building a block, search for inserters within the longest inserter reach of any
+    loaded inserter prototype (2 tiles in vanilla) with `find_entities_filtered` filtered by
+    type `inserter`, and check their positions;
+  - re-check on `on_player_rotated_entity` and `on_player_flipped_entity` (the inserter's
+    positions change), on mining or destroying an inserter, on `on_entity_settings_pasted`,
+    and on inserter upgrades (a different inserter prototype can have a different reach).
+- **Player access to the block.** With the belt port the block is not a container, so it has
+  no inventory GUI, and opening it can show the lane-toggle GUI the spec suggests. With a
+  chest port, the proxy would show the buffer's inventory when opened, and a player could take
+  items out or put items in by hand, past the network (like the F4 bypass);
+  `LuaEntity::operable = false` would block that, but then the lane toggle needs another way
+  in. Another reason to prefer the belt port.
+- **Port contents.** Items wait on the port belt (a few per lane) when nobody takes them.
+  Rebuilds and removal must move them (no loss).
+- **Port visuals.** The port is a linked belt under the block sprite. Items on it may show
+  through, depending on render layers. Plan 2 graphics should check that.
+- **Mixed items.** Strictly alternating items on one lane are split by type by any splitter
+  (vanilla included). Task 5's `mixed_items_keep_lanes` and Review Focus 3 should state what
+  they expect for that case.
+- **Not measured here:** an N:M network with an inserter output, long-handed and filter
+  inserters on a belt port.

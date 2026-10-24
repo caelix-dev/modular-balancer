@@ -29,6 +29,26 @@ buffer.collision_mask = { layers = { mb_spike_buffer = true } }
 buffer.minable = nil
 protos[#protos + 1] = buffer
 
+-- F3 with mixed items (fix round 1): the same buffer with two slots, and with two slots that
+-- can be filtered per item (LuaInventory::set_filter, like a cargo wagon).
+local buffer2 = table.deepcopy(buffer)
+buffer2.name = "mb-spike-buffer-2"
+buffer2.inventory_size = 2
+protos[#protos + 1] = buffer2
+
+local buffer_filtered = table.deepcopy(buffer2)
+buffer_filtered.name = "mb-spike-buffer-filtered"
+buffer_filtered.inventory_type = "with_filters_and_bar"
+protos[#protos + 1] = buffer_filtered
+
+-- Test harness: an assembling machine that needs no power (for the mixed-item deadlock test).
+local assembler = table.deepcopy(data.raw["assembling-machine"]["assembling-machine-2"])
+assembler.name = "mb-spike-assembler"
+assembler.energy_source = { type = "void" }
+assembler.minable = nil
+assembler.next_upgrade = nil
+protos[#protos + 1] = assembler
+
 -- Test harness: a counting chest that does not fill up in a long measurement (a steel chest
 -- holds 4 800 plates, less than a turbo belt delivers in 80 s).
 local sink = table.deepcopy(data.raw["container"]["steel-chest"])

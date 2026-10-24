@@ -29,3 +29,22 @@ Second save (proxy and inserter state):
   pickup_target after load: mb-spike-proxy; proxy target surface: mb-hidden; proxy shows 100.
   Enabled the inserter, 300 ticks: 12 moved, 1 in the inserter's hand, 87 left (100 total),
   pickup_target still mb-spike-proxy.
+
+==== Run 2 (fix round 1): reproducible, turbo, no mod change between save and load ====
+Script: spikes/hidden_surface/save_load.lua (remote interface "mb-spike-s2", loaded from
+control.lua only with mb-spikes). MCP instance "mb-t3sa", preset space-age (turbo belts),
+dev_mods modular-balancer, portal_mods factorio-test. No file changed between save and load.
+
+exec_lua remote.call("mb-spike-s2", "build"); count at tick 27:
+  ring: nauvis 32, hidden 0; belt port: nauvis 0, hidden 8 (4 iron + 4 cable)
+  links: nauvis input@5.5->hidden@0.5, output@0.5->hidden@5.5; hidden input@5.5->nauvis@0.5,
+         output@0.5->nauvis@5.5; port: hidden input@5.5->nauvis@5.5 (nauvis output@5.5 back)
+  hidden_for_player true; port inserter pickup_target mb-spike-lb (written, inserter disabled)
+run_ticks 300, count at tick 327:
+  ring: nauvis 19 + hidden 13 = 32; port: nauvis 4 + hidden 4 = 8; links and flags as above
+game.server_save("f2-sa"), server_stop, server_start save = ...\mb-t3sa\saves\f2-sa.zip
+count at tick 327 after load: identical (ring 19 + 13, port 4 + 4, same links, hidden true,
+  pickup_target mb-spike-lb)
+enabled the port inserter, run_ticks 1000 (tick 1327):
+  ring 0 + 32 = 32 (bunched), 37 ticks later 29 + 3 = 32: still circulating
+  port: 0 + 0 on the belts, 8 in the inserter's chest, 0 in its hand: all 8 taken, none lost

@@ -8,6 +8,7 @@
 -- side-loads onto the second belt from the north (its left lane) and/or from the south (its right lane).
 local network = require("scripts.network")
 local builder = require("scripts.builder")
+local groups = require("scripts.groups")
 
 local H = {}
 
@@ -391,6 +392,63 @@ end
 
 function H.report(fmt, ...)
   log("MB-TEST " .. string.format(fmt, ...))
+end
+
+-- Visible balancer blocks (tests/game/groups.lua and the groups save/load check in remote.lua).
+
+-- Builds block `tier` at tile (o.x + dx, o.y + dy) with raise_built, as a player build would
+-- reach the mod's events.
+function H.block(o, dx, dy, tier, force)
+  return ce(game.surfaces.nauvis, {
+    name = "mb-balancer-" .. tier, position = { o.x + dx, o.y + dy }, force = force or "player", raise_built = true,
+  })
+end
+
+-- Recomputes the connected groups of the blocks in `box` from scratch (flood fill over the
+-- 4-neighbours with the same name and force) and asserts that scripts/groups.lua agrees: one
+-- group per part, holding exactly that part, with the right tier, surface and force. Returns the
+-- part sizes, largest first.
+function H.check_groups(box, what)
+  local s = game.surfaces.nauvis
+  local at, list = {}, {}
+  for _, e in ipairs(s.find_entities_filtered({ area = box, type = "simple-entity-with-owner" })) do
+    if groups.tier_of(e.name) then
+      local pos = e.position
+      at[math.floor(pos.x --[[@as number]]) .. "," .. math.floor(pos.y --[[@as number]])] = e
+      list[#list + 1] = e
+    end
+  end
+  local seen, sizes, ids = {}, {}, {}
+  for _, e in ipairs(list) do
+    if not seen[e.unit_number] then
+      local id = groups.of(e.unit_number)
+      assert(id, what .. ": block at " .. serpent.line(e.position) .. " has no group")
+      assert(not ids[id], what .. ": two separate parts share group " .. id)
+      ids[id] = true
+      local g = assert(groups.get(id), what .. ": group " .. id .. " missing")
+      assert(g.tier == groups.tier_of(e.name) and g.surface_index == s.index and g.force.index == e.force.index,
+        what .. ": group " .. id .. " has the wrong tier, surface or force")
+      local queue, n = { e }, 0
+      seen[e.unit_number] = true
+      while #queue > 0 do
+        local b = table.remove(queue)
+        n = n + 1
+        assert(groups.of(b.unit_number) == id, what .. ": block at " .. serpent.line(b.position) .. " is not in group " .. id)
+        local x, y = math.floor(b.position.x), math.floor(b.position.y)
+        for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+          local nb = at[(x + d[1]) .. "," .. (y + d[2])]
+          if nb and not seen[nb.unit_number] and nb.name == e.name and nb.force.index == e.force.index then
+            seen[nb.unit_number] = true
+            queue[#queue + 1] = nb
+          end
+        end
+      end
+      assert(table_size(g.blocks) == n, what .. ": group " .. id .. " has " .. table_size(g.blocks) .. " blocks, its part " .. n)
+      sizes[#sizes + 1] = n
+    end
+  end
+  table.sort(sizes, function(a, b) return a > b end)
+  return sizes
 end
 
 return H

@@ -1,3 +1,5 @@
+-- The visible balancer blocks (entity, item, recipe and technology unlock per tier).
+require("prototypes.blocks")
 -- The hidden network prototypes are created in data-final-fixes.lua (speeds from the final belts).
 
 -- Test harness prototypes, only with factorio-test (never in the product).

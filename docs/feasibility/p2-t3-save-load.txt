@@ -1,0 +1,21 @@
+Plan 2 Task 3 save/load check (save_load_keeps_groups), Factorio 2.1.23, space-age preset.
+Hand-written transcript of the MCP calls and the exec_lua results (JSON restated), not raw tool output.
+MCP fdev instance "mb2-t3": server_start with dev_mods = modular-balancer, portal_mods = factorio-test.
+Script: tests/game/remote.lua (remote interface "mb-test"). "parts" are the group sizes recomputed
+from scratch by H.check_groups (flood fill over the placed blocks), which also asserts that
+storage.groups agrees block by block; "groups" is storage.groups.by_id.
+
+exec_lua groups_build + groups_summary, tick 5:
+  parts [9, 3, 2, 2]; groups 1 fast 9 (L with branch), 2 basic 3, 3 basic 2, 4 express 2; next_id 5
+game.server_save("t3-groups"); run_ticks 10; server_stop
+server_start save = E:\factorio-dev\instances\mb2-t3\saves\t3-groups.zip
+groups_summary after load, tick 5: identical (parts [9, 3, 2, 2], same ids, tiers, sizes, next_id 5)
+groups_bridge (a basic block built with raise_built in the one-tile gap, after the load):
+  parts [9, 6, 2]; groups 1 fast 9, 2 basic 6, 4 express 2 (group 3 merged into 2); next_id 5
+  -> the event handlers and their filters are active after a load
+server_stop (the server saves on stop into the loaded save, tick 7); server_start from it again
+groups_summary after the second load, tick 7: identical (parts [9, 6, 2], groups 1/2/4, next_id 5)
+groups_destroy (one express block destroyed with LuaEntity::destroy, no event); run_ticks 2
+groups_summary, tick 9: parts [9, 6, 1]; group 4 express 1
+  -> the on_object_destroyed registration made before the save fired after the load
+server_stop

@@ -4,6 +4,7 @@
 --   mb-test-loader-half    loader-1x1 at half the express belt speed (a throttled sink)
 --   mb-test-chest          a large chest, used as a finite source and as a counting sink
 --   mb-test-inserter       a bulk inserter that needs no power
+--   mb-test-roboport       a roboport that needs no power (robot builds in tests/game/groups.lua)
 --   mb-test-block          stand-in for the visible block: not belt-connectable, so a belt
 --                          port (a linked belt) can share its tile (docs/feasibility.md F1, F3)
 
@@ -46,5 +47,12 @@ block.name = "mb-test-block"
 block.collision_mask = { layers = { item = true, player = true, is_object = true } }
 block.minable = nil
 protos[#protos + 1] = block
+
+local roboport = table.deepcopy(data.raw["roboport"]["roboport"])
+roboport.name = "mb-test-roboport"
+roboport.energy_source = { type = "void" }
+roboport.minable = nil
+roboport.next_upgrade = nil
+protos[#protos + 1] = roboport
 
 data:extend(protos)

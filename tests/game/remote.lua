@@ -8,6 +8,15 @@
 -- Also builds the F7 benchmark saves (docs/feasibility.md F7):
 --   exec_lua: return remote.call("mb-test", "bench_hidden", 50)   -- 50 saturated 8:3 networks
 --   exec_lua: return remote.call("mb-test", "bench_vanilla", 50)  -- 50 x 24 vanilla splitters
+-- Groups save/load check (save_load_keeps_groups, Plan 2 Task 3):
+--   exec_lua: return remote.call("mb-test", "groups_build")    -- blocks in several groups
+--   exec_lua: return remote.call("mb-test", "groups_summary")  -- before the save
+--   save, server_stop, server_start with the save; groups_summary must match
+--   exec_lua: return remote.call("mb-test", "groups_bridge")   -- a block built after the load
+--                                                                 merges two groups
+--   exec_lua: remote.call("mb-test", "groups_destroy"); run_ticks 2; groups_summary
+--                                       -- a block destroyed without an event after the load
+--                                          leaves its group (on_object_destroyed)
 -- Loaded from control.lua only with factorio-test. Results: docs/feasibility.md F6, F7.
 local network = require("scripts.network")
 local builder = require("scripts.builder")
@@ -138,6 +147,50 @@ local function bench_vanilla(copies)
   return { copies = copies, splitters = splitters }
 end
 
+-- An L with a branch of 9 fast blocks, basic rows of 3 and 2 with a one-tile gap, and an
+-- express pair.
+local function groups_build()
+  local o, box = H.area(12, 12)
+  storage.mb_test_groups = { o = o, box = box }
+  for _, p in ipairs({ { 2, 2 }, { 2, 3 }, { 2, 4 }, { 2, 5 }, { 3, 5 }, { 4, 5 }, { 5, 5 }, { 1, 3 }, { 0, 3 } }) do
+    H.block(o, p[1], p[2], "fast")
+  end
+  for _, dx in ipairs({ 0, 1, 2, 4, 5 }) do
+    H.block(o, dx, 8, "basic")
+  end
+  H.block(o, 8, 0, "express")
+  H.block(o, 8, 1, "express")
+  return true
+end
+
+local function groups_summary()
+  local t = storage.mb_test_groups
+  if not t then
+    error("mb-test: groups_build first")
+  end
+  local list = {}
+  for id, g in pairs(storage.groups.by_id) do
+    list[#list + 1] = { id = id, tier = g.tier, blocks = table_size(g.blocks) }
+  end
+  table.sort(list, function(a, b) return a.id < b.id end)
+  return { tick = game.tick, parts = H.check_groups(t.box, "summary"), groups = list, next_id = storage.groups.next_id }
+end
+
+-- Fills the gap of the basic rows: the 3 and the 2 merge into one group of 6.
+local function groups_bridge()
+  H.block(storage.mb_test_groups.o, 3, 8, "basic")
+  return groups_summary()
+end
+
+-- Destroys one block of the express pair without an event.
+local function groups_destroy()
+  local o = storage.mb_test_groups.o
+  local e = game.surfaces.nauvis.find_entities_filtered({ position = { o.x + 8, o.y + 1 }, name = "mb-balancer-express" })[1]
+  return e ~= nil and e.destroy()
+end
+
 remote.add_interface("mb-test", {
   build = build, count = count, block = block, bench_hidden = bench_hidden, bench_vanilla = bench_vanilla,
+  groups_build = groups_build, groups_summary = groups_summary, groups_bridge = groups_bridge,
+  groups_destroy = groups_destroy,
 })

@@ -422,6 +422,24 @@ function groups.of(unit)
   return rec and rec.group
 end
 
+-- The block on tile (x, y) of surface `si`: its unit number, or nil.
+---@param si integer
+---@param x integer
+---@param y integer
+---@return integer?
+function groups.block_at(si, x, y)
+  local at = state().at[si]
+  return at and at[x .. "," .. y] or nil
+end
+
+-- The entity of block `unit`, or nil.
+---@param unit integer|uint64|nil
+---@return LuaEntity?
+function groups.entity(unit)
+  local rec = unit and state().blocks[unit]
+  return rec and rec.entity
+end
+
 -- on_init: creates the storage tables.
 function groups.init()
   state()

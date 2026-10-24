@@ -16,6 +16,19 @@
 --   mb-hidden-buffer                the buffer chest (one per network) that holds what a rebuild
 --                                   could not put back on the belts; its size is set per network
 --                                   at runtime with set_inventory_size_override
+-- On nauvis (the player's side), scripts/io.lua places:
+--   mb-hidden-linked-belt-<tier>    also the block-tile interface and the inserter belt port (F1,
+--                                   F3), on a block's own tile under the block
+--   mb-edge-in-<belt>, mb-edge-out-<belt>
+--                                   edges (F1): one input and one output linked belt per
+--                                   transport-belt prototype (modded belts included), at that
+--                                   belt's speed, with its belt animation, mining and placing as
+--                                   that belt. The last tile of a player belt that points into a
+--                                   block (input) or leaves it (output) is swapped for one. Input
+--                                   edges allow side loading like the belt they replace; output
+--                                   edges do not. Own fast-replace group, so a belt cannot be
+--                                   dragged over an edge. They keep the vanilla linked-belt
+--                                   structure (a hatch) for now; Plan 3 gives them a plain belt look
 -- Tiers: basic, fast, express, and turbo with Space Age.
 --
 -- Required from data-final-fixes.lua, so every speed is read from the final belt prototype: a
@@ -107,5 +120,34 @@ never.spoil_ticks = nil
 never.subgroup = nil
 never.order = "z"
 protos[#protos + 1] = never
+
+-- Edges, one input and one output per transport belt (docs/feasibility.md F1).
+local base_edge = raw("linked-belt", "linked-belt")
+for _, belt in pairs(data.raw["transport-belt"]) do
+  for _, role in ipairs({ "in", "out" }) do
+    local e = table.deepcopy(base_edge)
+    e.name = "mb-edge-" .. role .. "-" .. belt.name
+    e.localised_name = belt.localised_name and table.deepcopy(belt.localised_name) or { "entity-name." .. belt.name }
+    e.localised_description = nil
+    e.icons = belt.icons and table.deepcopy(belt.icons) or { { icon = belt.icon, icon_size = belt.icon_size } }
+    e.icon = nil
+    e.icon_size = nil
+    e.speed = belt.speed
+    e.belt_animation_set = table.deepcopy(belt.belt_animation_set) or e.belt_animation_set
+    e.allow_side_loading = role == "in"
+    e.allow_clone_connection = false
+    e.allow_blueprint_connection = false
+    e.minable = belt.minable and table.deepcopy(belt.minable) or nil
+    local item = belt.minable and belt.minable.result
+    e.placeable_by = item and { item = item, count = 1 } or nil
+    e.max_health = belt.max_health
+    e.resistances = table.deepcopy(belt.resistances)
+    e.next_upgrade = nil
+    e.fast_replaceable_group = "mb-edge"
+    e.hidden = true
+    e.hidden_in_factoriopedia = true
+    protos[#protos + 1] = e
+  end
+end
 
 data:extend(protos)

@@ -398,9 +398,15 @@ local function carry_into(placed, sources, tmp)
     return true
   end
   local buffer = placed.buffer
-  -- the new network's buffer is empty: one slot per remaining stack is enough before merging
-  buffer.set_inventory_size_override(defines.inventory.chest, math.min(rest, builder.max_buffer_slots))
+  -- one slot per remaining stack after what the buffer already holds is enough before merging
   local inv = buffer.get_inventory(defines.inventory.chest)
+  inv.sort_and_merge()
+  local held = #inv - inv.count_empty_stacks()
+  if held + rest > builder.max_buffer_slots then
+    return false
+  end
+  buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, held + rest))
+  inv = buffer.get_inventory(defines.inventory.chest)
   for i, src in ipairs(sources) do
     local n = left[i]
     if n > 0 then
@@ -438,19 +444,32 @@ end
 -- new network cannot be placed, cannot hold the items, or carrying them in raises an error, the
 -- new one is destroyed, `old` is left as it was, and it returns nil and the error. The caller
 -- relinks the visible edges to the new inputs and outputs.
+-- `extra` (optional) lists more old networks (balancers merged into this one) whose items are
+-- carried in and which are destroyed too, all or nothing with `old`.
 ---@param old table Placed
 ---@param net mb.Network
 ---@param tier string
 ---@param force? ForceID
+---@param extra? table[] more Placed
 ---@return table? placed
 ---@return string? err
-function builder.rebuild(old, net, tier, force)
+function builder.rebuild(old, net, tier, force, extra)
   local new, err = builder.place(net, tier, force)
   if not new then
     return nil, err
   end
+  local olds = { old }
+  for _, p in ipairs(extra or {}) do
+    olds[#olds + 1] = p
+  end
   local carried, result = pcall(function()
-    return carry_in(new, stacks_of(old))
+    local sources = {}
+    for _, p in ipairs(olds) do
+      for _, st in ipairs(stacks_of(p)) do
+        sources[#sources + 1] = st
+      end
+    end
+    return carry_in(new, sources)
   end)
   if not carried or not result then
     builder.destroy(new)
@@ -459,8 +478,72 @@ function builder.rebuild(old, net, tier, force)
     end
     return nil, tostring(result)
   end
-  builder.destroy(old)
+  for _, p in ipairs(olds) do
+    builder.destroy(p)
+  end
   return new
+end
+
+-- Moves every item stack of `inv` (a script inventory, emptied) into `placed`'s buffer chest,
+-- which drains into the network. Returns false and moves nothing if the buffer would need more
+-- than builder.max_buffer_slots slots.
+---@param placed table
+---@param inv LuaInventory
+---@return boolean
+function builder.stash(placed, inv)
+  local buffer = placed.buffer
+  if not (buffer and buffer.valid) then
+    return false
+  end
+  local binv = buffer.get_inventory(defines.inventory.chest)
+  binv.sort_and_merge()
+  local held = #binv - binv.count_empty_stacks()
+  local need = #inv - inv.count_empty_stacks()
+  if need == 0 then
+    return true
+  end
+  if held + need > builder.max_buffer_slots then
+    return false
+  end
+  buffer.set_inventory_size_override(defines.inventory.chest, held + need)
+  binv = buffer.get_inventory(defines.inventory.chest)
+  for i = 1, #inv do
+    local st = inv[i] --[[@as LuaItemStack]]
+    if st.valid_for_read and st.name ~= NEVER then
+      binv.insert(st)
+    end
+    st.clear()
+  end
+  binv.sort_and_merge()
+  buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, #binv - binv.count_empty_stacks()))
+  return true
+end
+
+-- Destroys `placed` and spills every item it held (merged into whole stacks first, item data and
+-- spoilage kept) on the ground around `position` of `surf`, marked to be looted. For a balancer
+-- removed with items inside, so nothing is deleted. Returns the number of items spilled.
+---@param placed table
+---@param surf LuaSurface
+---@param position MapPosition
+---@return integer
+function builder.spill(placed, surf, position)
+  local sources = stacks_of(placed)
+  local inv = game.create_inventory(math.max(1, #sources))
+  local n = 0
+  for _, st in ipairs(sources) do
+    n = n + st.count
+    inv.insert(st)
+  end
+  inv.sort_and_merge()
+  for i = 1, #inv do
+    local st = inv[i] --[[@as LuaItemStack]]
+    if st.valid_for_read then
+      surf.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true })
+    end
+  end
+  inv.destroy()
+  builder.destroy(placed)
+  return n
 end
 
 -- Shrinks `placed`'s buffer chest back to its prototype size once it is empty (after a big

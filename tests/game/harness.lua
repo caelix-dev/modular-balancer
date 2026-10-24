@@ -9,6 +9,7 @@
 local network = require("scripts.network")
 local builder = require("scripts.builder")
 local groups = require("scripts.groups")
+local balancer = require("scripts.balancer")
 
 local H = {}
 
@@ -451,6 +452,131 @@ function H.check_groups(box, what)
   end
   table.sort(sizes, function(a, b) return a > b end)
   return sizes
+end
+
+-- Player-side builds for the live balancer suites (tests/game/io.lua, play.lua). Tile offsets
+-- are relative to an area origin `o` (a tile centre); every entity is built with raise_built, as
+-- a player build would reach the mod's events.
+
+local VEC = { [D.north] = { 0, -1 }, [D.east] = { 1, 0 }, [D.south] = { 0, 1 }, [D.west] = { -1, 0 } }
+local OPPOSITE = { [D.north] = D.south, [D.east] = D.west, [D.south] = D.north, [D.west] = D.east }
+H.VEC, H.OPPOSITE = VEC, OPPOSITE
+
+-- Builds `name` at tile (o.x + dx, o.y + dy) with raise_built. `t` adds create_entity fields.
+function H.put(o, dx, dy, name, dir, t)
+  t = t or {}
+  t.name, t.position, t.direction, t.raise_built = name, { o.x + dx, o.y + dy }, dir, true
+  return ce(game.surfaces.nauvis, t)
+end
+
+-- The entity of `type` on tile (o.x + dx, o.y + dy), or nil.
+---@return LuaEntity?
+function H.at(o, dx, dy, type)
+  return game.surfaces.nauvis.find_entities_filtered({
+    area = { { o.x + dx - 0.4, o.y + dy - 0.4 }, { o.x + dx + 0.4, o.y + dy + 0.4 } }, type = type, limit = 1,
+  })[1]
+end
+
+-- An input on side `side` of the block at (bx, by): `len` belts pointing into the block, a
+-- loader and a source chest of `opts.stock` (default H.SOURCE_STOCK) `opts.item` behind them.
+-- opts.belt: belt name (default the tier's), opts.loader: loader tier (default H.TIER).
+function H.feed(o, bx, by, side, len, opts)
+  opts = opts or {}
+  local v, dir = VEC[side], OPPOSITE[side]
+  local r = { belts = {} }
+  for k = 1, len do
+    r.belts[k] = H.put(o, bx + v[1] * k, by + v[2] * k, opts.belt or H.BELT, dir)
+  end
+  r.loader = H.put(o, bx + v[1] * (len + 1), by + v[2] * (len + 1), "mb-test-loader-" .. (opts.loader or H.TIER), dir, { type = "output" })
+  r.chest = H.put(o, bx + v[1] * (len + 2), by + v[2] * (len + 2), "mb-test-chest")
+  r.stock = opts.stock or H.SOURCE_STOCK
+  if r.stock > 0 then
+    r.chest.insert({ name = opts.item or "iron-plate", count = r.stock })
+  end
+  return r
+end
+
+-- An output on side `side` of the block at (bx, by): `len` belts leaving the block, a sink
+-- loader and a sink chest. opts.belt, opts.loader as for H.feed.
+function H.sink(o, bx, by, side, len, opts)
+  opts = opts or {}
+  local v = VEC[side]
+  local r = { belts = {} }
+  for k = 1, len do
+    r.belts[k] = H.put(o, bx + v[1] * k, by + v[2] * k, opts.belt or H.BELT, side)
+  end
+  r.loader = H.put(o, bx + v[1] * (len + 1), by + v[2] * (len + 1), "mb-test-loader-" .. (opts.loader or H.TIER), side, { type = "input" })
+  r.chest = H.put(o, bx + v[1] * (len + 2), by + v[2] * (len + 2), "mb-test-chest")
+  return r
+end
+
+local BELTISH = {
+  ["transport-belt"] = true, ["underground-belt"] = true, splitter = true, ["lane-splitter"] = true,
+  ["linked-belt"] = true, loader = true, ["loader-1x1"] = true,
+}
+
+-- Every `item` (all items when nil) in `box`: containers, belt-connectables and loaders,
+-- inserter hands and items on the ground, plus the networks of the live balancers anchored in
+-- the box (their buffers included).
+---@return number
+function H.count_box(box, item)
+  local s = game.surfaces.nauvis
+  local n = 0.0
+  for _, e in ipairs(s.find_entities_filtered({ area = box })) do
+    if e.valid then
+      if e.type == "container" then
+        n = n + (item and e.get_item_count(item) or e.get_item_count())
+      elseif e.type == "inserter" then
+        local h = e.held_stack
+        if h.valid_for_read and (not item or h.name == item) then
+          n = n + h.count
+        end
+      elseif e.type == "item-entity" then
+        local st = e.stack
+        if not item or st.name == item then
+          n = n + st.count
+        end
+      elseif BELTISH[e.type] then
+        for i = 1, e.get_max_transport_line_index() do
+          local line = e.get_transport_line(i --[[@as defines.transport_line]])
+          n = n + (item and line.get_item_count(item) or line.get_item_count())
+        end
+      end
+    end
+  end
+  local recs = storage.balancer and storage.balancer.recs or {}
+  for _, rec in pairs(recs) do
+    local a = rec.anchor
+    if a and a.position.x >= box[1][1] and a.position.x <= box[2][1] and a.position.y >= box[1][2] and a.position.y <= box[2][2] then
+      local nets = { table.unpack(rec.extra) }
+      nets[#nets + 1] = rec.placed
+      for _, p in ipairs(nets) do
+        for _, it in ipairs(builder.contents(p)) do
+          if not item or it.name == item then
+            n = n + it.count
+          end
+        end
+      end
+    end
+  end
+  return n
+end
+
+-- Removes the blocks in `box` with raise_destroy (so their balancers are retired and their
+-- networks freed), flushes, then clears the box.
+function H.clear_blocks(box)
+  local s = game.surfaces.nauvis
+  for _, e in ipairs(s.find_entities_filtered({ area = box, type = "simple-entity-with-owner" })) do
+    if e.valid and groups.tier_of(e.name) then
+      e.destroy({ raise_destroy = true })
+    end
+  end
+  balancer.flush()
+  for _, e in ipairs(s.find_entities_filtered({ area = box })) do
+    if e.valid and e.type ~= "character" then
+      e.destroy()
+    end
+  end
 end
 
 return H

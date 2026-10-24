@@ -2,6 +2,7 @@ local surface = require("scripts.surface")
 local builder = require("scripts.builder")
 local groups = require("scripts.groups")
 local events = require("scripts.events")
+local balancer = require("scripts.balancer")
 
 -- A mod that changes a belt speed after modular-balancer's data-final-fixes leaves the hidden
 -- network of that tier at the old speed; log it (final review M3, Task 2 review M6).
@@ -17,8 +18,13 @@ script.on_init(function()
   check_speeds()
 end)
 script.on_configuration_changed(function()
-  groups.on_configuration_changed()
+  local ids, gone = groups.on_configuration_changed()
+  balancer.mark(ids, gone)
   check_speeds()
+end)
+-- Only re-sets the conditional flush handler (MODDING-RULES §2).
+script.on_load(function()
+  balancer.on_load()
 end)
 
 events.register()
@@ -30,7 +36,7 @@ end)
 ---@diagnostic disable-next-line: unnecessary-if
 if script.active_mods["factorio-test"] then
   require("tests.game.remote")
-  local suites = { "tests/game/smoke", "tests/game/placement", "tests/game/exactness", "tests/game/rebuild", "tests/game/groups" }
+  local suites = { "tests/game/smoke", "tests/game/placement", "tests/game/exactness", "tests/game/rebuild", "tests/game/groups", "tests/game/io", "tests/game/play" }
   if settings.startup["mb-spikes"].value then
     suites[#suites + 1] = "spikes/multi_belt/test"
     suites[#suites + 1] = "spikes/hidden_surface/test"

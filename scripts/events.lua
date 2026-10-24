@@ -69,7 +69,9 @@ local function built(entity, event)
     end
     return
   end
-  if belt_io.edge_belt(entity.name) then
+  if belt_io.edge_belt(entity.name) or (entity.name:sub(1, 22) == "mb-hidden-linked-belt-" and entity.surface_index ~= storage.surface_index) then
+    -- an edge or a block-tile linked belt built by the game (a clone, a ghost, another mod): kept
+    -- only if a port claims it at the next flush
     balancer.add_loose(entity, player)
     return
   end

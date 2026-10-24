@@ -182,12 +182,173 @@ local function delivered(outs)
   return n
 end
 
+-- Items lying on tile (x, y) of nauvis.
+---@return number
+local function ground_on(x, y)
+  local n = 0
+  for _, it in ipairs(game.surfaces.nauvis.find_entities_filtered({ area = { { x - 0.5, y - 0.5 }, { x + 0.5, y + 0.5 } }, type = "item-entity" })) do
+    n = n + it.stack.count
+  end
+  return n
+end
+
+local default_take = builder.take
+
 describe("lifecycle", function()
   after_each(function()
+    builder.max_take_slots = 65535
+    builder.max_buffer_slots = 65535
+    builder.take = default_take
     for _, box in ipairs(boxes) do
       H.clear_blocks(box)
     end
     boxes = {}
+  end)
+
+  -- Final review I1: builder.take never sizes an inventory by item count. With its cap lowered to
+  -- one slot, a backed-up balancer holding iron and copper plates, destroyed with nobody mining
+  -- it, is taken into several inventories; every item is spilled (off the block's tile).
+  test("take_uses_bounded_inventories", function()
+    async(900)
+    local o, box = area(10, 9)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3, { stock = 300 })
+    H.feed(o, 4, 4, D.north, 3, { stock = 300, item = "copper-plate" })
+    local out = H.sink(o, 4, 4, D.east, 3)
+    block(out)
+    balancer.flush()
+    after_ticks(600, function()
+      local iron, copper = H.count_box(box, "iron-plate"), H.count_box(box, "copper-plate")
+      assert(iron == 300 and copper == 300, "before: " .. iron .. " / " .. copper)
+      local id = groups.of(b.unit_number)
+      local items = {}
+      for _, it in ipairs(builder.contents(rec_of(b).placed)) do
+        items[it.name] = it.count
+      end
+      assert((items["iron-plate"] or 0) > 0 and (items["copper-plate"] or 0) > 0, "test setup: network holds " .. serpent.line(items))
+      builder.max_take_slots = 1
+      local invs = 0
+      builder.take = function(p)
+        local list, n = default_take(p)
+        invs = invs + #list
+        for _, inv in ipairs(list) do
+          if #inv > 1 then
+            error("an inventory of " .. #inv .. " slots with the cap at 1")
+          end
+        end
+        return list, n
+      end
+      local pos = b.position
+      b.destroy({ raise_destroy = true })
+      balancer.flush()
+      assert(invs >= 2, "take used " .. invs .. " inventories, expected at least 2")
+      assert(ground_on(pos.x, pos.y) == 0, "items spilled on the block's tile")
+      iron, copper = H.count_box(box, "iron-plate"), H.count_box(box, "copper-plate")
+      assert(iron == 300 and copper == 300, "after: " .. iron .. " / " .. copper)
+      done()
+    end)
+  end)
+
+  -- Final review I1, carry: a shrink whose leftover plates are hundreds of single belt items but
+  -- a couple of stacks once merged rebuilds with the buffer capped at 3 slots (it used to be
+  -- refused as too many items, counting the unmerged stacks).
+  test("carry_merges_into_a_capped_buffer", function()
+    async(900)
+    local o, box = area(10, 9)
+    local stock = 600
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3, { stock = stock })
+    local out1 = H.sink(o, 4, 4, D.east, 3)
+    local out2 = H.sink(o, 4, 4, D.south, 3)
+    block(out1)
+    block(out2)
+    balancer.flush()
+    after_ticks(600, function()
+      local rec, id = rec_of(b)
+      assert(nm(rec) == "1:2", "network " .. nm(rec))
+      local before = H.network_of(id)
+      assert(before > 3, "test setup: only " .. before .. " in the network")
+      builder.max_buffer_slots = 3
+      -- the south output goes: 1:2 -> 1:1, the network shrinks
+      for _, e in ipairs(out2.belts) do
+        e.destroy({ raise_destroy = true })
+      end
+      balancer.flush()
+      local rec2 = rec_of(b)
+      assert(nm(rec2) == "1:1", "the shrink was refused: " .. nm(rec2) .. " " .. serpent.line(rec2.refused))
+      assert(H.count_box(box, ITEM) == stock, "after the shrink: " .. H.count_box(box, ITEM) .. " of " .. stock)
+      done()
+    end)
+  end)
+
+  -- Final review Minor 1: a belt of another force pointing into a block is never swapped or
+  -- linked; it is refused ("other-force").
+  test("belt_of_another_force_ignored", function()
+    local o = area(10, 9)
+    local other = game.forces["mb-test-other"] or game.create_force("mb-test-other")
+    local b = H.block(o, 4, 4, H.TIER)
+    H.put(o, 3, 4, H.BELT, D.east, { force = other })
+    H.put(o, 2, 4, H.BELT, D.east, { force = other })
+    H.sink(o, 4, 4, D.east, 3)
+    balancer.flush()
+    local rec = rec_of(b)
+    assert(#rec.inputs == 0, "the other force's belt became an input")
+    local t = H.at(o, 3, 4, "transport-belt")
+    assert(t and t.force == other, "the other force's belt was swapped")
+    local refused = false
+    for _, r in ipairs(rec.refused) do
+      refused = refused or r.reason == "other-force"
+    end
+    assert(refused, "not refused: " .. serpent.line(rec.refused))
+  end)
+
+  -- Final review Minor 2: the items on a block-tile interface of a group destroyed with nobody
+  -- mining it are spilled off the block's tile, marked for the force's robots.
+  test("block_tile_port_items_spilled_off_the_tile", function()
+    async(900)
+    local o, box = area(12, 12)
+    local stock = 300
+    local b = H.block(o, 5, 5, H.TIER)
+    local ug = "express-underground-belt"
+    H.put(o, 5, 2, ug, D.south, { type = "input" })
+    H.put(o, 5, 4, ug, D.south, { type = "output" })
+    H.put(o, 5, 1, "mb-test-loader-" .. H.TIER, D.south, { type = "output" })
+    H.put(o, 5, 0, "mb-test-chest").insert({ name = ITEM, count = stock })
+    local out = H.sink(o, 5, 5, D.east, 3)
+    block(out)
+    balancer.flush()
+    after_ticks(600, function()
+      local rec = rec_of(b)
+      local lb = assert(rec.inputs[1] and rec.inputs[1].visible, "no block-tile interface")
+      if H.items_on(lb) == 0 then
+        error("test setup: the interface is empty")
+      end
+      local pos = b.position
+      b.destroy({ raise_destroy = true })
+      balancer.flush()
+      assert(not lb.valid, "the interface is still there")
+      assert(ground_on(pos.x, pos.y) == 0, ground_on(pos.x, pos.y) .. " items spilled on the block's tile")
+      for _, it in ipairs(game.surfaces.nauvis.find_entities_filtered({ area = box, type = "item-entity" })) do
+        assert(it.to_be_deconstructed(), "a spilled stack is not marked for the robots")
+      end
+      assert(H.count_box(box, ITEM) == stock, "after: " .. H.count_box(box, ITEM) .. " of " .. stock)
+      done()
+    end)
+  end)
+
+  -- Final review Minor 6: a block-tile linked belt cloned onto a tile no port claims is removed
+  -- at the next flush, its items kept.
+  test("cloned_block_tile_belt_cleaned_up", function()
+    local o, box = area(10, 9)
+    local s = game.surfaces.nauvis
+    local lb = H.ce(s, { name = "mb-hidden-linked-belt-" .. H.TIER, position = { o.x + 2, o.y + 2 }, direction = D.east, type = "input" })
+    lb.get_transport_line(1).insert_at(0.25, { name = ITEM, count = 1 })
+    local clone = assert(lb.clone({ position = { o.x + 6, o.y + 6 } }), "no clone")
+    lb.destroy()
+    assert(clone.valid and balancer.pending(storage.balancer), "the clone is not loose")
+    balancer.flush()
+    assert(not clone.valid, "the cloned linked belt was left behind")
+    assert(H.count_box(box, ITEM) == 1, "its item: " .. H.count_box(box, ITEM))
   end)
 
   -- Review Focus 3. A running 2:3 balancer (one input through a wired belt, Ruling 7) is

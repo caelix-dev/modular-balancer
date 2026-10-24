@@ -307,7 +307,7 @@ local function retire(st, id, ctx, live)
   for _, list in ipairs({ rec.inputs, rec.outputs }) do
     for _, p in ipairs(list) do
       if p.visible and p.visible.valid then
-        ctx.pool[#ctx.pool + 1] = { entity = p.visible, gid = target }
+        ctx.pool[#ctx.pool + 1] = { entity = p.visible, gid = target, tiles = rec.tiles, sink = st.sinks[id], force_index = rec.force_index }
       end
     end
   end
@@ -508,12 +508,17 @@ local function link_shared(st, ctx)
 end
 
 -- Puts loose port items into group `gid`'s network buffer, or spills them.
-local function home(st, inv, gid, s, position)
+-- With no network to take them (the group is gone, or its buffer is full), they go like a
+-- removed group's network: to the sink of `entry` (who mined the last block), else spilled off
+-- the group's tiles (`entry.tiles`, or the live group's), marked for its force's robots.
+local function home(st, inv, gid, s, position, entry)
   local rec = gid and st.recs[gid]
   if rec and rec.placed and builder.stash(rec.placed, inv) then
     inv.destroy()
   else
-    belt_io.spill(inv, s, position)
+    entry = entry or {}
+    local fi = entry.force_index or (rec and rec.force_index)
+    balancer.give(inv, entry.sink, s, position, entry.tiles or (rec and rec.tiles), fi and game.forces[fi] or nil)
   end
 end
 
@@ -527,7 +532,13 @@ local function cleanup(st, ctx)
   end
   table.sort(loose, function(a, b) return a.unit < b.unit end)
   for _, l in ipairs(loose) do
-    ctx.pool[#ctx.pool + 1] = { entity = l.entity }
+    -- a loose block-tile linked belt (a clone) that no port claims empties into the network of
+    -- the group on its tile, if any
+    local e = l.entity
+    local x, y = belt_io.tiles_of(e)
+    local unit = groups.block_at(e.surface_index, x, y)
+    local gid = unit and groups.of(unit)
+    ctx.pool[#ctx.pool + 1] = { entity = e, gid = gid, tiles = { { x, y } } }
   end
   st.loose = {}
   for _, entry in ipairs(ctx.pool) do
@@ -540,7 +551,7 @@ local function cleanup(st, ctx)
         local s, pos = e.surface, e.position
         local inv = belt_io.take_items(e)
         e.destroy()
-        home(st, inv, entry.gid, s, pos)
+        home(st, inv, entry.gid, s, pos, entry)
       end
     end
   end

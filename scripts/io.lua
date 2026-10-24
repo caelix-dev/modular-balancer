@@ -26,7 +26,9 @@
 --             that already has a block-tile interface (one belt-connectable per tile).
 -- A shared tile links the two networks directly, so it runs at the networks' speed whatever the
 -- tier of the belt on it (the belt itself carries nothing).
--- Loaders next to a block are ignored, and so are inserters of other forces. Inserter roles follow pickup_position and drop_position;
+-- Loaders next to a block are ignored, and so are inserters of other forces. A belt-connectable
+-- of another force on T is never swapped or linked; one pointing into or away from the block is
+-- refused ("other-force"). Inserter roles follow pickup_position and drop_position;
 -- a script that writes those raises no event, so a role can be stale until the next re-check.
 --
 -- Items are never dropped: a swap moves every item of the old entity onto the new one (its own
@@ -257,6 +259,13 @@ function belt_io.scan(group)
       local v = VEC[d]
       local tx, ty = b.x + v[1], b.y + v[2]
       local e = not groups.block_at(si, tx, ty) and belt_at(s, tx, ty) or nil
+      if e and e.force.index ~= group.force_index then
+        -- a belt-connectable of another force is never swapped or linked to this network
+        if e.direction == OPPOSITE[d] or e.direction == d then
+          refuse("other-force", tx, ty)
+        end
+        e = nil
+      end
       if e then
         local port = { block = b.unit, bx = b.x, by = b.y, side = d, tx = tx, ty = ty, entity = e }
         local role = (e.direction == OPPOSITE[d] and "in") or (e.direction == d and "out") or nil

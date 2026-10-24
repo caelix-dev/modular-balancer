@@ -7,7 +7,10 @@ local is_windows = package.config:sub(1, 1) == "\\"
 
 local function list_tests()
   local cmd = is_windows and "dir /b tests\\unit\\*_test.lua" or "ls tests/unit/*_test.lua"
-  local pipe = assert(io.popen(cmd))
+  local pipe = io.popen(cmd)
+  if not pipe then
+    error("cannot list tests")
+  end
   local files = {}
   for line in pipe:lines() do
     local name = tostring(line):match("([^/\\]+_test%.lua)%s*$")

@@ -30,5 +30,5 @@ Unit test contract: each `tests/unit/*_test.lua` returns `{ [name] = function() 
 - `info.json`, `data.lua`, `control.lua` - mod entry points. `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
 - `tests/unit/` - offline tests and `run.lua` runner.
 - `tests/game/` - FactorioTest suites run by `fdev test`.
-- `.emmyrc.json` - editor/analyzer config (FactorioTest globals whitelisted).
+- `.emmyrc.json` - editor config (FactorioTest globals whitelisted). `fdev lua check` ignores it and generates its own.
 - `.superpowers/` - local planning notes, git-ignored.

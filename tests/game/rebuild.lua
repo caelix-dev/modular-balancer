@@ -414,4 +414,85 @@ describe("rebuild", function()
     assert(after == put, after .. " of " .. put .. " items after the rebuild")
     builder.destroy(new)
   end)
+
+  -- Review N1: a second rebuild while the buffer still holds full stacks (a player removes two
+  -- output belts in a row). Shrink a backed-up 3:5 to 3:1, then at once rebuild as 3:2: the
+  -- buffer's 100-plate stacks are split onto the new belts, and every count stays exact.
+  test("second_rebuild_with_full_buffer_keeps_every_item", function()
+    async(9000)
+    backed_up({ n = 3, m = 5, stock = 2000 }, function(rig)
+      set_feed(rig, false)
+      local before = serpent.line(builder.contents(rig.placed))
+      H.rebuild(rig, 1)
+      local mid = serpent.line(builder.contents(rig.placed))
+      local buffered = rig.placed.buffer.get_item_count()
+      H.rebuild(rig, 2)
+      local after = serpent.line(builder.contents(rig.placed))
+      H.report("second rebuild: 3:5 %s -> 3:1 %s (%d in the buffer) -> 3:2 %s (%d in the buffer)", before, mid, buffered,
+        after, rig.placed.buffer.get_item_count())
+      assert(buffered > 0, "the first shrink left the buffer empty")
+      assert(mid == before and after == before, "contents changed: " .. before .. " / " .. mid .. " / " .. after)
+      assert_conserved(rig, "after the second rebuild")
+      done()
+    end)
+  end)
+
+  -- Review N3: stacks of several items with per-item state (partly used magazines and repair
+  -- packs) and a plain stack, all in the old buffer. Ammo and durability totals and the plate
+  -- count are exact after a rebuild.
+  test("partial_stacks_keep_item_state", function()
+    local probe = game.create_inventory(2)
+    probe[1].set_stack({ name = "firearm-magazine" })
+    probe[2].set_stack({ name = "repair-pack" })
+    local mag, dur = probe[1].ammo, probe[2].durability
+    probe.destroy()
+    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    old.buffer.set_inventory_size_override(defines.inventory.chest, 3)
+    local binv = old.buffer.get_inventory(defines.inventory.chest)
+    assert(binv.insert({ name = "firearm-magazine", count = 10, ammo = 3 }) == 10, "magazines")
+    assert(binv.insert({ name = "repair-pack", count = 5, durability = dur / 2 }) == 5, "repair packs")
+    assert(binv.insert({ name = "iron-plate", count = 50 }) == 50, "plates")
+    local function totals(placed)
+      ---@type {rounds: number, mags: integer, wear: number, packs: integer, plates: integer}
+      local t = { rounds = 0.0, mags = 0, wear = 0.0, packs = 0, plates = 0 }
+      local function look(st)
+        if st.name == "firearm-magazine" then
+          t.mags = t.mags + st.count
+          t.rounds = t.rounds + (st.count - 1) * mag + st.ammo
+        elseif st.name == "repair-pack" then
+          t.packs = t.packs + st.count
+          t.wear = t.wear + (st.count - 1) * dur + st.durability
+        elseif st.name == "iron-plate" then
+          t.plates = t.plates + st.count
+        end
+      end
+      for _, e in ipairs(placed.entities) do
+        if e.type == "container" then
+          local inv = e.get_inventory(defines.inventory.chest)
+          for i = 1, #inv do
+            if inv[i].valid_for_read then
+              look(inv[i])
+            end
+          end
+        else
+          for i = 1, e.get_max_transport_line_index() do
+            for _, d in ipairs(e.get_transport_line(i).get_detailed_contents()) do
+              look(d.stack)
+            end
+          end
+        end
+      end
+      return t
+    end
+    local before = totals(old)
+    local new = assert(builder.rebuild(old, assert(network.build(3, 5)), "express"))
+    local after = totals(new)
+    H.report("partial_stacks: before %s, after %s (%d left in the buffer)", serpent.line(before), serpent.line(after),
+      new.buffer.get_item_count())
+    for _, key in ipairs({ "mags", "rounds", "packs", "wear", "plates" }) do
+      assert(math.abs(after[key] - before[key]) < 1e-6, key .. ": " .. before[key] .. " -> " .. after[key])
+    end
+    assert(after.plates == 50 and new.buffer.get_item_count("iron-plate") < 50, "the plates were not split onto belts")
+    builder.destroy(new)
+  end)
 end)

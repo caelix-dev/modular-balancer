@@ -8,6 +8,8 @@ local function check_speeds()
     log("modular-balancer: hidden network speed differs from its belt: " .. msg)
   end
 end
+-- on_init and on_configuration_changed can each be registered only once: later tasks add their
+-- work to these handlers (call it from here), they do not register their own.
 script.on_init(check_speeds)
 script.on_configuration_changed(check_speeds)
 

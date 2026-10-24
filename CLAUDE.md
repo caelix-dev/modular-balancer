@@ -31,7 +31,7 @@ Build a release zip from `git archive` (committed files only), never from the wo
 
 ## File map
 
-- `info.json`, `settings.lua`, `data.lua`, `data-final-fixes.lua`, `control.lua` - mod entry points (`data-final-fixes.lua` builds the hidden prototypes). `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
+- `info.json`, `settings.lua`, `data.lua`, `data-final-fixes.lua`, `control.lua` - mod entry points (`data-final-fixes.lua` builds the hidden prototypes). `control.lua` has the mod's only `on_init` and `on_configuration_changed` handlers (each can be registered once); later code adds its work to them instead of registering again. `control.lua` hooks FactorioTest when `factorio-test` is active; add new suites to its list.
 - `prototypes/hidden.lua` - hidden per-tier entities of the balancing network (`mb-hidden-splitter-<tier>`, also the priority splitter, `mb-hidden-linked-belt-<tier>`, `mb-hidden-lane-splitter-<tier>`, `mb-hidden-loader-<tier>`), the buffer chest `mb-hidden-buffer` and the dead-end filter item `mb-hidden-never`; required from `data-final-fixes.lua`.
 - `scripts/network.lua` - network generator (pure Lua). `scripts/flow.lua` - offline flow model, never required by product code (only test code: `tests/unit`, and `tests/game/exactness.lua` for Ruling 6).
 - `scripts/surface.lua` - the hidden surface `mb-hidden` and its region allocator. `scripts/builder.lua` - places a network on it, all or nothing (`place`, `contents`, `destroy`, `rebuild` with item carry-over through a buffer chest).

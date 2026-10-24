@@ -328,24 +328,33 @@ end
 
 -- Puts copies of `sources` (LuaItemStacks of the old network, left untouched) into `placed`,
 -- keeping item data and spoilage:
--- - onto the hidden belts, one item at a time (insert_at with the stack itself, so each belt
---   item keeps its own data and spoil fraction), wherever there is room. A stack that a free
---   belt position refuses goes to the buffer.
+-- - onto the hidden belts, one item at a time (insert_at with the stack itself and
+--   belt_stack_size 1, so each belt item keeps its own data and spoil fraction), wherever there
+--   is room. A stack that a free belt position refuses goes to the buffer. So does a stack of
+--   several items with per-item state (ammo, tools such as repair packs and science packs,
+--   damaged items): copying one of them would copy the top item's partial ammo, durability or
+--   health onto every copy.
 -- - the rest into the buffer chest, slot by slot. A whole stack is inserted as itself; the
---   rest of a partly moved stack (only a belt stack of several plain items) as a definition
---   with its spoil fraction. Inserting merges stacks like any chest: merged spoilables average
---   their spoil fraction, so the total spoilage is kept. The chest is then sorted and shrunk to
---   the slots it uses.
+--   rest of a partly moved stack is a full copy of the stack (set_stack into a one-slot script
+--   inventory, which keeps every field) with its count lowered. Inserting merges stacks like
+--   any chest: merged spoilables average their spoil fraction, so the total spoilage is kept.
+--   The chest is then sorted and shrunk to the slots it uses.
 -- Returns false if more than builder.max_buffer_slots slots would be needed.
+-- A stack that must not be split onto belts one item at a time (see carry_in).
+local SPLIT_UNSAFE = { ammo = true, tool = true, ["repair-tool"] = true }
+local function keep_whole(st)
+  return st.count > 1 and (SPLIT_UNSAFE[st.type] or st.health < 1)
+end
+
 ---@return boolean
-local function carry_in(placed, sources)
+local function carry_into(placed, sources, tmp)
   local left = {} -- items of sources[i] not yet carried
   for i, st in ipairs(sources) do
     left[i] = st.count
   end
   local k = 1
   local function current()
-    while k <= #sources and left[k] == 0 do
+    while k <= #sources and (left[k] == 0 or keep_whole(sources[k])) do
       k = k + 1
     end
     return k <= #sources and sources[k] or nil
@@ -363,9 +372,12 @@ local function carry_in(placed, sources)
         while st and pos < line.line_length do
           if line.can_insert_at(pos) then
             local before = line.get_item_count()
-            local moved = line.insert_at(pos, st) and line.get_item_count() - before or 0
+            local moved = line.insert_at(pos, st, 1) and line.get_item_count() - before or 0
             if moved > 0 then
-              left[k] = math.max(0, left[k] - moved)
+              if moved > left[k] then
+                error("builder: a belt took " .. moved .. " items of a stack with " .. left[k] .. " left")
+              end
+              left[k] = left[k] - moved
             else
               k = k + 1 -- refused on a free position: this stack goes to the buffer
             end
@@ -394,17 +406,31 @@ local function carry_in(placed, sources)
     if n > 0 then
       local stack = src
       if n < src.count then
-        stack = { name = src.name, quality = src.quality.name, count = n, spoil_percent = src.spoil_percent }
+        tmp[1].set_stack(src)
+        tmp[1].count = n
+        stack = tmp[1]
       end
       if inv.insert(stack) ~= n then
         return false
       end
+      tmp[1].clear()
     end
   end
   inv.sort_and_merge()
   local used = #inv - inv.count_empty_stacks()
   buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, used))
   return true
+end
+
+---@return boolean
+local function carry_in(placed, sources)
+  local tmp = game.create_inventory(1)
+  local ok, fits = pcall(carry_into, placed, sources, tmp)
+  tmp.destroy()
+  if not ok then
+    error(fits)
+  end
+  return fits == true
 end
 
 -- Replaces `old` by `net`: places the new network, copies every item stack of the old one into it
@@ -423,7 +449,9 @@ function builder.rebuild(old, net, tier, force)
   if not new then
     return nil, err
   end
-  local carried, result = pcall(carry_in, new, stacks_of(old))
+  local carried, result = pcall(function()
+    return carry_in(new, stacks_of(old))
+  end)
   if not carried or not result then
     builder.destroy(new)
     if carried then

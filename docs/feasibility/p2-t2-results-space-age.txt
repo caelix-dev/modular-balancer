@@ -1,4 +1,4 @@
-Plan 2 Task 2 in-game suites (fix round 1), Factorio 2.1.23, space-age preset. Exactness tests at express; tier tests per tier incl. turbo.
+Plan 2 Task 2 in-game suites (fix round 2), Factorio 2.1.23, space-age preset. Exactness tests at express; tier tests per tier incl. turbo.
 MB-TEST conservation 3:5: 1528 inside the network (48 on 3 dead-end splitters), 1528 returned, 1472 outside (of 3000)
 MB-TEST conservation 8:3: 1580 inside the network (128 on 8 dead-end splitters), 1580 returned, 6420 outside (of 8000)
 MB-TEST tier basic 2:3: outputs 10.000 10.000 10.000, total 30.000 (2 belts = 30.000)
@@ -54,8 +54,10 @@ MB-TEST after shrink to 3:1: output 45.000 items/s while the buffer drains (1144
 MB-TEST item_data_kept_on_rebuild: 20 blueprints and 1 armor; 16 stacks on the new belts, 5 in the buffer; armor grid {{count = 1, name = "solar-panel-equipment", quality = "normal"}}
 MB-TEST spoilage_kept_on_rebuild: 340 yumako, total spoilage 169.4000 before, 169.4164 after, freshest after 0.2000 (freshest put 0.2)
 MB-TEST too_many_items: 340 items, rebuild returned nil, too-many-items
-MB-TEST rebuild_cost_at_64_64: an empty place of the same network took Duration: 57.466900ms
-MB-TEST rebuild_cost_at_64_64: 4677 entities, 14856 items carried, 0 into the buffer; rebuild took Duration: 221.288600ms
+MB-TEST rebuild_cost_at_64_64: an empty place of the same network took Duration: 64.151000ms
+MB-TEST rebuild_cost_at_64_64: 4677 entities, 14856 items carried, 0 into the buffer; rebuild took Duration: 265.345100ms
+MB-TEST second rebuild: 3:5 {{count = 1528, name = "iron-plate", quality = "normal"}} -> 3:1 {{count = 1528, name = "iron-plate", quality = "normal"}} (1460 in the buffer) -> 3:2 {{count = 1528, name = "iron-plate", quality = "normal"}} (1256 in the buffer)
+MB-TEST partial_stacks: before {mags = 10, packs = 5, plates = 50, rounds = 93, wear = 1350}, after {mags = 10, packs = 5, plates = 50, rounds = 93, wear = 1350} (15 left in the buffer)
 
 PASSED: tests/game/smoke > modular-balancer smoke > nauvis exists
 PASSED: tests/game/placement > placement > place_then_destroy_leaves_nothing
@@ -117,4 +119,6 @@ PASSED: tests/game/rebuild > rebuild > spoilage_kept_on_rebuild
 PASSED: tests/game/rebuild > rebuild > too_many_items_keeps_the_old_network
 PASSED: tests/game/rebuild > rebuild > never_item_is_dropped_on_rebuild
 PASSED: tests/game/rebuild > rebuild > rebuild_cost_at_64_64
-60 passed, 0 failed, 0 skipped (60 total)
+PASSED: tests/game/rebuild > rebuild > second_rebuild_with_full_buffer_keeps_every_item
+PASSED: tests/game/rebuild > rebuild > partial_stacks_keep_item_state
+62 passed, 0 failed, 0 skipped (62 total)

@@ -800,6 +800,19 @@ inserts the `LuaItemStack`s themselves.
   returns `nil, "too-many-items"`. The old network's contents and the region count are
   unchanged.
 - `mb-hidden-never` (cheat-only) is left out of `contents` and dropped by a rebuild.
+- Fix round 2:
+  - **Belt copies are explicit.** Belt copies use `insert_at(pos, stack, 1)`, and a copy that
+    takes more items than the stack has left raises an error (the rebuild then fails cleanly).
+  - **Second rebuild with a full buffer.** A backed-up 3:5 shrunk to 3:1 (1 460 in the buffer)
+    and at once rebuilt as 3:2 still holds exactly 1 528 plates; 1 256 were left in the buffer,
+    after splitting its 100-plate stacks onto the new belts.
+  - **Stacks with per-item state stay whole.** Stacks of several items with per-item state go
+    into the buffer whole (ammo, tools and repair packs, damaged items): copying one item would
+    copy the top item's partial state. The remainder of a split plain stack is a `set_stack`
+    copy with its count lowered, so it keeps every field.
+  - **Measured.** 10 magazines (top at 3 of 10 rounds), 5 repair packs (top at half durability)
+    and 50 plates in the old buffer give 93 rounds, durability 1 350 and 50 plates after the
+    rebuild, with the plates split onto belts.
 
 **Rebuild cost at 64:64** (recorded; `helpers.create_profiler`).
 - An empty `place` of the 4 677-entity network takes 54-57 ms.

@@ -25,6 +25,7 @@ script.on_configuration_changed(function()
   local ids, gone = groups.on_configuration_changed()
   balancer.mark(ids, gone)
   lifecycle.on_configuration_changed()
+  balancer.harden()
   check_speeds()
 end)
 -- Only re-sets the conditional flush handler (MODDING-RULES §2).

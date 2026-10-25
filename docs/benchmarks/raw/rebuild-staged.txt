@@ -1,0 +1,29 @@
+Staged rebuild hitch (Plan 3 Task 5). Durations from helpers.create_profiler, one per flush
+handler call (bench_staged in bench/builders.lua; "mb-bench tick N" lines of the instance log),
+summarized by count / max / median / total. Before: bench_add_output on the code at 8d8b563
+(one blocking flush). Fresh copy of the save for every run; machine CPU load 50-85 % from other
+jobs.
+
+master-full64 (11 x 64:64, 29 970 iron plates each)
+  before  add 1 output to 1 group             1 flush   699.7 ms
+  before  add 1 output to 10 groups           1 flush   8101.6 ms
+  before  remove 10 groups (spill)            1 flush   4947.4 ms
+  after   add 1 output to 1 group             24 ticks  max 120.7  median 40.9  total 1074 ms
+          ticks 0..23: 11.8 8.8 120.7(generate) 99.1(plan) 40.2 40.9 44.3 44.1 45.5 45.2 36.3 42.2
+                       37.0 36.7 87.4 41.9 36.3 35.7 31.4 38.1 35.2 41.3 63.5 10.0
+  after   add 1 output to 10 groups           219 ticks max 177.2  median 42.7  total 11725 ms
+          (longest: generation ticks 40, 48, 56, 8, 73: 177 162 156 155 138 ms)
+  after   remove 10 groups (spill)            142 ticks max 76.8   median 42.2  total 6326 ms
+          (before deferring edge unswaps over the budget: 249 ticks, first tick 253 ms)
+
+master-unmerge (4 x 64:64, 12 kinds of stack-size-1 items, 29 970 per network)
+  before  add 1 output to 1 group             1 flush   1648.7 ms
+  before  remove 3 groups (spill)             1 flush   314381.7 ms
+  after   add 1 output to 1 group             24 ticks  max 82.8   median 28.8  total 749 ms
+  after   remove 3 groups (spill)             98 ticks  max 61.7   median 26.9  total 2845 ms
+          (89 910 items on the ground afterwards, 67 531 item entities)
+
+Mid-rebuild save/load (master-full64, sources stopped):
+  before 352198, at save 352198 (job 1 at op 11015/16555, job 2 queued),
+  after load 352198 (job 1 done, drain 1 running, job 2 at op 2144), at the end 352198,
+  pending false, 11 regions in use for 11 networks.

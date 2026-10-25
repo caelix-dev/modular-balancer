@@ -9,7 +9,17 @@
 --   sinks = { [group id] = { player_index?, robot? } },   who removed the last block of a group
 --   loose = { [unit number] = LuaEntity },                 edges built by the game, not by this
 --                                                           mod (an upgrade, a ghost, a clone)
+--   jobs  = { [group id] = job },                          staged rebuilds ("Staged rebuilds")
+--   drains = { [group id] = true },                        groups whose old networks drain
+--   spill_queue = { { nets, anchor, sink, tiles, force_index, cursor } },  removed networks
+--                                                           being taken out and given away
+--   retry = { [group id] = true },                         marked by an event since the last
+--                                                           flush (a failed staged rebuild is
+--                                                           tried again)
 -- }
+--
+-- Bounded work (Plan 3 Task 5): the handler spends balancer.tick_budget work units per tick on
+-- scans, rebuilds, drains and spills; what does not fit waits for the next tick.
 --
 -- Coalescing. Events only mark groups dirty (balancer.mark, mark_near, mark_block). The next
 -- tick flushes them all at once (an on_nth_tick(1) handler that exists only while something is
@@ -433,6 +443,10 @@ end
 local SMALL = 16
 -- Work units charged for scanning a group in a flush, per port found (64:65: about 11 ms).
 local SCAN_COST = 80
+-- Work units charged per edge swapped back to its belt by a flush.
+local UNSWAP_COST = 150
+-- Work units charged per stack given away or spilled when a removed network is taken out.
+local SPILL_COST = 25
 
 -- The shape a rebuild targets.
 local function job_key(n, m, want)
@@ -743,10 +757,14 @@ local function cleanup(st, ctx)
       -- a port of a group whose refresh was deferred: left as it is, claimed or swapped back by
       -- a later flush
       st.loose[e.unit_number] = e
+    elseif e.valid and not ctx.claimed[e.unit_number] and ctx.units <= 0 and belt_io.edge_belt(e.name) then
+      -- out of budget (the ports of many removed groups): swapped back by a later flush
+      st.loose[e.unit_number] = e
     elseif e.valid and not ctx.claimed[e.unit_number] then
       touch(ctx, e)
       if belt_io.edge_belt(e.name) then
         belt_io.unswap(e)
+        ctx.units = ctx.units - UNSWAP_COST
       else
         local s, pos = e.surface, e.position
         local inv = belt_io.take_items(e)
@@ -832,10 +850,14 @@ local function spill_some(st, ctx)
       builder.destroy(p) -- the surface is gone, and its blocks and belts with it
       table.remove(sp.nets, 1)
     else
-      local invs, _, gone, used = builder.take(p, ctx.units)
+      -- the take's share of the budget: every stack taken is given or spilled in this tick too
+      local item = builder.COST.item
+      local invs, _, gone, used = builder.take(p, ctx.units * item / (item + SPILL_COST))
       ctx.units = ctx.units - (used or 0)
+      sp.cursor = sp.cursor or {}
       for _, inv in ipairs(invs) do
-        balancer.give(inv, sp.sink, s, a.position, sp.tiles, sp.force_index and game.forces[sp.force_index])
+        ctx.units = ctx.units - SPILL_COST * (#inv - inv.count_empty_stacks())
+        balancer.give(inv, sp.sink, s, a.position, sp.tiles, sp.force_index and game.forces[sp.force_index], sp.cursor)
       end
       if gone ~= false then
         table.remove(sp.nets, 1)
@@ -977,31 +999,47 @@ end
 ---@param position MapPosition
 ---@param tiles {[1]: integer, [2]: integer}[]?
 ---@param force LuaForce?
-function balancer.spill_clear(inv, s, position, tiles, force)
+---@param cursor { r: number?, k: number? }?
+function balancer.spill_clear(inv, s, position, tiles, force, cursor)
   local taken = {}
   for _, t in ipairs(tiles or {}) do
     taken[t[1] .. "," .. t[2]] = true
   end
   local cx = math.floor((position.x or position[1]) --[[@as number]])
   local cy = math.floor((position.y or position[2]) --[[@as number]])
-  -- candidate tiles, nearest first, outside the group (up to 32 rings)
+  -- candidate tiles, nearest first, outside the group (up to 32 rings); with a `cursor` (kept by
+  -- the caller across calls: a removed network spilled over several ticks), the search goes on
+  -- from where the last call stopped instead of trying the full tiles near the centre again
+  ---@type number, number, {[1]: integer, [2]: integer}[]
   local r, k, ring = 0, 0, {}
+  local function make_ring()
+    ring = {}
+    for dx = -r, r do
+      for dy = -r, r do
+        if math.max(math.abs(dx), math.abs(dy)) == r then
+          ring[#ring + 1] = { cx + dx, cy + dy }
+        end
+      end
+    end
+  end
+  if cursor and cursor.r then
+    r, k = cursor.r, (cursor.k or 1) - 1
+    make_ring()
+  end
+  -- a removed network spilled over several ticks may hold tens of thousands of stacks that do
+  -- not merge: it gets more rings than one inventory (piling the rest on one spot costs more and
+  -- more per stack)
+  local rings = cursor and 256 or 32
   local function next_tile()
     while true do
       k = k + 1
       if k > #ring then
         r = r + 1
-        if r > 32 then
+        if r > rings then
           return nil
         end
-        ring, k = {}, 1
-        for dx = -r, r do
-          for dy = -r, r do
-            if math.max(math.abs(dx), math.abs(dy)) == r then
-              ring[#ring + 1] = { cx + dx, cy + dy }
-            end
-          end
-        end
+        make_ring()
+        k = 1
       end
       local t = ring[k] --[[@as {[1]: integer, [2]: integer}]]
       if not taken[t[1] .. "," .. t[2]] then
@@ -1025,10 +1063,13 @@ function balancer.spill_clear(inv, s, position, tiles, force)
       end
     end
     if st.valid_for_read and not placed then
-      -- no free tile within 32 rings: never drop the stack
+      -- no free tile within the rings: never drop the stack
       s.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true, force = force })
     end
     st.clear()
+  end
+  if cursor then
+    cursor.r, cursor.k = tile and r or rings + 1, tile and k or 1
   end
   inv.destroy()
 end
@@ -1037,7 +1078,7 @@ end
 --   player     its main inventory (a player without one, dead or a spectator by the flush, is
 --              skipped);
 --   robot      the storage chests of its logistic network;
---   platform   its hub.
+--   platform   its hub (also with no sink when `s` is a space platform's surface).
 -- What does not fit, or everything with no sink, is spilled by balancer.spill_clear outside the
 -- group's `tiles`, marked for deconstruction by the robot's or platform's force, or else by
 -- `force` (the group's).
@@ -1047,11 +1088,17 @@ end
 ---@param position MapPosition
 ---@param tiles {[1]: integer, [2]: integer}[]?
 ---@param force LuaForce?
-function balancer.give(inv, sink, s, position, tiles, force)
+---@param cursor table? see balancer.spill_clear
+function balancer.give(inv, sink, s, position, tiles, force, cursor)
   local player = sink and sink.player_index and game.get_player(sink.player_index) or nil
   local main = player and player.valid and player.get_main_inventory() or nil
   local robot = sink and sink.robot
   local platform = sink and sink.platform
+  if not (main or (robot and robot.valid) or (platform and platform.valid)) and s.platform then
+    -- a group on a space platform with nobody to take its items: its hub (items spilled on a
+    -- platform can land in space, where no robot fetches them)
+    platform = s.platform
+  end
   ---@type LuaLogisticNetwork?
   local net
   ---@type LuaEntity?
@@ -1081,7 +1128,7 @@ function balancer.give(inv, sink, s, position, tiles, force)
       end
     end
   end
-  balancer.spill_clear(inv, s, position, tiles, force)
+  balancer.spill_clear(inv, s, position, tiles, force, cursor)
 end
 
 -- Remembers who removed the last block of the `gone` groups (scripts/events.lua, a mined block):
@@ -1122,6 +1169,20 @@ function balancer.redirect_upgrade(e, target, player_index)
   local st = state()
   st.redirects[#st.redirects + 1] = { entity = e, target = target, player_index = player_index }
   arm()
+end
+
+-- Configuration change: networks placed by an older version can be damaged (Plan 3 Task 5 sets
+-- every hidden entity indestructible when it is created). Makes them indestructible too.
+function balancer.harden()
+  for _, rec in pairs(storage.balancer and storage.balancer.recs or {}) do
+    for _, p in ipairs(nets_of(rec)) do
+      for _, e in ipairs(p.entities) do
+        if e.valid and e.destructible then
+          e.destructible = false
+        end
+      end
+    end
+  end
 end
 
 -- Marks every group (configuration change, a lost hidden surface).

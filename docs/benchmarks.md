@@ -168,6 +168,59 @@ network. `bench_add_output` adds one output to some groups and times `balancer.f
   over ticks). The README's size note now gives these numbers.
 - Measured on the busy machine, so the times are likely somewhat high; they are not strict
   bounds.
+- Superseded by the staged rebuilds below (Task 5).
+
+### Staged rebuilds (Plan 3 Task 5, `rebuild_cost_is_bounded`)
+
+Since Task 5 the flush handler spends at most `balancer.tick_budget` work units per tick
+(30 000, about 30 ms on an idle desktop; `builder.COST` and the scan/spill costs in
+`scripts/balancer.lua`) on rebuilds, drains and spills. A rebuild:
+
+1. generates the network in a tick of its own (it cannot be split);
+2. places it a budget's worth of entities per tick while the old network keeps running;
+3. switches every port to it and drains the sealed old network into it, item by item, over the
+   next ticks.
+
+A removed network is taken out and given away or spilled the same way. Everything is in
+`storage` and counted in work units, never time, so a save made mid-rebuild finishes it after
+loading, and multiplayer peers do the same work per tick.
+
+Method:
+- saves: `master-full64` (11 x 64:64, every sink stopped, 29 970 iron plates per network) and
+  `master-unmerge` (4 x 64:64 fed with 12 kinds of stack-size-1 items: armor, vehicles, wagons,
+  spidertron; 29 970 items per network, every one its own inventory slot);
+- before = the code at 8d8b563, timing the one blocking flush;
+- after = `bench_staged`, which times every handler call until no work is left
+  (raw/rebuild-staged.txt);
+- each run loads a fresh copy of the save. The machine was busy throughout (CPU load 50-85 %
+  from other jobs), so absolute times are high and noisy, before and after alike.
+
+| case | before: one flush | after: longest tick | after: median tick | after: ticks |
+| --- | --- | --- | --- | --- |
+| one full 64:64 gets a 65th output | 700 ms | 121 ms | 41 ms | 24 |
+| ten full 64:64 get a 65th output in one flush | 8 102 ms | 177 ms | 43 ms | 219 |
+| ten full 64:65 removed (nobody to take the items, spilled) | 4 947 ms | 77 ms | 42 ms | 142 |
+| one full 64:64 of unmergeable items gets a 65th output | 1 649 ms | 83 ms | 29 ms | 24 |
+| three full 64:64 of unmergeable items removed (spilled) | 314 382 ms | 62 ms | 27 ms | 98 |
+
+- **The longest tick is network generation.** `network.build` for 64:65 takes 80-120 ms on this
+  machine (64:64: about 20 ms; Task 1 measured 300:300 at about 200 ms offline). It runs in a
+  tick of its own and cannot be split without making the generator resumable with its state in
+  `storage`. Every other tick stays near the budget: 25-50 ms, with spikes to about 100 ms (GC,
+  the machine's load).
+- **Ten rebuilds at once:** the ten placements and drains run one after the other, about 220 ticks
+  (3.6 s) in all, each tick within the budget except the ten generation ticks (100-180 ms here).
+- **Unmergeable spill (3 x 30 000 stacks):** before, the spill piled every stack beyond 32 rings
+  on one spot, and each further stack searched a free place through the pile: over five minutes
+  frozen. Now a removed network spilled over several ticks keeps its search cursor and gets up to
+  256 rings, so each stack costs about the same.
+- The flush itself is bounded too: a group's scan is charged per port, groups over the budget
+  wait for the next tick, and edges of removed groups over the budget are swapped back on a later
+  tick (the removal of ten 64:65 groups: 1 290 edges).
+- Mid-rebuild save and load (MCP instance, `master-full64` with every source stopped): 352 198
+  items before; saved with one group's placement at operation 11 015 of 16 555 and another queued;
+  352 198 after loading; the handler resumed, both groups finished as 64:65, 352 198 at the end,
+  11 regions for 11 networks.
 
 ### Round 2 tables
 

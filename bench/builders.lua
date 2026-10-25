@@ -46,7 +46,7 @@ local COPY_W = 12 -- 10 columns and a 2-tile gap
 local ORIGIN = { x = 3000, y = 3000 }
 local COLUMN_H = 400 -- copies are stacked in columns at most this tall
 
----@return { copies: table[], spec: table?, probe_tick: integer?, next_y: number? }
+---@return { copies: table[], spec: table?, probe_tick: integer?, next_y: number?, items: string[]? }
 local function bench_state()
   storage.mb_bench = storage.mb_bench or { copies = {} }
   return storage.mb_bench
@@ -331,6 +331,7 @@ local function bench_items(items)
   if items == "unmergeable" then
     items = {}
     for _, name in ipairs(UNMERGEABLE) do
+      ---@diagnostic disable-next-line: unnecessary-if
       if prototypes.item[name] then
         items[#items + 1] = name
       end

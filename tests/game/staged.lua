@@ -169,14 +169,30 @@ describe("staged", function()
       local _, id = rec_of(b)
       balancer.tick_budget = 40
       stop(H.sink(o, 4, 4, D.south, 3))
-      after_ticks(3, function()
-        local job = storage.balancer.jobs[id]
-        assert(job and job.b and job.b.i > 1 and job.b.i <= #job.b.ops, "test setup: no placement half done")
+      -- waits for the placement to be half done (generated, planned, some entities created)
+      local waited = 0
+      local function half_done()
+        local j = storage.balancer.jobs[id] --[[@as table?]]
+        return j and j.b and j.b.i > 1 and j.b.i <= #j.b.ops and j or nil
+      end
+      local function wait(k)
+        after_ticks(1, function()
+          waited = waited + 1
+          if half_done() then
+            k()
+          else
+            assert(waited < 200 and storage.balancer.jobs[id], "test setup: no placement half done")
+            wait(k)
+          end
+        end)
+      end
+      wait(function()
+        local job = half_done() --[[@as table]]
         local first = job.b.placed
         stop(H.sink(o, 4, 4, D.north, 3))
         local restarted = false
         each_tick(4000, function(t)
-          local j = storage.balancer.jobs[id]
+          local j = storage.balancer.jobs[id] --[[@as table?]]
           restarted = restarted or (j ~= nil and j.key ~= job.key)
           assert(H.count_box(box, ITEM) == total, "tick " .. t .. ": " .. H.count_box(box, ITEM) .. " of " .. total)
         end, function(t)
@@ -284,10 +300,12 @@ describe("staged", function()
       local held = H.network_of(id)
       assert(held > 30, "test setup: the network holds only " .. held)
       builder.max_buffer_slots = 1
-      -- the north input goes: its last tile is an edge; mined with its items into a chest
+      -- the north input goes: its last tile is an edge; mined with its items into a chest (the
+      -- belt item it gives back is counted from here on)
       local edge = assert(H.at(o, 5, 4, "linked-belt"), "no north edge")
       local keep = H.ce(game.surfaces.nauvis, { name = "mb-test-chest", position = { o.x + 11, o.y + 11 } })
       assert(edge.mine({ inventory = keep.get_inventory(defines.inventory.chest), raise_destroyed = true }), "edge not mined")
+      total = H.count_box(box)
       local c = count_flushes()
       balancer.flush()
       local rec = rec_of(b)
@@ -385,7 +403,7 @@ describe("staged", function()
     local blk = put(17, 0, "mb-balancer-" .. H.TIER)
     -- input from the west, outputs east and south
     local src = put(13, 0, "mb-test-chest")
-    src.insert({ name = ITEM, count = 400 })
+    src.insert({ name = ITEM, count = 3000 })
     put(14, 0, "mb-test-loader-" .. H.TIER, D.east, { type = "output" })
     put(15, 0, H.BELT, D.east)
     put(16, 0, H.BELT, D.east)
@@ -399,17 +417,19 @@ describe("staged", function()
     local rec = rec_of(blk)
     assert(nm(rec) == "1:2", "network " .. nm(rec))
     assert(rec.placed.entities[1].surface.name == "mb-hidden", "the network is not on the hidden surface")
+    local BELTISH = { ["transport-belt"] = true, ["loader-1x1"] = true, ["linked-belt"] = true }
+    -- plates on the platform's foundation (chests, belts, loaders, the ground) and in the network
     local function count()
+      ---@type number
       local n = 0
       for _, e in ipairs(s.find_entities_filtered({ area = { { 10, -6 }, { 25, 7 } } })) do
         if e.type == "container" then
           n = n + e.get_item_count(ITEM)
         elseif e.type == "item-entity" then
           n = n + (e.stack.name == ITEM and e.stack.count or 0)
-        elseif e.get_max_transport_line_index then
-          local ok, k = pcall(e.get_max_transport_line_index)
-          for i = 1, ok and k or 0 do
-            n = n + e.get_transport_line(i).get_item_count(ITEM)
+        elseif BELTISH[e.type] then
+          for i = 1, e.get_max_transport_line_index() do
+            n = n + e.get_transport_line(i --[[@as defines.transport_line]]).get_item_count(ITEM)
           end
         end
       end
@@ -423,7 +443,7 @@ describe("staged", function()
     after_ticks(600, function()
       local e, so = east.get_item_count(ITEM), south.get_item_count(ITEM)
       assert(e > 100 and math.abs(e - so) <= 2, "outputs " .. e .. " / " .. so)
-      assert(count() == 400, "on the platform: " .. count())
+      assert(count() == 3000, "on the platform: " .. count())
       -- back up so the network holds items, then remove the block with nobody to take them
       east.destroy()
       south.destroy()
@@ -437,20 +457,7 @@ describe("staged", function()
         local hub0 = hub.get_item_count(ITEM)
         blk.destroy({ raise_destroy = true })
         balancer.flush()
-        local now = 0
-        for _, ent in ipairs(s.find_entities_filtered({ area = { { 10, -6 }, { 25, 7 } } })) do
-          if ent.type == "container" or ent.type == "item-entity" or ent.type == "transport-belt" or ent.type == "loader-1x1" then
-            if ent.type == "item-entity" then
-              now = now + (ent.stack.name == ITEM and ent.stack.count or 0)
-            elseif ent.type == "container" then
-              now = now + ent.get_item_count(ITEM)
-            else
-              for i = 1, ent.get_max_transport_line_index() do
-                now = now + ent.get_transport_line(i).get_item_count(ITEM)
-              end
-            end
-          end
-        end
+        local now = count()
         local to_hub = hub.get_item_count(ITEM) - hub0
         assert(to_hub >= inside, "the hub got " .. to_hub .. " of the network's " .. inside)
         assert(now + to_hub == left, "after the removal: " .. now .. " + " .. to_hub .. " in the hub, expected " .. left)

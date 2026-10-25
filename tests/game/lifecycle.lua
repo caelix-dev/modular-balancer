@@ -1028,9 +1028,7 @@ describe("lifecycle", function()
     assert(edge_there(), "test setup: no edge")
     local cases = {
       { "invalid player", player({ valid = false }), ev() },
-      { "forced build", player(), ev(nil, defines.build_mode.forced) },
-      { "super-forced build", player(), ev(nil, defines.build_mode.superforced) },
-      { "remote view", player({ controller_type = C.remote }), ev() },
+      { "cutscene", player({ controller_type = C.cutscene }), ev() },
       { "empty cursor", player({ cursor_stack = empty }), ev() },
       { "blueprint", player({ cursor_stack = bp_stack }), ev() },
       { "not a belt", player({ cursor_stack = chest_stack }), ev() },
@@ -1047,6 +1045,18 @@ describe("lifecycle", function()
     assert(belt and belt.name == H.BELT, "the edge is not a plain belt before the build")
     balancer.flush()
     assert(edge_there(), "the tile was not swapped again after a build that did not happen")
+    -- remote view builds for real too, and a forced or super-forced build over an edge would
+    -- place a ghost and mark the edge for deconstruction (F11): their edges are swapped back too
+    for _, c in ipairs({
+      { "remote view", player({ controller_type = C.remote }), ev() },
+      { "forced build", player(), ev(nil, defines.build_mode.forced) },
+      { "super-forced build", player(), ev(nil, defines.build_mode.superforced) },
+    }) do
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(lifecycle.pre_build(c[2], c[3]) == 1, c[1] .. ": the edge was not swapped back")
+      balancer.flush()
+      assert(edge_there(), c[1] .. ": the tile was not swapped again")
+    end
     inv.destroy()
   end)
 

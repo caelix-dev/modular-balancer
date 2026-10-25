@@ -1035,7 +1035,6 @@ describe("lifecycle", function()
       { "blueprint", player({ cursor_stack = bp_stack }), ev() },
       { "not a belt", player({ cursor_stack = chest_stack }), ev() },
       { "other force", player({ force = other }), ev() },
-      { "out of reach", player({ can_reach_entity = function() return false end }), ev() },
       { "elsewhere", player(), ev({ o.x + 1, o.y + 1 }) },
     }
     for _, c in ipairs(cases) do

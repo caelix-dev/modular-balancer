@@ -566,7 +566,6 @@ end
 -- tests that do not want to wait a tick.
 function balancer.flush()
   local st = state()
-  script.on_nth_tick(1, nil)
   -- upgrade orders whose target was an edge (scripts/lifecycle.lua): an order placed inside
   -- on_marked_for_upgrade does not hold (measured), so it is placed here, a tick later
   local redirects = st.redirects
@@ -581,6 +580,9 @@ function balancer.flush()
       end
     end
   end
+  -- unregistered only now: the redirects above raise upgrade events whose handlers mark groups
+  -- dirty (and register the handler again); those groups are flushed below, in this same call
+  script.on_nth_tick(1, nil)
   local dirty = st.dirty
   st.dirty = {}
   local ids = {}

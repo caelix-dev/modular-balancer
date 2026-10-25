@@ -381,18 +381,15 @@ end
 -- which keeps the items on it (an edge replaced by script fast-replace loses them, measured),
 -- and the next flush swaps the tile again if it is still a port (a belt dragged over an edge
 -- with the same belt and direction is not built at all, so the swap-back marks the groups near
--- it). `proto` is the entity about to be built at `position` facing `direction`. `reach`, when
--- given, says whether the builder reaches an edge (an edge out of reach gets a ghost, not a
--- fast-replace, and is left alone). Returns the number of edges swapped back.
+-- it). `proto` is the entity about to be built at `position` facing `direction`. Returns the number of edges swapped back.
 ---@param s LuaSurface
 ---@param position MapPosition
 ---@param direction defines.direction
 ---@param proto LuaEntityPrototype
 ---@param force LuaForce
 ---@param player_index integer?
----@param reach (fun(e: LuaEntity): boolean)?
 ---@return integer
-function lifecycle.clear_edges_for_build(s, position, direction, proto, force, player_index, reach)
+function lifecycle.clear_edges_for_build(s, position, direction, proto, force, player_index)
   if not belt_io.IS_BELT_TYPE[proto.type] or not proto.fast_replaceable_group then
     return 0
   end
@@ -404,7 +401,7 @@ function lifecycle.clear_edges_for_build(s, position, direction, proto, force, p
   local area = { { x - w / 2 + 0.1, y - h / 2 + 0.1 }, { x + w / 2 - 0.1, y + h / 2 - 0.1 } }
   local n = 0
   for _, e in ipairs(s.find_entities_filtered({ area = area, type = "linked-belt", force = force })) do
-    if belt_io.edge_belt(e.name) and e.prototype.fast_replaceable_group == proto.fast_replaceable_group and (not reach or reach(e)) then
+    if belt_io.edge_belt(e.name) and e.prototype.fast_replaceable_group == proto.fast_replaceable_group then
       local belt = belt_io.unswap(e)
       balancer.mark_near(belt, player_index)
       n = n + 1
@@ -414,7 +411,7 @@ function lifecycle.clear_edges_for_build(s, position, direction, proto, force, p
 end
 
 -- The work of on_pre_build for `player` (a LuaPlayer, or in tests a table with the fields read
--- here: valid, cursor_stack, surface, force, controller_type, character, can_reach_entity).
+-- here: valid, cursor_stack, surface, force, controller_type, character).
 -- Only a build from an item in the cursor in normal mode by a player with a body (character,
 -- god or editor controller) can fast-replace: a blueprint, a ghost cursor, a forced or
 -- super-forced build and remote view place ghosts, and are left alone. Returns the number of
@@ -438,13 +435,8 @@ function lifecycle.pre_build(player, event)
   if not proto then
     return 0
   end
-  local reach
-  if ct == defines.controllers.character and player.character then
-    reach = function(e)
-      return player.can_reach_entity(e)
-    end
-  end
-  return lifecycle.clear_edges_for_build(player.surface, event.position, event.direction, proto, player.force --[[@as LuaForce]], event.player_index, reach)
+  -- no reach check: build distance can exceed reach (mods), and a needless swap-back is harmless
+  return lifecycle.clear_edges_for_build(player.surface, event.position, event.direction, proto, player.force --[[@as LuaForce]], event.player_index)
 end
 
 -- on_pre_build: a player builds from the cursor (a belt drag calls it per tile).

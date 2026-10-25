@@ -5,8 +5,9 @@
 --                        Region = { x, y, w, h } in tiles; key = "x,y" of its origin
 --
 -- Regions are whole chunks plus a free chunk-aligned gap, laid out in rows of ROW_WIDTH tiles.
--- A released region goes on the free list and is reused, whole, by the first later request
--- that fits in it. All of this runs only when a network is built or removed.
+-- A released region goes on the free list, joined with free neighbours; a request takes the
+-- smallest free region that fits and leaves the rest of it free (surface.alloc, surface.free).
+-- All of this runs only when a network is built or removed.
 local surface = {}
 
 local NAME = "mb-hidden"
@@ -37,8 +38,10 @@ local function key(x, y)
 end
 
 -- Rounds up to whole chunks, with at least one free tile after the content.
+---@param n integer
+---@return integer
 local function chunks(n)
-  return math.ceil((n + 1) / CHUNK) * CHUNK
+  return math.ceil((n + 1) / CHUNK) * CHUNK --[[@as integer]]
 end
 
 ---@param s LuaSurface
@@ -91,26 +94,12 @@ end
 ---@param h integer
 ---@return {x: integer, y: integer} origin top-left tile corner of a free w x h rectangle (chunks generated)
 function surface.reserve(w, h)
+  -- the surface first: making a new one (the old one was deleted) resets the regions
+  local s = surface.get()
   local r = regions()
-  local region
-  for i, f in ipairs(r.free) do
-    if f.w >= w and f.h >= h then
-      region = table.remove(r.free, i)
-      break
-    end
-  end
-  if not region then
-    local rw, rh = chunks(w), chunks(h)
-    if r.cursor_x > 0 and r.cursor_x + rw > ROW_WIDTH then
-      r.cursor_x, r.cursor_y, r.row_h = 0, r.cursor_y + r.row_h, 0
-    end
-    region = { x = r.cursor_x, y = r.cursor_y, w = rw, h = rh }
-    r.cursor_x = r.cursor_x + rw
-    r.row_h = math.max(r.row_h, rh)
-  end
+  local region = surface.alloc(r, w, h)
   r.used[key(region.x, region.y)] = region
 
-  local s = surface.get()
   for cx = region.x / CHUNK, (region.x + region.w) / CHUNK - 1 do
     for cy = region.y / CHUNK, (region.y + region.h) / CHUNK - 1 do
       if not s.is_chunk_generated({ cx, cy }) then
@@ -125,14 +114,82 @@ end
 -- Frees a region returned by reserve. The caller has destroyed its entities.
 ---@param origin {x: integer, y: integer}
 function surface.release(origin)
-  local r = regions()
+  surface.free(regions(), origin)
+end
+
+-- The allocator itself, pure (tests/unit/allocator_test.lua): takes a region of at least w x h
+-- tiles (rounded up to whole chunks plus a gap) from `r`. Best fit: the free region of the least
+-- area that holds it, split so the request takes its top-left corner and the rest (the strip to
+-- its right, then the strip below) stays free; else a new region at the cursor.
+---@param r mb.Regions
+---@param w integer
+---@param h integer
+---@return mb.Region
+function surface.alloc(r, w, h)
+  local rw, rh = chunks(w), chunks(h)
+  ---@type mb.Region?, integer?
+  local best, best_i
+  for i, f in ipairs(r.free) do
+    if f.w >= rw and f.h >= rh then
+      if not best or f.w * f.h < best.w * best.h or (f.w * f.h == best.w * best.h and (f.y < best.y or (f.y == best.y and f.x < best.x))) then
+        best, best_i = f, i
+      end
+    end
+  end
+  ---@type mb.Region
+  local region
+  if best then
+    table.remove(r.free, best_i)
+    region = { x = best.x, y = best.y, w = rw, h = rh }
+    if best.w > rw then
+      r.free[#r.free + 1] = { x = best.x + rw, y = best.y, w = best.w - rw, h = rh }
+    end
+    if best.h > rh then
+      r.free[#r.free + 1] = { x = best.x, y = best.y + rh, w = best.w, h = best.h - rh }
+    end
+  else
+    if r.cursor_x > 0 and r.cursor_x + rw > ROW_WIDTH then
+      r.cursor_x, r.cursor_y, r.row_h = 0, r.cursor_y + r.row_h, 0
+    end
+    region = { x = r.cursor_x, y = r.cursor_y, w = rw, h = rh }
+    r.cursor_x = r.cursor_x + rw
+    r.row_h = math.max(r.row_h, rh)
+  end
+  r.used[key(region.x, region.y)] = region
+  return region
+end
+
+-- Gives the region at `origin` back to `r`, joined with free neighbours that share a whole edge
+-- with it (repeatedly), so freed space does not stay cut into pieces.
+---@param r mb.Regions
+---@param origin {x: integer, y: integer}
+function surface.free(r, origin)
   local k = key(origin.x, origin.y)
   local region = r.used[k]
   if not region then
     error("surface.release: no region at " .. k)
   end
   r.used[k] = nil
-  r.free[#r.free + 1] = region
+  local cur = { x = region.x, y = region.y, w = region.w, h = region.h }
+  local merged = true
+  while merged do
+    merged = false
+    for i, f in ipairs(r.free) do
+      local join
+      if f.y == cur.y and f.h == cur.h and (f.x + f.w == cur.x or cur.x + cur.w == f.x) then
+        join = { x = math.min(f.x, cur.x), y = cur.y, w = f.w + cur.w, h = cur.h }
+      elseif f.x == cur.x and f.w == cur.w and (f.y + f.h == cur.y or cur.y + cur.h == f.y) then
+        join = { x = cur.x, y = math.min(f.y, cur.y), w = cur.w, h = f.h + cur.h }
+      end
+      if join then
+        table.remove(r.free, i)
+        cur = join
+        merged = true
+        break
+      end
+    end
+  end
+  r.free[#r.free + 1] = cur
 end
 
 return surface

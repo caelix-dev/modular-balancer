@@ -615,7 +615,7 @@ describe("lanes", function()
 
   -- Task 3 review M6: a rebuild for a setting that is refused (too many items) keeps the old
   -- network, and the group's settings go back to that network's, so the GUI shows what the
-  -- balancer does. The refusal is forced by a stand-in builder.rebuild.
+  -- balancer does. The refusal is forced by a stand-in builder.start.
   test("refused_rebuild_sets_the_settings_back", function()
     async(700)
     local o, box = area(12, 8)
@@ -629,12 +629,13 @@ describe("lanes", function()
       local placed = rec.placed
       local total = H.count_box(box, ITEM)
       assert(gui.set(gid, { recirc = false }), "the setting did not change")
-      local real = builder.rebuild
-      builder.rebuild = function()
+      -- the staged rebuild starts its placement with builder.start (scripts/balancer.lua)
+      local real = builder.start
+      builder.start = function()
         return nil, "too-many-items"
       end
       local ok, err = pcall(balancer.flush)
-      builder.rebuild = real
+      builder.start = real
       assert(ok, err)
       local r2 = rec_of(a)
       assert(r2.placed == placed and r2.recirc ~= false, "the old network was not kept")

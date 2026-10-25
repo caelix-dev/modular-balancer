@@ -109,6 +109,36 @@ describe("exactness", function()
     end)
   end
 
+  -- Plan 2 final review M4, the F8 case in the engine: 3:5 with only outputs 1 and 2 open (the
+  -- others stopped, backed up). Plan 1's network drew 45 / 22.5 / 22.5 here; v2 draws every
+  -- input equally, two belts in total, split equally between the two open outputs.
+  test("inputs_drawn_equally_subset_3_5", function()
+    async(DRAW_WARMUP + WINDOW + 300)
+    local n, m = 3, 5
+    local rig = H.rig({ n = n, m = m })
+    for j = 3, m do
+      rig.sink_loaders[j].disabled_by_script = true
+    end
+    H.measure(function()
+      local c = sink_counts(rig)()
+      for i = 1, n do
+        c[m + i] = H.drawn(rig, i)
+      end
+      return c
+    end, DRAW_WARMUP, WINDOW, function(rates)
+      local outs, ins = { table.unpack(rates, 1, m) }, { table.unpack(rates, m + 1, m + n) }
+      H.report("inputs_drawn_equally_subset 3:5 (outputs 1, 2 open): inputs %s, outputs %s items/s", fmt(ins), fmt(outs))
+      H.assert_equal(ins, "input")
+      H.assert_equal({ rates[1], rates[2] }, "open output")
+      for j = 3, m do
+        assert(outs[j] == 0, "stopped output " .. j .. " delivered " .. outs[j])
+      end
+      near(H.sum(outs), 2 * RATE, "total delivered")
+      near(H.sum(ins), H.sum(outs), "draw against delivered")
+      done()
+    end)
+  end)
+
   -- User requirement (2026-10-24): outputs stay equal when one input is fed slower.
   for _, r in ipairs({ { 2, 4 }, { 3, 5 } }) do
     local n, m = r[1], r[2]

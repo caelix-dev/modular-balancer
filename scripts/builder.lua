@@ -84,25 +84,30 @@ function builder.size(net)
   return cols * CELL_W + BUFFER_W, math.max(rows * CELL_H, CELL_H)
 end
 
--- Creates every entity of `net` into `placed` (raises on any failure).
-local function build(net, tier, placed, s)
-  local cols = grid(net)
-  local origin = placed.origin
-  local lb_name = "mb-hidden-linked-belt-" .. tier
+-- Work units (about one microsecond each on a desktop, from the 64:64 rebuild hitch,
+-- docs/benchmarks.md) that the staged rebuild (scripts/balancer.lua) charges against its budget
+-- per tick: generating a network and planning it (per planned operation), creating an entity,
+-- linking a linked-belt pair, moving one item, destroying an entity. Deterministic counts, never
+-- wall-clock time, so every peer of a multiplayer game does the same work in the same tick.
+builder.COST = { generate = 5, plan = 2, create = 14, link = 2, item = 12, destroy = 9 }
 
+-- The operations that place `net` with its region at `origin`, in order: { name, position,
+-- direction, type?, prio?, filter?, dead? } creates an entity (its index in placed.entities is the
+-- count of creates so far), { link = { a, b } } links entity a (input-type) to entity b. Also the
+-- entity indices of the network inputs and outputs and of the buffer chest. Pure: nothing is
+-- created, so a placement can run over several ticks (builder.start, builder.advance).
+---@param net mb.Network
+---@param tier string
+---@param origin {x: integer, y: integer}
+local function plan(net, tier, origin)
+  local cols = grid(net)
+  local lb_name = "mb-hidden-linked-belt-" .. tier
+  local ops = {}
+  local count = 0
   local function create(t)
-    ---@diagnostic disable-next-line
-    if builder.fail_after and #placed.entities + 1 >= builder.fail_after then
-      error("builder: test hook failure at entity " .. (#placed.entities + 1))
-    end
-    t.force = placed.force
-    t.create_build_effect_smoke = false
-    local e = s.create_entity(t)
-    if not e then
-      error("builder: could not create " .. t.name .. " at " .. serpent.line(t.position))
-    end
-    placed.entities[#placed.entities + 1] = e
-    return e
+    ops[#ops + 1] = t
+    count = count + 1
+    return count
   end
 
   -- Top-left tile of each cell, in order: splitters, priority splitters, lane splitters,
@@ -115,7 +120,9 @@ local function build(net, tier, placed, s)
   end
 
   -- Tile centre of each node's ports: in_tile[kind][id][port], out_tile[kind][id][port].
+  ---@type table<string, table<integer, number[][]>>
   local in_tile = { splitter = {}, priority = {}, lane_splitter = {} }
+  ---@type table<string, table<integer, number[][]>>
   local out_tile = { splitter = {}, priority = {}, lane_splitter = {} }
   -- Connected output ports of each plain splitter, for the dead-end priority.
   local outs = {}
@@ -127,17 +134,18 @@ local function build(net, tier, placed, s)
   end
   local function splitter_cell(kind, id)
     local x, y = cell()
-    local e = create({ name = "mb-hidden-splitter-" .. tier, position = { x + 1.5, y + 1 }, direction = EAST })
+    local t = { name = "mb-hidden-splitter-" .. tier, position = { x + 1.5, y + 1 }, direction = EAST }
     if kind == "priority" then
-      e.splitter_output_priority = "left"
+      t.prio = "left"
     else
       local o = outs[id] or {}
       if o[1] ~= o[2] then
-        e.splitter_output_priority = o[1] and "right" or "left"
-        e.splitter_filter = { name = "mb-hidden-never" }
-        placed.dead_ends[e.unit_number] = true
+        t.prio = o[1] and "right" or "left"
+        t.filter = true
+        t.dead = true
       end
     end
+    create(t)
     in_tile[kind][id] = { { x + 0.5, y + 0.5 }, { x + 0.5, y + 1.5 } }
     out_tile[kind][id] = { { x + 2.5, y + 0.5 }, { x + 2.5, y + 1.5 } }
   end
@@ -158,6 +166,7 @@ local function build(net, tier, placed, s)
     return create({ name = lb_name, position = position, direction = EAST, type = type })
   end
 
+  local inputs, outputs = {}, {}
   for _, ed in ipairs(net.edges) do
     local from, to = ed.from, ed.to
     local tail, head -- input-type on the source side, output-type on the target side
@@ -167,50 +176,48 @@ local function build(net, tier, placed, s)
       tail = linked_belt({ x + 1.5, y + 0.5 }, "input")
     else
       if from.kind ~= "in" then
-        tail = linked_belt(out_tile[from.kind][from.id][from.port], "input")
+        tail = linked_belt((out_tile[from.kind] --[[@as table]])[from.id][from.port], "input")
       end
       if to.kind ~= "out" then
-        head = linked_belt(in_tile[to.kind][to.id][to.port], "output")
+        head = linked_belt((in_tile[to.kind] --[[@as table]])[to.id][to.port], "output")
       end
       if tail and head then
-        tail.connect_linked_belts(head)
+        ops[#ops + 1] = { link = { tail, head } }
       end
     end
     if from.kind == "in" then
-      placed.inputs[from.id] = head
+      inputs[from.id] = head
     end
     if to.kind == "out" then
-      placed.outputs[to.id] = tail
+      outputs[to.id] = tail
     end
   end
 
   -- The buffer strip, merged into input 1.
   local bx, by = origin.x + cols * CELL_W, origin.y
-  placed.buffer = create({ name = "mb-hidden-buffer", position = { bx + 0.5, by + 1.5 } })
+  local buffer = create({ name = "mb-hidden-buffer", position = { bx + 0.5, by + 1.5 } })
   local head = linked_belt({ bx + 1.5, by + 0.5 }, "output")
   create({ name = "mb-hidden-loader-" .. tier, position = { bx + 1.5, by + 1.5 }, direction = EAST, type = "output" })
-  local merge = create({ name = "mb-hidden-splitter-" .. tier, position = { bx + 2.5, by + 1 }, direction = EAST })
-  merge.splitter_output_priority = "right"
-  merge.splitter_filter = { name = "mb-hidden-never" }
-  placed.dead_ends[merge.unit_number] = true
+  create({ name = "mb-hidden-splitter-" .. tier, position = { bx + 2.5, by + 1 }, direction = EAST, prio = "right", filter = true, dead = true })
   local tail = linked_belt({ bx + 3.5, by + 0.5 }, "input")
-  if not placed.inputs[1] then
+  if not inputs[1] then
     error("builder: network has no input 1")
   end
-  tail.connect_linked_belts(placed.inputs[1])
-  placed.inputs[1] = head
+  ops[#ops + 1] = { link = { tail, inputs[1] } }
+  inputs[1] = head
+  return { ops = ops, inputs = inputs, outputs = outputs, buffer = buffer }
 end
 
--- Places `net` in a region it reserves on the hidden surface. All or nothing: on any failure
--- every entity it created is destroyed, the region is released, and it returns nil and the
--- error.
+-- Starts placing `net` in a region it reserves on the hidden surface: plans it; no entity is
+-- created yet. Returns a job for builder.advance (plain data and LuaEntity references, so it can
+-- be kept in `storage` across ticks and saves), or nil and the error. Placement is all or
+-- nothing: builder.advance (on a failure) or builder.abort removes everything it created.
 ---@param net mb.Network network.build result
 ---@param tier string "basic" | "fast" | "express" | "turbo"
 ---@param force? ForceID owner of the hidden entities (default "player")
----@return table? placed { origin, size, tier, force, inputs, outputs, entities, buffer, dead_ends }
+---@return table? job { placed, ops, i, inputs, outputs, buffer }
 ---@return string? err
-function builder.place(net, tier, force)
-  local s = surface.get()
+function builder.start(net, tier, force)
   local w, h = builder.size(net)
   local placed = {
     origin = surface.reserve(w, h),
@@ -222,17 +229,122 @@ function builder.place(net, tier, force)
     entities = {},
     dead_ends = {}, -- unit numbers of splitters with a closed dead-end output
   }
-  local ok, err = pcall(build, net, tier, placed, s)
+  local ok, p = pcall(plan, net, tier, placed.origin)
   if not ok then
-    for _, e in ipairs(placed.entities) do
-      if e.valid then
-        e.destroy()
-      end
-    end
     surface.release(placed.origin)
-    return nil, tostring(err)
+    return nil, tostring(p)
   end
-  return placed
+  return { placed = placed, ops = p.ops, i = 1, inputs = p.inputs, outputs = p.outputs, buffer = p.buffer }
+end
+
+-- Runs the operations of `job` from job.i on, until about `budget` units are spent.
+local function run(job, budget)
+  local placed = job.placed
+  local s = surface.get()
+  local ops, cost = job.ops, builder.COST
+  local used = 0
+  while job.i <= #ops and used < budget do
+    local op = ops[job.i]
+    if op.link then
+      placed.entities[op.link[1]].connect_linked_belts(placed.entities[op.link[2]])
+      used = used + cost.link
+    else
+      ---@diagnostic disable-next-line
+      if builder.fail_after and #placed.entities + 1 >= builder.fail_after then
+        error("builder: test hook failure at entity " .. (#placed.entities + 1))
+      end
+      local e = s.create_entity({
+        name = op.name, position = op.position, direction = op.direction, type = op.type,
+        force = placed.force, create_build_effect_smoke = false,
+      })
+      if not e then
+        error("builder: could not create " .. op.name .. " at " .. serpent.line(op.position))
+      end
+      placed.entities[#placed.entities + 1] = e
+      -- nothing on the hidden surface (a creature hatched from an egg that spoiled on a belt, an
+      -- explosion) can damage the network
+      e.destructible = false
+      if op.prio then
+        e.splitter_output_priority = op.prio
+      end
+      if op.filter then
+        e.splitter_filter = { name = NEVER }
+      end
+      if op.dead then
+        placed.dead_ends[e.unit_number] = true
+      end
+      used = used + cost.create
+    end
+    job.i = job.i + 1
+  end
+  return used
+end
+
+-- Removes what a started placement created and frees its region.
+---@param job table builder.start result
+function builder.abort(job)
+  local placed = job.placed
+  for _, e in ipairs(placed.entities) do
+    if e.valid then
+      e.destroy()
+    end
+  end
+  placed.entities = {}
+  if placed.origin then
+    surface.release(placed.origin)
+    placed.origin = nil
+  end
+  job.ops = {}
+end
+
+-- Places more of `job`, spending about `budget` work units (builder.COST) at most. Returns true
+-- when the network is complete (job.placed is then a working Placed), false when there is more
+-- to do, or nil and the error when placement failed (everything it created is removed and its
+-- region freed); and the units spent.
+---@param job table builder.start result
+---@param budget number
+---@return boolean? done
+---@return number used
+---@return string? err
+function builder.advance(job, budget)
+  local ok, used = pcall(run, job, budget)
+  if not ok then
+    builder.abort(job)
+    return nil, 0, tostring(used)
+  end
+  if job.i <= #job.ops then
+    return false, used
+  end
+  local placed = job.placed
+  for i, k in pairs(job.inputs) do
+    placed.inputs[i] = placed.entities[k]
+  end
+  for j, k in pairs(job.outputs) do
+    placed.outputs[j] = placed.entities[k]
+  end
+  placed.buffer = placed.entities[job.buffer]
+  job.ops = {}
+  return true, used
+end
+
+-- Places `net` in a region it reserves on the hidden surface, at once. All or nothing: on any
+-- failure every entity it created is destroyed, the region is released, and it returns nil and
+-- the error.
+---@param net mb.Network network.build result
+---@param tier string "basic" | "fast" | "express" | "turbo"
+---@param force? ForceID owner of the hidden entities (default "player")
+---@return table? placed { origin, size, tier, force, inputs, outputs, entities, buffer, dead_ends }
+---@return string? err
+function builder.place(net, tier, force)
+  local job, err = builder.start(net, tier, force)
+  if not job then
+    return nil, err
+  end
+  local done, _, e = builder.advance(job, math.huge)
+  if not done then
+    return nil, e
+  end
+  return job.placed
 end
 
 -- The items on (and in) every entity of `placed`: one entry per item and quality, sorted by name
@@ -536,50 +648,331 @@ function builder.stash(placed, inv)
   return true
 end
 
--- Destroys `placed` and returns every item it held in script inventories of at most
--- builder.max_take_slots slots each (item data and spoilage kept), and the number of items. The
--- items are inserted one source stack at a time, so they merge as they go (a full network of
--- tens of thousands of single plates fits in a few hundred slots); an inventory that is full even
--- merged is closed and a new one opened. The caller empties and destroys every inventory (a
--- balancer removed with items inside: scripts/balancer.lua gives them to whoever removed it, or
--- spills them).
+-- Disconnects the network inputs and outputs of `placed` from whatever they are linked to (the
+-- visible ports, another group's network on a shared tile), so no item enters or leaves it any
+-- more: its items only move inside it until builder.drain or builder.take moves them out.
 ---@param placed table
----@return LuaInventory[], integer
-function builder.take(placed)
-  local sources = stacks_of(placed)
+function builder.seal(placed)
+  for _, list in ipairs({ placed.inputs, placed.outputs }) do
+    for _, e in pairs(list) do
+      if e.valid and e.linked_belt_neighbour then
+        e.disconnect_linked_belts()
+      end
+    end
+  end
+end
+
+-- One item of `src` onto a free belt position of `new` from its fill cursor: true if it moved,
+-- false if no belt takes it (the cursor has passed every belt, or a free position refused it).
+local function onto_belts(new, src)
+  local f = new.fill
+  if not f then
+    f = { k = 1, li = 1, pos = 0.0 }
+    new.fill = f
+  end
+  local ents = new.entities
+  while f.k <= #ents do
+    local e = ents[f.k]
+    if e.valid and e.type ~= "container" and e.type ~= "loader-1x1" and not new.dead_ends[e.unit_number]
+      and f.li <= e.get_max_transport_line_index() then
+      local line = e.get_transport_line(f.li)
+      local len = line.line_length
+      while f.pos < len do
+        if line.can_insert_at(f.pos) then
+          if not line.insert_at(f.pos, src, 1) then
+            return false -- refused on a free position: this stack goes to the buffer
+          end
+          local n = src.count
+          if n > 1 then
+            src.count = n - 1
+          else
+            src.clear()
+          end
+          return true
+        end
+        f.pos = f.pos + 0.25
+      end
+      f.li, f.pos = f.li + 1, 0.0
+    else
+      f.k, f.li, f.pos = f.k + 1, 1, 0.0
+    end
+  end
+  return false
+end
+
+-- Moves the stack `src` (a handle into a sealed network: a belt item or a chest slot) into the
+-- network `new`, keeping item data and spoilage, and lowers or clears `src` by what moved:
+-- - onto the belts of `new`, one item at a time (insert_at with the stack itself and
+--   belt_stack_size 1, so each belt item keeps its own data and spoil fraction), at the first
+--   free position from the cursor new.fill (kept across calls and ticks), skipping dead-end
+--   splitters (an item on a closed output line would stay there). A stack that a free position
+--   refuses goes to the buffer, and so does a stack of several items with per-item state (ammo,
+--   tools, damaged items: copying one would copy the top item's state onto every copy);
+-- - once the cursor has passed every belt, into the buffer chest: a whole stack as itself, the
+--   rest of a partly moved stack as a full copy (set_stack into the one-slot `tmp`) with its
+--   count lowered. Inserting merges stacks like any chest (merged spoilables average their
+--   spoil fraction, so the total spoilage is kept); the chest grows as needed, up to
+--   builder.max_buffer_slots slots.
+-- Returns the number of items moved (0: `new` cannot take any of it now).
+---@param new table Placed
+---@param src LuaItemStack
+---@param tmp LuaInventory
+---@return integer
+local function put_into(new, src, tmp)
+  if not keep_whole(src) and onto_belts(new, src) then
+    return 1
+  end
+  local buffer = new.buffer
+  if not (buffer and buffer.valid) then
+    return 0
+  end
+  local inv = buffer.get_inventory(defines.inventory.chest) --[[@as LuaInventory]]
+  local want = src.count
+  local left = want
+  local function try()
+    local stack = src
+    if left < want then
+      tmp[1].set_stack(src)
+      tmp[1].count = left
+      stack = tmp[1]
+    end
+    left = left - inv.insert(stack)
+    tmp[1].clear()
+  end
+  try()
+  if left > 0 then
+    inv.sort_and_merge()
+    try()
+  end
+  while left > 0 do
+    local size = #inv
+    if size >= builder.max_buffer_slots then
+      break
+    end
+    buffer.set_inventory_size_override(defines.inventory.chest, math.min(builder.max_buffer_slots, math.max(size * 2, size + 16)))
+    inv = buffer.get_inventory(defines.inventory.chest) --[[@as LuaInventory]]
+    try()
+  end
+  local moved = want - left
+  if left == 0 then
+    src.clear()
+  elseif moved > 0 then
+    src.count = left
+  end
+  return moved
+end
+
+-- Moves every item off entity `e` with `put` (a belt's lines last item first, so the handles of
+-- the items before it stay valid; a chest's slots last first), within about `budget` units.
+-- Returns true when `e` is empty, false when the budget ran out first (a chest is emptied over
+-- several calls), or nil when `put` could not take an item; and the units spent.
+---@param e LuaEntity
+---@param put fun(st: LuaItemStack): integer
+---@param budget number
+---@return boolean?, number
+local function empty_entity(e, put, budget)
+  local cost = builder.COST.item
+  ---@type number
+  local used = 0
+  if e.type == "container" then
+    local inv = e.get_inventory(defines.inventory.chest) --[[@as LuaInventory]]
+    for i = #inv, 1, -1 do
+      if used >= budget then
+        return false, used
+      end
+      local st = inv[i] --[[@as LuaItemStack]]
+      if st.valid_for_read and st.name ~= NEVER then
+        while st.valid and st.valid_for_read do
+          local n = put(st)
+          if n == 0 then
+            return nil, used
+          end
+          used = used + cost
+        end
+      end
+    end
+    return true, used
+  end
+  for li = 1, e.get_max_transport_line_index() do
+    local d = e.get_transport_line(li --[[@as defines.transport_line]]).get_detailed_contents()
+    for i = #d, 1, -1 do
+      local st = d[i].stack
+      if st.name ~= NEVER then
+        while st.valid and st.valid_for_read do
+          local n = put(st)
+          if n == 0 then
+            return nil, used
+          end
+          used = used + cost
+        end
+      end
+    end
+  end
+  return true, used
+end
+
+-- Empties the sealed network `old` (builder.seal) into `put` entity by entity, destroying each
+-- entity once it is empty, within about `budget` units (builder.COST); old.drain_k is the cursor,
+-- kept across calls and ticks. An item can only move from an entity not reached yet to another
+-- one not reached yet (the reached ones are gone), so every item is moved exactly once, whatever
+-- happens between ticks. Items of `mb-hidden-never` are dropped with their entity. When every
+-- entity is gone, the region is freed. Returns "done", "more" (budget spent) or "stuck" (`put`
+-- could not take an item: nothing is lost, the rest stays in `old`), and the units spent.
+---@param old table Placed
+---@param put fun(st: LuaItemStack): integer
+---@param budget number
+---@return string, number
+local function drain_into(old, put, budget)
+  local destroy = builder.COST.destroy
+  local ents = old.entities
+  ---@type number
+  local used = 0
+  old.drain_k = old.drain_k or 1
+  while old.drain_k <= #ents do
+    if used >= budget then
+      return "more", used
+    end
+    local e = ents[old.drain_k]
+    if e.valid then
+      local ok, u = empty_entity(e, put, budget - used)
+      used = used + u
+      if ok == nil then
+        return "stuck", used
+      elseif ok == false then
+        return "more", used
+      end
+      e.destroy()
+      used = used + destroy
+    end
+    old.drain_k = old.drain_k + 1
+  end
+  builder.destroy(old)
+  return "done", used
+end
+
+-- Moves the items of the sealed network `old` into the working network `new` (put_into: onto its
+-- belts, else into its buffer chest) and removes `old`, over as many calls as the budget needs
+-- (see drain_into). Returns "done", "more" or "stuck" (the buffer of `new` is full at
+-- builder.max_buffer_slots slots: the rest stays in `old`, safe), and the units spent.
+---@param new table Placed
+---@param old table Placed
+---@param budget number
+---@return string, number
+function builder.drain(new, old, budget)
+  local tmp = game.create_inventory(1)
+  local ok, status, used = pcall(drain_into, old, function(st)
+    return put_into(new, st, tmp)
+  end, budget)
+  tmp.destroy()
+  if not ok then
+    error(status)
+  end
+  return status, used
+end
+
+-- After a drain into `placed`: merges its buffer's stacks and shrinks the chest to the slots it
+-- uses, and rewinds the fill cursor for the next drain.
+---@param placed table
+function builder.settle(placed)
+  placed.fill = nil
+  local buffer = placed.buffer
+  if buffer and buffer.valid and buffer.get_inventory_size_override(defines.inventory.chest) then
+    local inv = buffer.get_inventory(defines.inventory.chest) --[[@as LuaInventory]]
+    inv.sort_and_merge()
+    buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, #inv - inv.count_empty_stacks()))
+  end
+end
+
+-- Replaces `old` by `net` with the staged primitives, at once: places the new network, seals the
+-- old ones and drains them into it (builder.drain). The placement is all or nothing (nil and the
+-- error, `old` untouched). A drain that gets stuck (the new buffer full) leaves the rest of the
+-- items in the old networks and returns the new network, the error "too-many-items" and the old
+-- networks still holding items: nothing is lost. The live balancer (scripts/balancer.lua) runs
+-- the same steps spread over ticks; tests use this to check the drain keeps item data.
+---@param old table Placed
+---@param net mb.Network
+---@param tier string
+---@param force? ForceID
+---@param extra? table[]
+---@return table? placed
+---@return string? err
+---@return table[]? left
+function builder.rebuild_staged(old, net, tier, force, extra)
+  local new, err = builder.place(net, tier, force)
+  if not new then
+    return nil, err
+  end
+  local olds = { old }
+  for _, p in ipairs(extra or {}) do
+    olds[#olds + 1] = p
+  end
+  local left = {}
+  for _, p in ipairs(olds) do
+    builder.seal(p)
+    if builder.drain(new, p, math.huge) ~= "done" then
+      left[#left + 1] = p
+    end
+  end
+  builder.settle(new)
+  if #left > 0 then
+    return new, "too-many-items", left
+  end
+  return new
+end
+
+-- Takes every item out of `placed` into script inventories of at most builder.max_take_slots
+-- slots each (item data and spoilage kept), destroying its entities as they are emptied (see
+-- drain_into). The items are inserted one source stack at a time, so they merge as they go (a
+-- full network of tens of thousands of single plates fits in a few hundred slots); an inventory
+-- that is full even merged is closed and a new one opened. Never sized by item count. With a
+-- `budget` (work units) it stops when the budget is spent and `placed` keeps the rest; without,
+-- it takes everything. Returns the inventories, the number of items, whether `placed` is now
+-- gone (its region freed), and the units spent. The caller empties and destroys every inventory
+-- (a balancer removed with items inside: scripts/balancer.lua gives them to whoever removed it,
+-- or spills them).
+---@param placed table
+---@param budget number?
+---@return LuaInventory[], integer, boolean?, number?
+function builder.take(placed, budget)
   local cap = math.max(1, math.min(builder.max_take_slots, 65535))
+  local size = math.min(cap, 1024)
   local invs = {}
-  local inv = game.create_inventory(math.max(1, math.min(#sources, cap)))
+  local inv = game.create_inventory(size)
   invs[1] = inv
   local tmp = game.create_inventory(1)
   local n = 0
-  for _, st in ipairs(sources) do
-    n = n + st.count
+  local function put(st)
+    local count = st.count
     local moved = inv.insert(st)
-    if moved < st.count then
+    if moved < count then
       inv.sort_and_merge()
       -- the rest as a full copy of the stack (set_stack keeps every field), its count lowered
       tmp[1].set_stack(st)
-      tmp[1].count = (st.count - moved) --[[@as uint32]]
+      tmp[1].count = (count - moved) --[[@as uint32]]
       local more = inv.insert(tmp[1])
       if more < tmp[1].count then
         tmp[1].count = tmp[1].count - more
-        inv = game.create_inventory(cap)
+        inv = game.create_inventory(size)
         invs[#invs + 1] = inv
-        local last = inv.insert(tmp[1])
-        if last < tmp[1].count then
+        if inv.insert(tmp[1]) < tmp[1].count then
           error("builder.take: a stack does not fit in an empty inventory")
         end
       end
       tmp[1].clear()
     end
+    st.clear()
+    n = n + count
+    return count
   end
+  local ok, status, used = pcall(drain_into, placed, put, budget or math.huge)
   tmp.destroy()
+  if not ok then
+    error(status)
+  end
   for _, v in ipairs(invs) do
     v.sort_and_merge()
   end
-  builder.destroy(placed)
-  return invs, n
+  return invs, n, status == "done", used
 end
 
 -- Destroys `placed` and spills every item it held (merged into whole stacks first, item data and

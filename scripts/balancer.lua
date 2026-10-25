@@ -76,6 +76,7 @@ local groups = require("scripts.groups")
 local network = require("scripts.network")
 local builder = require("scripts.builder")
 local belt_io = require("scripts.io")
+local look = require("scripts.look")
 
 local balancer = {}
 
@@ -784,6 +785,8 @@ local function refresh_group(st, gid, ctx, player_index)
     end
   end
   rec.units, rec.tiles = units, tiles
+  -- the connected look: each block's graphics variation from the group's own tiles
+  look.dress(g.blocks, groups.where)
   ctx.refreshed[#ctx.refreshed + 1] = gid
   if #fresh > 0 then
     balancer.notify(player_index, fresh, g.surface_index)

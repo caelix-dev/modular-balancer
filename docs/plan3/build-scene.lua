@@ -1,11 +1,11 @@
--- Builds the candidate screenshot scenes on nauvis (Plan 3 Task 4): per tier, the user's L-shape
+-- Builds the screenshot scenes on nauvis (Plan 3 Task 4): per tier, the user's L-shape
 -- (5 blocks in a row plus one bent down, 2 inputs from above, 6 outputs) at (40 i, 0) and a 1x8
 -- row (8 inputs above, 3 outputs below) at (40 i, 30). Sources are infinity chests with tier
 -- loaders, sinks are tier loaders into infinity chests that delete everything. Safe map:
 -- peaceful mode, enemies removed, the character (when one exists) invulnerable.
 -- Paste as the body of an fdev `exec_lua` call (Space Age preset for the turbo tier), run a few
 -- thousand ticks (the hidden networks fill first), run tidy-scene.lua after `gui_connect` (the
--- freeplay crash site lands when the player joins), then apply-variations.lua.
+-- freeplay crash site lands when the player joins).
 local s = game.surfaces.nauvis
 local D = defines.direction
 s.peaceful_mode = true
@@ -89,6 +89,13 @@ for i, tier in ipairs(TIERS) do
   for _, x in ipairs({ 1, 4, 6 }) do
     sink(tier, ox + x, 31, D.south, 3)
   end
+  -- a vanilla splitter next to the L-shape, for scale
+  local sname = tier[2]:gsub("transport%-belt", "splitter")
+  ce({ name = sname, position = { ox + 13, 0.5 }, direction = D.south })
+  source(tier, ox + 12, -1, D.south, 3)
+  source(tier, ox + 13, -1, D.south, 3)
+  sink(tier, ox + 12, 1, D.south, 3)
+  sink(tier, ox + 13, 1, D.south, 3)
 end
 -- built without events: raise them for the blocks now, so the balancers pick their belts up
 for _, e in pairs(s.find_entities_filtered({ area = area, type = "simple-entity-with-owner" })) do

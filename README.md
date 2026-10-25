@@ -12,12 +12,12 @@ A Factorio 2.1 mod that provides a modular N:M belt balancer. Place 1x1 blocks i
 
 ## Settings
 
-Click a block to open its balancer's settings (E or Esc closes them). They apply to the whole balancer:
+Click a block to open its balancer's settings (E, Esc or the close button closes them; they also close when the block is removed or you walk out of reach). They open for blocks within reach, or from remote view. They apply to the whole balancer:
 
 - **Balance lanes** (off by default): both lanes of every output carry the same, even when the inputs fill only one lane.
 - **Redistribute unused shares** (on by default): what one output does not take goes back into the balancer, so the other outputs stay equal. Turning it off uses a smaller hidden network that costs less game update time (close to Better Belt Balancer at some ratios, up to about 1.5x at others; docs/benchmarks.md). The outputs are still equal while they all run freely, but a slow output then passes its unused share to one neighbour only.
 
-Changing a setting rebuilds the balancer once; its items are kept. Copy-paste settings (Shift + right click, Shift + left click on another block) copies both settings to the other balancer, and blueprints and copy-paste keep them. When two balancers are joined, the joined balancer keeps the settings of the one with more blocks.
+Changing a setting rebuilds the balancer once; its items are kept. If that rebuild is refused (too many items for the new network), the balancer keeps its old network and the settings switch back to match it. Copy-paste settings (Shift + right click, Shift + left click on another block) copies the copied balancer's settings as they are when you paste, and blueprints and copy-paste keep them. When two balancers are joined, the joined balancer keeps the settings of the one with more blocks; when one is split, every part keeps its settings. A block that joins an existing balancer takes that balancer's settings, so a pasted blueprint touching an existing balancer can end up with either side's settings, depending on which blocks are built first. Servers: players whose permission group may not open entity GUIs or paste entity settings cannot change these settings either.
 
 ## Limits
 
@@ -36,6 +36,8 @@ The last tile of a belt next to a block looks and behaves like that belt: belts 
 
 Upgrade planner: the planner never selects the edge tile itself (it is not in the planner's lists), but when it marks the belt, underground belt or splitter next to it with the same tier, the edge tile gets the same order, so one pass upgrades the whole line. Limits: until robots (or the player) upgrade it, that tile is not connected to the balancer, and the balancer rebuilds once when it drops out and once when it is back. A balancer whose inputs or outputs are all waiting for an upgrade stops (its items are kept). A selection that holds only the edge tile changes nothing.
 
-Undo limits: undoing a rotation that turned an edge into the other role (input to output) does nothing; rotate it back by hand.
+Undo limits: undoing a rotation that turned an edge into the other role (input to output) does nothing; rotate it back by hand. Undoing the removal of a whole balancer brings its blocks back with the default settings (balance lanes off, redistribute on).
+
+A blueprint holding a different belt (another tier or direction) pasted over the last tile next to a block does not upgrade it in place: the game marks that tile for deconstruction and places a ghost, and robots replace it (items kept, the balancer drops that port until then).
 
 Status: in development (version 0.0.1). Playable for testing; the graphics are placeholders.

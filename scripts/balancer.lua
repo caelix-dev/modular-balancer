@@ -54,6 +54,10 @@ local belt_io = require("scripts.io")
 
 local balancer = {}
 
+-- Called at the end of every flush with the ids of the refreshed groups (set by scripts/gui.lua).
+---@param _ integer[]
+function balancer.after_flush(_) end
+
 ---@class mb.Balancer
 ---@field placed table? the network (builder Placed), or nil
 ---@field extra table[] networks merged into this group that are not carried in yet
@@ -855,6 +859,7 @@ local function work(st, ctx)
       local status, err = run_job(st, gid, job, ctx)
       if status == "done" then
         relink(st, gid)
+        ctx.refreshed[#ctx.refreshed + 1] = gid
       elseif status == "failed" then
         -- the next flush keeps the old network, drops the ports it cannot take and shows the
         -- refusal; this shape is not tried again until the group changes or a player marks it
@@ -948,9 +953,12 @@ function balancer.flush(budget)
       if not balancer.working(st) then
         break
       end
-      work(st, { units = math.huge })
+      work(st, { units = math.huge, refreshed = ctx.refreshed })
     end
   end
+  -- scripts/gui.lua: settings of refused rebuilds, open GUIs; with the groups refreshed here and
+  -- those whose staged rebuild completed in this call
+  balancer.after_flush(ctx.refreshed)
   if balancer.pending(st) then
     arm()
   else

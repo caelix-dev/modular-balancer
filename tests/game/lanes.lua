@@ -11,6 +11,7 @@ local groups = require("scripts.groups")
 local events = require("scripts.events")
 local lifecycle = require("scripts.lifecycle")
 local gui = require("scripts.gui")
+local builder = require("scripts.builder")
 
 local D = defines.direction
 local RATE = H.RATE
@@ -169,6 +170,17 @@ describe("lanes", function()
       local total = H.count_box(box, ITEM)
       assert(total == 2 * STOCK, "before the toggle: " .. total .. " of " .. 2 * STOCK)
       assert(H.network_of(gid) > 0, "test setup: the network holds nothing")
+      -- baseline (review M9): without lane balancing the outputs carry the left lane only
+      local left, right = 0, 0
+      for _, r in ipairs(sinks) do
+        for _, belt in ipairs(r.belts) do
+          if belt.valid then -- the first tile is an edge now
+            left = left + belt.get_transport_line(H.LINES[1]).get_item_count()
+            right = right + belt.get_transport_line(H.LINES[2]).get_item_count()
+          end
+        end
+      end
+      assert(left > 0 and right == 0, "test setup: output lanes before the toggle " .. left .. " / " .. right)
       assert(gui.set(gid, { lanes = true }), "the setting did not change")
       same(groups.settings(gid), true, true, "after the toggle")
       balancer.flush()
@@ -384,5 +396,262 @@ describe("lanes", function()
     balancer.flush()
     local total = H.count_box(box, ITEM)
     assert(total == 100, "items: " .. total .. " of 100")
+  end)
+
+  -- Task 3 review M1, M2, M4, M5 (Plan 3 Task 5). The handlers of the open, copy and paste
+  -- controls and of the checkboxes, driven with stand-in players (a headless test has no
+  -- LuaPlayer; the real player is checked on an MCP instance, docs/feasibility.md F11).
+  test("gui_handlers_follow_reach_permissions_and_current_settings", function()
+    local o, box = area(14, 8)
+    local a = H.block(o, 2, 2, H.TIER)
+    H.block(o, 3, 2, H.TIER)
+    local b = H.block(o, 8, 2, H.TIER)
+    local c = H.block(o, 11, 2, H.TIER)
+    local other = game.forces["mb-test-other"] or game.create_force("mb-test-other")
+    local foreign = H.block(o, 2, 6, H.TIER, other)
+    local ga, gb, gc = groups.of(a.unit_number), groups.of(b.unit_number), groups.of(c.unit_number)
+    assert(ga and gb and gc and ga ~= gb and gb ~= gc, "test setup: three groups expected")
+    local C = defines.controllers
+    local reach = true
+    local function player(t)
+      local p = {
+        valid = true, index = 77, name = "stand-in", force = game.forces.player, controller_type = C.character,
+        gui = { screen = {} },
+        can_reach_entity = function()
+          return reach
+        end,
+        is_cursor_empty = function()
+          return true
+        end,
+      }
+      for k, v in pairs(t or {}) do
+        p[k] = v
+      end
+      return p
+    end
+    local deny_all = { allows_action = function() return false end }
+    local opened = {}
+    local real_open = gui.open
+    gui.open = function(_, e)
+      opened[#opened + 1] = e
+    end
+    local ok, err = pcall(function()
+      -- open (M2, M5)
+      local function opens(p, what)
+        local n = #opened
+        ---@diagnostic disable-next-line: param-type-mismatch
+        local r = gui.open_input(p)
+        assert(r == (#opened > n), what .. ": return value and open disagree")
+        return r
+      end
+      assert(opens(player({ selected = a }), "in reach"), "a block in reach did not open")
+      reach = false
+      assert(not opens(player({ selected = a }), "out of reach"), "a block out of reach opened")
+      assert(opens(player({ selected = a, controller_type = C.remote }), "remote view"), "remote view did not open")
+      reach = true
+      assert(not opens(player({ selected = foreign }), "other force"), "another force's block opened")
+      assert(not opens(player({ selected = a, is_cursor_empty = function() return false end }), "cursor"), "opened with a full cursor")
+      assert(not opens(player({ selected = a, permission_group = deny_all }), "permissions"), "opened without the open-gui permission")
+      assert(not opens(player({ selected = nil }), "nothing"), "opened with nothing selected")
+
+      -- copy then paste reads the source's current settings (M4)
+      ---@diagnostic disable-next-line: param-type-mismatch
+      gui.copy_input(player({ selected = a }))
+      gui.set(ga, { lanes = true, recirc = false })
+      reach = false
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(not gui.paste_input(player({ selected = b })), "pasted out of reach")
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(not gui.paste_input(player({ selected = b, controller_type = C.remote, permission_group = deny_all })), "pasted without the permission")
+      same(groups.settings(gb), false, true, "after the refused pastes")
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(gui.paste_input(player({ selected = b, controller_type = C.remote })), "remote view paste did nothing")
+      reach = true
+      same(groups.settings(gb), true, false, "after the paste (the source's settings when pasted)")
+      -- a copied block that is gone pastes nothing (as vanilla)
+      ---@diagnostic disable-next-line: param-type-mismatch
+      gui.copy_input(player({ selected = c }))
+      gui.set(gb, { lanes = false, recirc = true })
+      c.destroy({ raise_destroy = true })
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(not gui.paste_input(player({ selected = b })), "a gone source pasted")
+      same(groups.settings(gb), false, true, "after pasting a gone source")
+      -- copying something else forgets the block
+      ---@diagnostic disable-next-line: param-type-mismatch
+      gui.copy_input(player({ selected = a }))
+      ---@diagnostic disable-next-line: param-type-mismatch
+      gui.copy_input(player({ selected = nil }))
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(not gui.paste_input(player({ selected = b })), "pasted after copying nothing")
+
+      -- checkboxes: on the open block's group; a gone block closes (M3)
+      storage.mb_gui.open[77] = b
+      local el = { valid = true, tags = { mb_setting = "lanes" }, state = true } --[[@as any]]
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(gui.checked(player(), el), "the checkbox changed nothing")
+      same(groups.settings(gb), true, true, "after the checkbox")
+      local foreign_el = { valid = true, tags = { mb_setting = "other" }, state = true } --[[@as any]]
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(not gui.checked(player(), foreign_el), "a foreign element changed a setting")
+      reach = false
+      local recirc_el = { valid = true, tags = { mb_setting = "recirc" }, state = false } --[[@as any]]
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(not gui.checked(player(), recirc_el), "changed out of reach")
+      assert(storage.mb_gui.open[77] == nil, "out of reach: the frame was not closed")
+      reach = true
+
+      -- a removed player leaves nothing behind (M1)
+      storage.mb_gui.open[77] = b
+      ---@diagnostic disable-next-line: param-type-mismatch
+      gui.copy_input(player({ selected = a }))
+      gui.forget(77)
+      assert(storage.mb_gui.open[77] == nil and storage.mb_gui.copy[77] == nil, "state kept for a removed player")
+    end)
+    gui.open = real_open
+    storage.mb_gui.open[77], storage.mb_gui.copy[77] = nil, nil
+    foreign.destroy({ raise_destroy = true })
+    assert(ok, err)
+    -- the frame's styles exist (gui.open on a real player uses them)
+    for _, style in ipairs({ "frame_title", "draggable_space_header", "frame_action_button", "inside_shallow_frame_with_padding" }) do
+      ---@diagnostic disable-next-line: unnecessary-assert
+      assert(prototypes.style[style], "no style " .. style)
+    end
+    balancer.flush()
+    assert(H.count_box(box, ITEM) == 0, "items appeared")
+  end)
+
+  -- M9: a block built from a blueprint with settings tags that joins an existing group takes the
+  -- group's settings (the tags only start a new group).
+  test("tagged_block_joining_a_group_ignores_its_tags", function()
+    local o, box = area(8, 6)
+    local a = H.block(o, 2, 2, H.TIER)
+    local inv = game.create_inventory(1)
+    inv.insert({ name = "blueprint" })
+    local bp = inv[1]
+    bp.set_blueprint_entities({
+      { entity_number = 1, name = "mb-balancer-" .. H.TIER, position = { 0.5, 0.5 }, tags = { mb_lanes = true, mb_recirc = false } },
+    })
+    paste(bp, { o.x + 3, o.y + 2 }, box)
+    local joined = H.at(o, 3, 2, "simple-entity-with-owner")
+    assert(joined and groups.of(joined.unit_number) == groups.of(a.unit_number), "the pasted block did not join")
+    same(groups.settings(groups.of(a.unit_number)), false, true, "joined group")
+    -- alone, the same blueprint starts a group with its settings
+    paste(bp, { o.x + 6, o.y + 4 }, box)
+    local lone = assert(H.at(o, 6, 4, "simple-entity-with-owner"), "the second paste built nothing")
+    same(groups.settings(groups.of(lone.unit_number)), true, false, "new group from tags")
+    inv.destroy()
+  end)
+
+  -- M9: a clone that starts a new group takes its source group's settings; a teleported block
+  -- that leaves its group keeps them, one that joins another group takes that group's.
+  test("clone_and_teleport_keep_settings", function()
+    local o = area(14, 8)
+    local a = H.block(o, 2, 2, H.TIER)
+    H.block(o, 3, 2, H.TIER)
+    local ga = groups.of(a.unit_number)
+    gui.set(ga, { lanes = true, recirc = false })
+    local clone = assert(a.clone({ position = { o.x + 8, o.y + 2 } }), "clone failed")
+    same(groups.settings(groups.of(clone.unit_number)), true, false, "clone")
+    local b = H.block(o, 2, 6, H.TIER)
+    same(groups.settings(groups.of(b.unit_number)), false, true, "plain block")
+    assert(a.teleport({ o.x + 11, o.y + 6 }, nil, true), "teleport refused")
+    same(groups.settings(groups.of(a.unit_number)), true, false, "teleported out alone")
+    assert(a.teleport({ o.x + 3, o.y + 6 }, nil, true), "teleport refused")
+    assert(groups.of(a.unit_number) == groups.of(b.unit_number), "the teleported block did not join")
+    same(groups.settings(groups.of(b.unit_number)), false, true, "teleported into a plain group")
+  end)
+
+  -- M9: after game.merge_forces, touching groups merge and keep the larger group's settings.
+  test("forces_merged_keeps_the_larger_groups_settings", function()
+    async(120)
+    local o = area(8, 6)
+    local fa = game.forces["mb-test-lanes-a"] or game.create_force("mb-test-lanes-a")
+    local big = H.block(o, 2, 2, H.TIER, fa)
+    H.block(o, 3, 2, H.TIER, fa)
+    local small = H.block(o, 4, 2, H.TIER)
+    gui.set(groups.of(big.unit_number), { lanes = true, recirc = false })
+    assert(groups.of(big.unit_number) ~= groups.of(small.unit_number), "test setup: forces joined")
+    game.merge_forces(fa, game.forces.player)
+    after_ticks(2, function()
+      local g = groups.of(small.unit_number)
+      assert(g and g == groups.of(big.unit_number), "the groups did not merge")
+      same(groups.settings(g), true, false, "merged after the force merge")
+      done()
+    end)
+  end)
+
+  -- M9: a toggle and a merge in one batch: one flush rebuilds with the new settings and the
+  -- merged network's items.
+  test("toggle_and_merge_in_one_flush", function()
+    async(900)
+    local o, box = area(14, 8)
+    local a = H.block(o, 3, 3, H.TIER)
+    H.feed(o, 3, 3, D.west, 3, { stock = 300 })
+    H.sink(o, 3, 3, D.north, 2)
+    local b = H.block(o, 5, 3, H.TIER)
+    H.feed(o, 5, 3, D.south, 2, { stock = 300 })
+    H.sink(o, 5, 3, D.east, 3)
+    balancer.flush()
+    assert(groups.of(a.unit_number) ~= groups.of(b.unit_number), "test setup: one group")
+    after_ticks(600, function()
+      local total = H.count_box(box, ITEM)
+      assert(total == 600, "before: " .. total .. " of 600")
+      gui.set(groups.of(a.unit_number), { lanes = true })
+      H.block(o, 4, 3, H.TIER) -- joins both; a and b are the same size, so the lower id wins
+      local g = groups.of(a.unit_number)
+      assert(g == groups.of(b.unit_number), "the blocks did not merge")
+      local want = groups.settings(g)
+      balancer.flush()
+      local rec = rec_of(a)
+      assert(rec.placed and rec.lanes == want.lanes and rec.recirc == want.recirc, "not rebuilt with the merged settings")
+      assert(#rec.extra == 0, "a merged network was not carried in")
+      assert(H.count_box(box, ITEM) == total, "after the flush: " .. H.count_box(box, ITEM) .. " of " .. total)
+      after_ticks(120, function()
+        assert(H.count_box(box, ITEM) == total, "later: " .. H.count_box(box, ITEM) .. " of " .. total)
+        done()
+      end)
+    end)
+  end)
+
+  -- Task 3 review M6: a rebuild for a setting that is refused (too many items) keeps the old
+  -- network, and the group's settings go back to that network's, so the GUI shows what the
+  -- balancer does. The refusal is forced by a stand-in builder.start.
+  test("refused_rebuild_sets_the_settings_back", function()
+    async(700)
+    local o, box = area(12, 8)
+    local a = H.block(o, 4, 3, H.TIER)
+    H.feed(o, 4, 3, D.west, 3, { stock = 300 })
+    H.sink(o, 4, 3, D.east, 3)
+    H.sink(o, 4, 3, D.south, 2)
+    balancer.flush()
+    after_ticks(600, function()
+      local rec, gid = rec_of(a)
+      local placed = rec.placed
+      local total = H.count_box(box, ITEM)
+      assert(gui.set(gid, { recirc = false }), "the setting did not change")
+      -- the staged rebuild starts its placement with builder.start (scripts/balancer.lua)
+      local real = builder.start
+      builder.start = function()
+        return nil, "too-many-items"
+      end
+      local ok, err = pcall(balancer.flush)
+      builder.start = real
+      assert(ok, err)
+      local r2 = rec_of(a)
+      assert(r2.placed == placed and r2.recirc ~= false, "the old network was not kept")
+      local reasons = {}
+      for _, r in ipairs(r2.refused) do
+        reasons[#reasons + 1] = r.reason
+      end
+      assert(table.concat(reasons, ","):find("too-many-items", 1, true), "no refusal: " .. serpent.line(reasons))
+      same(groups.settings(gid), false, true, "settings after the refused rebuild")
+      assert(H.count_box(box, ITEM) == total, "items: " .. H.count_box(box, ITEM) .. " of " .. total)
+      -- the next change rebuilds normally
+      assert(gui.set(gid, { recirc = false }), "the setting did not change again")
+      balancer.flush()
+      assert(rec_of(a).recirc == false, "not rebuilt after the refusal")
+      assert(H.count_box(box, ITEM) == total, "items after the rebuild: " .. H.count_box(box, ITEM) .. " of " .. total)
+      done()
+    end)
   end)
 end)

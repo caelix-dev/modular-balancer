@@ -698,8 +698,8 @@ local function refresh_group(st, gid, ctx, player_index)
   end
   if rec.draining and #rec.draining > 0 then
     st.drains[gid] = true -- also resumes a drain that got stuck (the new buffer was full)
-    -- (st.stuck is cleared only by its handler, which unregisters itself at the same time, so
-    -- the handler is registered exactly while st.stuck is non-empty, as on_load sets it)
+    -- (st.stuck is cleared only by its handler or by drop_networks, each unregistering the handler at
+    -- the same time, so the handler is registered exactly while st.stuck is non-empty, as on_load sets it)
   end
   if n > 0 and m > 0 then
     local stale = rec.placed and ((rec.lanes == true) ~= want.lanes or (rec.recirc ~= false) ~= want.recirc)

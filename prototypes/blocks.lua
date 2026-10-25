@@ -49,13 +49,15 @@ local GFX = "__modular-balancer__/graphics/"
 local gfx = require("prototypes.gfx")
 local FRAMES = #look.masks()
 
--- One Animation per neighbourhood: that frame of the static sheet (held for the whole loop with
--- repeat_count), the machinery loop in the top opening (the same 16 frames for every
--- neighbourhood) and the shadow. A prototype animation: no script runs for it.
+-- One Animation per neighbourhood and tile parity (scripts/look.lua: variations 1-47 for even
+-- tiles, 48-94 for odd ones, whose detail is turned around so a row alternates): that frame of the
+-- static sheet (held for the whole loop with repeat_count), the parity's machinery loop in the top
+-- opening and the parity's shadow. A prototype animation: no script runs for it.
 local ANIM_FRAMES = 16
 local function animations(colour)
   local list = {}
-  for i = 1, FRAMES do
+  for i = 1, 2 * FRAMES do
+    local parity = i > FRAMES and 1 or 0
     local x = ((i - 1) % 8) * gfx.frame
     local y = math.floor((i - 1) / 8) * gfx.frame
     local function still(file, shadow)
@@ -64,8 +66,8 @@ local function animations(colour)
         priority = "high",
         width = gfx.frame,
         height = gfx.frame,
-        x = x,
-        y = y,
+        x = shadow and parity * gfx.frame or x,
+        y = shadow and 0 or y,
         frame_count = 1,
         repeat_count = ANIM_FRAMES,
         scale = gfx.scale,
@@ -76,7 +78,7 @@ local function animations(colour)
       layers = {
         still("balancer-" .. colour .. ".png"),
         {
-          filename = gfx.dir .. "machinery-" .. colour .. ".png",
+          filename = gfx.dir .. "machinery-" .. colour .. "-" .. parity .. ".png",
           priority = "high",
           width = gfx.frame,
           height = gfx.frame,

@@ -18,6 +18,7 @@ return {
     assert(look.canonical(1 + 2 + 16) == 1 + 2 + 16, "NE with N and E must stay")
     assert(look.variation(255) == 47, "a fully surrounded block is the last variation")
     assert(look.variation(16) == look.variation(0), "a diagonal neighbour alone changes nothing")
+    assert(look.variation(0, 1) == 48 and look.variation(255, 1) == 94, "odd tiles use variations 48..94")
   end,
   every_mask_has_a_variation = function()
     for m = 0, 255 do

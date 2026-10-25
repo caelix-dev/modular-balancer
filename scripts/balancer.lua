@@ -27,7 +27,9 @@
 --      robots (balancer.spill_clear);
 --   2. refreshes each live dirty group: scan; if it has at least one input and one output, its
 --      edges and block-tile linked belts are put in place (claimed), the network is rebuilt
---      only when N or M changed (or networks were merged in), and every port is linked. A group
+--      only when N or M changed, networks were merged in, or the group's settings (balance
+--      lanes, redistribute unused shares; scripts/groups.lua, scripts/gui.lua) differ from those
+--      the network was built with, and every port is linked. A group
 --      without inputs or without outputs keeps its network, dormant, with its items, and has no
 --      visible ports;
 --   3. links shared tiles: the output network linked belt of one group straight to the input
@@ -57,6 +59,8 @@ local balancer = {}
 ---@field extra table[] networks merged into this group that are not carried in yet
 ---@field n integer network inputs of `placed`
 ---@field m integer network outputs of `placed`
+---@field lanes boolean? `placed` has lane splitters (nil: no, a network from an older save)
+---@field recirc boolean? `placed` recirculates (nil: yes, a network from an older save)
 ---@field inputs mb.IoPort[] linked to placed.inputs[i]
 ---@field outputs mb.IoPort[] linked to placed.outputs[j]
 ---@field units (integer|uint64)[] blocks at the last refresh
@@ -408,9 +412,11 @@ local function refresh_group(st, gid, ctx, player_index)
   end
 
   local n, m = #inputs, #outputs
+  local want = groups.settings(gid)
   if n > 0 and m > 0 then
-    if not rec.placed or rec.n ~= n or rec.m ~= m or #rec.extra > 0 then
-      local net = assert(network.build(n, m))
+    local stale = rec.placed and ((rec.lanes == true) ~= want.lanes or (rec.recirc ~= false) ~= want.recirc)
+    if not rec.placed or rec.n ~= n or rec.m ~= m or #rec.extra > 0 or stale then
+      local net = assert(network.build(n, m, { balance_lanes = want.lanes, recirc = want.recirc }))
       local placed, err
       if rec.placed then
         placed, err = builder.rebuild(rec.placed, net, g.tier, g.force, rec.extra)
@@ -425,6 +431,7 @@ local function refresh_group(st, gid, ctx, player_index)
       end
       if placed then
         rec.placed, rec.extra, rec.n, rec.m = placed, {}, n, m
+        rec.lanes, rec.recirc = want.lanes, want.recirc
       else
         log("modular-balancer: group " .. gid .. " " .. n .. ":" .. m .. " not rebuilt: " .. tostring(err))
         refused[#refused + 1] = { reason = err == "too-many-items" and "too-many-items" or "rebuild-failed",

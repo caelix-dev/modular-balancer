@@ -24,6 +24,7 @@
 local network = require("scripts.network")
 local builder = require("scripts.builder")
 local H = require("tests.game.harness")
+local gui = require("scripts.gui")
 
 local D = defines.direction
 
@@ -192,7 +193,21 @@ local function groups_destroy()
   return e ~= nil and e.destroy()
 end
 
+-- Opens the settings GUI (scripts/gui.lua) of the block at (x, y) for a player, as clicking it
+-- would (Plan 3 Task 3 screenshot; a GUI client cannot click from the MCP tools):
+--   exec_lua: return remote.call("mb-test", "gui_open", 1, x, y)
+local function gui_open(player_index, x, y)
+  local player = game.get_player(player_index)
+  local e = player and player.surface.find_entities_filtered({ position = { x, y }, type = "simple-entity-with-owner", limit = 1 })[1]
+  if not (player and e) then
+    return false
+  end
+  gui.open(player, e)
+  return player.gui.screen.mb_settings ~= nil
+end
+
 local functions = {
+  gui_open = gui_open,
   build = build, count = count, block = block, bench_hidden = bench_hidden, bench_vanilla = bench_vanilla,
   groups_build = groups_build, groups_summary = groups_summary, groups_bridge = groups_bridge,
   groups_destroy = groups_destroy,

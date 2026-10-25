@@ -47,6 +47,7 @@
 local groups = require("scripts.groups")
 local balancer = require("scripts.balancer")
 local belt_io = require("scripts.io")
+local gui = require("scripts.gui")
 
 local lifecycle = {}
 
@@ -142,11 +143,16 @@ end
 --   event.record   the library record being reassigned (or the selected record of a book record)
 --   event.stack    the item used to select: a blueprint, or a book (its active blueprint)
 --   player.blueprint_to_setup, player.cursor_stack (a blueprint, or a book's active blueprint)
+-- Each block also gets its group's settings as tags (gui.tag_blueprint, through event.mapping),
+-- before the edges are rewritten (which keeps every entity's index and tags).
 function lifecycle.on_player_setup_blueprint(event)
   local pi = event.player_index
   local player = pi and pi > 0 and game.get_player(pi) or nil
+  local mapping = event.mapping
+  local map = mapping and mapping.valid and mapping.get() or nil
   local record = record_blueprint(event.record, player)
   if record and record.is_blueprint_setup() then
+    gui.tag_blueprint(record, map)
     lifecycle.clean_blueprint(record)
   end
   local stacks = { event.stack }
@@ -157,6 +163,7 @@ function lifecycle.on_player_setup_blueprint(event)
   for _, st in ipairs(stacks) do
     local bp = stack_blueprint(st)
     if bp and bp.is_blueprint_setup() then
+      gui.tag_blueprint(bp, map)
       lifecycle.clean_blueprint(bp)
     end
   end

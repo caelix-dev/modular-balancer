@@ -321,8 +321,18 @@ describe("staged", function()
       after_ticks(30, function()
         assert(c.n == n0, (c.n - n0) .. " flushes in 30 ticks: a stuck drain retries every tick")
         assert(H.count_box(box) == total, "30 ticks later: " .. H.count_box(box) .. " of " .. total)
+        -- re-review N2: a refresh of the group (it resumes the drain, which gets stuck again)
+        -- leaves st.stuck as it is: only the retry handler empties it, so the handler is
+        -- registered exactly while st.stuck is non-empty, as on_load sets it
+        balancer.mark({ id })
+        balancer.flush()
+        assert(#(rec_of(b).draining or {}) == 1, "test setup: the resumed drain did not get stuck again")
+        assert(next(storage.balancer.stuck) ~= nil, "a refresh emptied st.stuck behind the retry handler")
+        -- a client that joins now: no handler of its own until on_load sets it from storage
+        script.on_nth_tick(300, nil)
+        balancer.on_load()
         -- no event touches the group: the periodic retry (every 300 ticks while a drain is
-        -- stuck) resumes it once the buffer may grow
+        -- stuck, set by on_load here) resumes it once the buffer may grow
         builder.max_buffer_slots = 65535
         after_ticks(320, function()
           local rec2 = rec_of(b)
@@ -815,4 +825,81 @@ describe("staged", function()
       end)
     end)
   end)
+  -- Re-review N1/N4: groups with more than 16 ports on a side, at the DEFAULT budget. Their
+  -- network is generated in a tick of its own (by the fairness step at the start of a flush, or
+  -- by the staged work), and every outcome of that step must be finished off: when it completes
+  -- there, every port is linked to the new network and items flow through the new port.
+  -- A row of 9 blocks; `fan_out`: one input (west) and 17 outputs (north of blocks 1-9, south of
+  -- blocks 1-8), then an 18th output south of block 9; otherwise the mirror image, 17 inputs and
+  -- one output (east), then an 18th input.
+  for _, fan_out in ipairs({ true, false }) do
+    local tag = fan_out and "1_17_to_1_18" or "17_1_to_18_1"
+    test("large_group_rebuilt_at_the_default_budget_" .. tag, function()
+      async(4000)
+      local o, box = area(16, 14)
+      local y = 6
+      local blocks = {}
+      for x = 3, 11 do
+        blocks[#blocks + 1] = H.block(o, x, y, H.TIER)
+      end
+      local sinks, feeds = {}, {}
+      local function port(x, side)
+        if fan_out then
+          sinks[#sinks + 1] = H.sink(o, x, y, side, 2)
+        else
+          feeds[#feeds + 1] = H.feed(o, x, y, side, 2, { stock = 200 })
+        end
+      end
+      if fan_out then
+        feeds[1] = H.feed(o, 3, y, D.west, 1, { stock = 3000 })
+      else
+        sinks[1] = H.sink(o, 11, y, D.east, 1)
+      end
+      for x = 3, 11 do
+        port(x, D.north)
+      end
+      for x = 3, 10 do
+        port(x, D.south)
+      end
+      balancer.flush()
+      local rec0, id = rec_of(blocks[1])
+      assert(nm(rec0) == (fan_out and "1:17" or "17:1"), "test setup: network " .. nm(rec0))
+      after_ticks(120, function()
+        port(11, D.south) -- raise_built marks the group; the handler does the rest
+        local new = assert(fan_out and sinks[#sinks] or feeds[#feeds])
+        each_tick(3000, function() end, function(t)
+          local rec = rec_of(blocks[1])
+          assert(nm(rec) == (fan_out and "1:18" or "18:1"), "network " .. nm(rec))
+          -- every visible port is linked to the new network
+          local own = {}
+          for _, e in pairs(rec.placed.inputs) do
+            own[e.unit_number] = true
+          end
+          for _, e in pairs(rec.placed.outputs) do
+            own[e.unit_number] = true
+          end
+          local unlinked = 0
+          for _, list in ipairs({ rec.inputs, rec.outputs }) do
+            for _, p in ipairs(list) do
+              local nb = p.visible and p.visible.valid and p.visible.linked_belt_neighbour
+              if not (nb and own[nb.unit_number]) then
+                unlinked = unlinked + 1
+              end
+            end
+          end
+          H.report("large group %s at the default budget: rebuilt in %d ticks, %d ports not linked", tag, t, unlinked)
+          assert(unlinked == 0, unlinked .. " of " .. (#rec.inputs + #rec.outputs) .. " ports are not linked to the new network")
+          local before = new.chest.get_item_count(ITEM)
+          after_ticks(600, function()
+            if fan_out then
+              assert(new.chest.get_item_count(ITEM) > before, "the new output receives nothing")
+            else
+              assert(new.chest.get_item_count(ITEM) < before, "the new input is not drawn")
+            end
+            done()
+          end)
+        end)
+      end)
+    end)
+  end
 end)

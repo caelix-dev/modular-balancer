@@ -105,6 +105,7 @@ local function state()
   st.spill_queue = st.spill_queue or {}
   st.retry = st.retry or {}
   st.stuck = st.stuck or {}
+  st.loose_retired = st.loose_retired or {}
   return st
 end
 
@@ -115,8 +116,12 @@ local function arm()
 end
 
 -- Drains that got stuck (the new buffer full) are retried every STUCK_RETRY ticks while any is
--- stuck: their new network may have emptied its buffer by itself. Registered only while a drain
--- is stuck (st.stuck), re-set in on_load; nothing runs in the steady state.
+-- stuck: their new network may have emptied its buffer by itself. Registered exactly while
+-- st.stuck is non-empty: st.stuck gains entries only next to arm_stuck() and is emptied only by
+-- the handler, which unregisters itself; on_load re-sets it from st.stuck (multiplayer: a client
+-- that joins registers the same). Ids of groups gone or resumed meanwhile are harmless (the
+-- drain step drops them). A drain whose new buffer stays full (outputs blocked for good) is
+-- retried every STUCK_RETRY ticks for as long as that lasts; each retry merges the buffer once.
 local STUCK_RETRY = 300
 local function arm_stuck()
   script.on_nth_tick(STUCK_RETRY, function()
@@ -648,7 +653,8 @@ local function refresh_group(st, gid, ctx, player_index)
   end
   if rec.draining and #rec.draining > 0 then
     st.drains[gid] = true -- also resumes a drain that got stuck (the new buffer was full)
-    st.stuck[gid] = nil
+    -- (st.stuck is cleared only by its handler, which unregisters itself at the same time, so
+    -- the handler is registered exactly while st.stuck is non-empty, as on_load sets it)
   end
   if n > 0 and m > 0 then
     local stale = rec.placed and ((rec.lanes == true) ~= want.lanes or (rec.recirc ~= false) ~= want.recirc)
@@ -796,9 +802,11 @@ local function cleanup(st, ctx)
     local x, y = belt_io.tiles_of(e)
     local unit = groups.block_at(e.surface_index, x, y)
     local gid = unit and groups.of(unit)
-    ctx.pool[#ctx.pool + 1] = { entity = e, gid = gid, tiles = { { x, y } } }
+    -- a removed group's edge deferred by an earlier flush stays deferrable (bounded work)
+    ctx.pool[#ctx.pool + 1] = { entity = e, gid = gid, tiles = { { x, y } }, retired = st.loose_retired[l.unit] }
   end
   st.loose = {}
+  st.loose_retired = {}
   for _, entry in ipairs(ctx.pool) do
     local e = entry.entity
     if e.valid and not ctx.claimed[e.unit_number] and entry.gid and ctx.deferred[entry.gid] then
@@ -810,6 +818,7 @@ local function cleanup(st, ctx)
       -- removed groups' edges: a live group's dropped port (a failed rebuild) is swapped back
       -- now, so its tile ends the flush as it began and nothing re-marks the group
       st.loose[e.unit_number] = e
+      st.loose_retired[e.unit_number] = true
     elseif e.valid and not ctx.claimed[e.unit_number] then
       touch(ctx, e)
       if belt_io.edge_belt(e.name) then
@@ -942,6 +951,24 @@ local function spill_some(st, ctx)
   end
 end
 
+-- Runs group `gid`'s rebuild job outside its refresh (the staged work, or the fairness step at the
+-- start of a flush) and handles every outcome: the one place a job that completes or fails after
+-- its refresh is finished off.
+local function step_job(st, gid, job, rec, ctx)
+  local status, err = run_job(st, gid, job, ctx)
+  if status == "done" then
+    -- its ports and shared tiles were scanned at its last refresh: link them to the new network
+    relink(st, gid)
+    ctx.refreshed[#ctx.refreshed + 1] = gid
+  elseif status == "failed" then
+    -- the next flush keeps the old network, drops the ports it cannot take and shows the
+    -- refusal; this shape is not tried again until the group changes or a player marks it
+    log("modular-balancer: group " .. gid .. " " .. job.n .. ":" .. job.m .. " not rebuilt: " .. tostring(err))
+    rec.failed, rec.failed_err = job.key, err
+    balancer.mark({ gid }, nil, job.player_index, true)
+  end
+end
+
 -- Rebuild jobs in the order they were started (fair: a group with a low id does not overtake).
 ---@return integer[]
 local function jobs_in_order(st)
@@ -967,17 +994,7 @@ local function work(st, ctx)
       -- its refresh waits for a later tick (budget) and may change its shape: no work on a
       -- placement that may be dropped (review m3)
     else
-      local status, err = run_job(st, gid, job, ctx)
-      if status == "done" then
-        relink(st, gid)
-        ctx.refreshed[#ctx.refreshed + 1] = gid
-      elseif status == "failed" then
-        -- the next flush keeps the old network, drops the ports it cannot take and shows the
-        -- refusal; this shape is not tried again until the group changes or a player marks it
-        log("modular-balancer: group " .. gid .. " " .. job.n .. ":" .. job.m .. " not rebuilt: " .. tostring(err))
-        rec.failed, rec.failed_err = job.key, err
-        balancer.mark({ gid }, nil, job.player_index, true)
-      end
+      step_job(st, gid, job, rec, ctx)
     end
   end
   for _, gid in ipairs(sorted_keys(st.drains)) do
@@ -1025,7 +1042,7 @@ function balancer.flush(budget)
     for _, gid in ipairs(jobs_in_order(st)) do
       local job = st.jobs[gid] --[[@as table]]
       if not (job.b or job.net) and math.max(job.n, job.m) > SMALL and not dirty[gid] and st.recs[gid] and groups.get(gid) then
-        run_job(st, gid, job, ctx)
+        step_job(st, gid, job, st.recs[gid], ctx)
         break
       end
     end

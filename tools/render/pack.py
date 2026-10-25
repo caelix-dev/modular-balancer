@@ -65,6 +65,19 @@ def clip(img, mask):
     return Image.fromarray(a, "RGBA")
 
 
+def outline(img, strength=0.55):
+    """Darkens the outermost pixels of the silhouette, like the dark rim vanilla sprites have."""
+    import numpy as np
+    from PIL import ImageFilter as F
+    a = img.getchannel("A")
+    inner = a.filter(F.MinFilter(3))
+    rim = np.clip((np.asarray(a, float) - np.asarray(inner, float)) / 255.0, 0, 1)
+    rgb = np.asarray(img.convert("RGB"), float) * (1 - strength * rim[..., None])
+    out = Image.fromarray(rgb.clip(0, 255).astype("uint8"), "RGB")
+    out.putalpha(a)
+    return out
+
+
 def shrink(img, size, blur):
     pre = img.convert("RGBa").resize((size, size), Image.LANCZOS)
     if blur:
@@ -105,11 +118,11 @@ def main():
         hs = {s: shrink(hood_shadow[s], size, SHADOW_BLUR[key]) for s in "nesw"}
         sheet([hs[s] for s in order], 6, size).save(os.path.join(d, "hood-shadow.png"), optimize=True)
         for t in TIERS:
-            sheet([shrink(raw_blocks[(t, m)], size, blur) for m in ms], 8, size).save(
+            sheet([outline(shrink(raw_blocks[(t, m)], size, blur)) for m in ms], 8, size).save(
                 os.path.join(d, "balancer-%s.png" % t), optimize=True)
             sheet([shrink(raw_anim[(t, f)], size, blur) for f in range(FRAMES)], 8, size).save(
                 os.path.join(d, "machinery-%s.png" % t), optimize=True)
-            h = {s: shrink(raw_hoods[(t, s)], size, blur) for s in "nesw"}
+            h = {s: outline(shrink(raw_hoods[(t, s)], size, blur)) for s in "nesw"}
             sheet([h[s] for s in order], 6, size).save(os.path.join(d, "hood-%s.png" % t), optimize=True)
     # icons: a lone block with an input hood above and an output hood below
     os.makedirs(ICONS, exist_ok=True)

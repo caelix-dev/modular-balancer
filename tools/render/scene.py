@@ -50,7 +50,7 @@ H = 0.55  # housing height (shows 0.39 tile of front face)
 HOOD_H = 0.3  # port roof height
 BEVEL = 0.04
 PIT = 0.1  # depth of the machinery opening
-WIN = 0.355  # half size of the opening
+WIN = 0.41  # half size of the opening
 FRAMES = 16
 
 with open(os.path.join(HERE, "tiers.json")) as f:
@@ -96,7 +96,7 @@ def reset():
     world.use_nodes = True
     bg = world.node_tree.nodes["Background"]
     bg.inputs["Color"].default_value = (0.6, 0.6, 0.6, 1)
-    bg.inputs["Strength"].default_value = 0.35
+    bg.inputs["Strength"].default_value = 0.18
 
     root = bpy.data.objects.new("root", None)
     sc.collection.objects.link(root)
@@ -124,7 +124,7 @@ def reset():
         ob.rotation_euler = Vector(direction).normalized().to_track_quat("-Z", "Y").to_euler()
 
     sun("key", 3.0, 8, (1.0, -0.25, -1.4))
-    sun("fill", 1.8, 40, (0.15, 1.0, -0.55), shadow=False)
+    sun("fill", 0.9, 40, (0.15, 1.0, -0.55), shadow=False)
 
     me = bpy.data.meshes.new("ground")
     bm = bmesh.new()
@@ -242,8 +242,10 @@ def material(name, base, metallic=0.1, roughness=0.6, chips=0.0, grime=0.8, dust
     big, sep = periodic_noise(nt, 3.0)
     fine, _ = periodic_noise(nt, 11.0, detail=3.0, w_offset=5.0)
     blot = ramp(nt, big, 0.4, 0.7)
+    grain, _ = periodic_noise(nt, 26.0, detail=6.0, roughness=0.75, w_offset=23.0)
     col = mix(nt, mul(nt, blot, 0.5), base, tuple(v * 0.5 for v in base))
     col = mix(nt, mul(nt, ramp(nt, fine, 0.5, 0.75), 0.25), col, tuple(v * 0.7 for v in base))
+    col = mix(nt, mul(nt, ramp(nt, grain, 0.5, 0.68), 0.55), col, tuple(v * 0.45 for v in base))
     geo = nt.nodes.new("ShaderNodeNewGeometry")
     if top is not None:
         sepn = nt.nodes.new("ShaderNodeSeparateXYZ")
@@ -290,7 +292,7 @@ def material(name, base, metallic=0.1, roughness=0.6, chips=0.0, grime=0.8, dust
         nt.links.new(rough.outputs["Result"], bsdf.inputs["Roughness"])
     if grime:
         # dirt collects toward the foot of the walls
-        foot = ramp(nt, sep.outputs["Z"], 0.16, 0.0)
+        foot = ramp(nt, sep.outputs["Z"], 0.3, 0.0)
         col = mix(nt, mul(nt, foot, 0.55 * grime), col, tuple(v * 0.3 + g for v, g in zip(base, GRIME)))
     if streaks:
         # dirt streaks running down the walls: noise stretched along Z, walls only
@@ -366,7 +368,7 @@ def tread_material(name, accent):
         nt.links.new(src.outputs[0], d.inputs[0])
         nt.links.new(d.outputs[0], m.inputs[0])
         results.append(ramp(nt, m.outputs[0], lo, hi))
-    col = mix(nt, results[0], (0.075, 0.07, 0.065), (0.018, 0.016, 0.015))
+    col = mix(nt, results[0], (0.16, 0.165, 0.19), (0.05, 0.05, 0.06))
     col = mix(nt, results[1], col, accent)
     nt.links.new(col, bsdf.inputs["Base Color"])
     return mat
@@ -376,7 +378,7 @@ def materials(tier):
     c = TIERS[tier]
     steel = STEEL
     return {
-        "body": material("body-" + tier, c, 0.0, 0.32, chips=1.0, oil=0.8, top=steel, dust=0.05, specular=0.5,
+        "body": material("body-" + tier, c, 0.0, 0.32, chips=1.0, oil=0.8, dust=0.05, specular=0.5,
                          streaks=0.7),
         "paint": material("paint-" + tier, c, 0.0, 0.32, chips=1.0, oil=0.3, specular=0.5, streaks=0.6),
         "steel": material("steel-" + tier, steel, 0.7, 0.3, chips=0.0, oil=0.4),
@@ -506,7 +508,7 @@ def housing(parent, mat, cells, height, opening=None):
     return ob
 
 
-def rim_bands(parent, mat, cells, height, width=0.09, raise_=0.035):
+def rim_bands(parent, mat, cells, height, width=0.06, raise_=0.035):
     """Raised painted bands on the top outline, corner squares at convex and inner corners."""
     def put(x0, y0, x1, y1):
         box(parent, mat, x0, y0, height - 0.01, x1, y1, height + raise_, bev=0.012, name="band")
@@ -570,7 +572,7 @@ def machinery(root, m, frame):
     the middle and four corner rollers, all looping."""
     t = frame / FRAMES
     z0 = H - PIT
-    box(root, m["dark"], -WIN + 0.005, -WIN + 0.005, z0 - 0.01, WIN - 0.005, WIN - 0.005, z0 + 0.003, name="floor")
+    box(root, m["steel"], -WIN + 0.005, -WIN + 0.005, z0 - 0.01, WIN - 0.005, WIN - 0.005, z0 + 0.003, name="floor")
     lane_w = 0.17
     for ang in (45, 135):
         # long enough that the ends are hidden under the housing top past the opening's frame,
@@ -620,6 +622,10 @@ def hood(root, m, side):
     hh = HOOD_H
     box(g, m["body"], -hw, y0, hh - 0.06, hw, y1, hh, bev=0.02, name="roof")
     box(g, m["paint"], -hw + 0.04, y1 - 0.05, hh - 0.005, hw - 0.04, y1 - 0.015, hh + 0.012, name="stripe")
+    # dark bands across the painted roof, like the dark stripes on vanilla's underground belt hoods
+    for k in range(3):
+        by = y0 + 0.05 + k * 0.12
+        box(g, m["dark"], -hw + 0.03, by, hh - 0.004, hw - 0.03, by + 0.05, hh + 0.006, name="band")
     for x in (-0.18, 0.18):
         box(g, m["steel"], x - 0.025, y0, hh - 0.01, x + 0.025, y1 - 0.05, hh + 0.02, bev=0.008, name="rib")
     roller(g, m["light"], 0, y1 - 0.02, hh - 0.09, 2 * hw - 0.14, 0.03, axis="X", name="drive")
@@ -657,7 +663,7 @@ def render(path, ground, world, shadow=False, holdout=()):
             ob.visible_camera = not shadow
             ob.is_holdout = ob in holdout
     ground.hide_render = not shadow
-    world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.0 if shadow else 0.35
+    world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.0 if shadow else 0.18
     sc.render.filepath = path
     bpy.ops.render.render(write_still=True)
 

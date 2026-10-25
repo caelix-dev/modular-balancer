@@ -54,6 +54,10 @@ local belt_io = require("scripts.io")
 
 local balancer = {}
 
+-- Called at the end of every flush with the ids of the refreshed groups (set by scripts/gui.lua).
+---@param _ integer[]
+function balancer.after_flush(_) end
+
 ---@class mb.Balancer
 ---@field placed table? the network (builder Placed), or nil
 ---@field extra table[] networks merged into this group that are not carried in yet
@@ -645,6 +649,7 @@ function balancer.flush()
     end
   end
   st.sinks = {}
+  balancer.after_flush(ctx.refreshed) -- scripts/gui.lua: settings of refused rebuilds, open GUIs
 end
 
 -- Spills every stack of `inv` (a script inventory, destroyed) on the ground near `position` of

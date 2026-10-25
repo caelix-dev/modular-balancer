@@ -25,6 +25,9 @@ local network = require("scripts.network")
 local builder = require("scripts.builder")
 local H = require("tests.game.harness")
 local gui = require("scripts.gui")
+local groups = require("scripts.groups")
+local balancer = require("scripts.balancer")
+local lifecycle = require("scripts.lifecycle")
 
 local D = defines.direction
 
@@ -206,8 +209,107 @@ local function gui_open(player_index, x, y)
   return player.gui.screen.mb_settings ~= nil
 end
 
+-- Real-player checks (Plan 3 Task 5, docs/feasibility.md F11). A GUI client cannot press keys or
+-- click from the MCP tools, so these call the mod's handlers with the event a real key press or
+-- click raises, for the connected player (its real selection, cursor, reach, controller and
+-- permission group):
+--   input(name, player_index)    name = "open" | "copy" | "paste": the linked custom inputs
+--   click(player_index, what)    what = "lanes" | "recirc" (toggles the checkbox, then raises
+--                                what the click raises) | "close" (the close button)
+--   setup_blueprint(player_index) on_player_setup_blueprint for the blueprint in the cursor, as
+--                                Ctrl+C / a blueprint selection raises it (mapping from
+--                                create_blueprint over `area`)
+--   info(x, y)                   the group of the block at (x, y): settings and network
+--   gui_info(player_index)       the frame, player.opened and storage.mb_gui for the player
+local function block_at(s, x, y)
+  return s.find_entities_filtered({ position = { x, y }, type = "simple-entity-with-owner", limit = 1 })[1]
+end
+
+local function input(name, player_index)
+  local ev = { player_index = player_index, input_name = "mb-" .. name, tick = game.tick } --[[@as any]]
+  if name == "open" then
+    gui.on_open_input(ev)
+  elseif name == "copy" then
+    gui.on_copy_input(ev)
+  elseif name == "paste" then
+    gui.on_paste_input(ev)
+  else
+    error("mb-test input: " .. tostring(name))
+  end
+  return true
+end
+
+local function click(player_index, what)
+  local player = assert(game.get_player(player_index))
+  local frame = player.gui.screen.mb_settings
+  if not frame then
+    return "no frame"
+  end
+  if what == "close" then
+    local ev = { player_index = player_index, element = frame.mb_titlebar.mb_close } --[[@as any]]
+    gui.on_click(ev)
+  else
+    local el = frame.mb_inner["mb_" .. what]
+    el.state = not el.state
+    local ev = { player_index = player_index, element = el } --[[@as any]]
+    gui.on_checked(ev)
+  end
+  return true
+end
+
+local function setup_blueprint(player_index, area)
+  local player = assert(game.get_player(player_index))
+  local st = player.cursor_stack
+  if not (st and st.valid_for_read and st.is_blueprint) then
+    return "no blueprint in the cursor"
+  end
+  local map = st.create_blueprint({ surface = player.surface, force = player.force, area = area })
+  lifecycle.on_player_setup_blueprint({ player_index = player_index, stack = st,
+    mapping = { valid = true, get = function() return map end } })
+  local names = {}
+  for _, be in ipairs(st.get_blueprint_entities() or {}) do
+    names[#names + 1] = be.name .. (be.tags and (" " .. serpent.line(be.tags)) or "")
+  end
+  return names
+end
+
+local function info(x, y)
+  local e = block_at(game.surfaces.nauvis, x, y)
+  local id = e and groups.of(e.unit_number)
+  if not id then
+    return { block = e ~= nil, group = false }
+  end
+  local s = groups.settings(id)
+  local rec = balancer.get(id)
+  local refused = {}
+  for _, r in ipairs(rec and rec.refused or {}) do
+    refused[#refused + 1] = r.reason
+  end
+  return { group = id, lanes = s.lanes, recirc = s.recirc, n = rec and rec.n, m = rec and rec.m,
+    placed = rec ~= nil and rec.placed ~= nil, net_lanes = rec and rec.lanes, net_recirc = rec and rec.recirc,
+    refused = refused }
+end
+
+local function gui_info(player_index)
+  local player = assert(game.get_player(player_index))
+  local frame = player.gui.screen.mb_settings --[[@as LuaGuiElement?]]
+  local st = storage.mb_gui or { open = {}, copy = {} }
+  local open, copy = st.open[player_index], st.copy[player_index]
+  local out = { frame = frame ~= nil, opened = player.opened and player.opened.object_name or "nil",
+    open = open and (open.valid and open.unit_number or "invalid") or "nil",
+    copy = copy and (copy.valid and copy.unit_number or "invalid") or "nil" }
+  if frame then
+    out.ratio = frame.mb_inner.mb_ratio.caption
+    out.lanes = frame.mb_inner.mb_lanes.state
+    out.recirc = frame.mb_inner.mb_recirc.state
+    out.opened_is_frame = player.opened == frame
+  end
+  return out
+end
+
 local functions = {
-  gui_open = gui_open,
+  gui_open = gui_open, input = input, click = click, setup_blueprint = setup_blueprint, info = info,
+  gui_info = gui_info,
   build = build, count = count, block = block, bench_hidden = bench_hidden, bench_vanilla = bench_vanilla,
   groups_build = groups_build, groups_summary = groups_summary, groups_bridge = groups_bridge,
   groups_destroy = groups_destroy,

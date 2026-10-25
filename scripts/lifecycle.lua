@@ -419,19 +419,25 @@ end
 
 -- The work of on_pre_build for `player` (a LuaPlayer, or in tests a table with the fields read
 -- here: valid, cursor_stack, surface, force, controller_type, character).
--- Only a build from an item in the cursor in normal mode by a player with a body (character,
--- god or editor controller) can fast-replace: a blueprint, a ghost cursor, a forced or
--- super-forced build and remote view place ghosts, and are left alone. Returns the number of
--- edges swapped back.
+-- Every build from an item in the cursor counts (F11, measured with a real player):
+--   normal       fast-replaces the edge (items lost without the swap-back);
+--   remote view  LuaPlayer::build_from_cursor built a real belt over an edge, even with the
+--                character 50 tiles away, and the edge lost its 2 plates;
+--   forced, super-forced (Shift / Ctrl+Shift): over an edge they place a belt ghost and mark the
+--                edge for deconstruction; over the swapped-back belt they do what vanilla does
+--                to a belt (another direction rotates it, another tier orders an upgrade).
+-- A blueprint or a ghost cursor is left alone. A needless swap-back is harmless: the next flush
+-- swaps the tile again. Returns the number of edges swapped back.
 ---@param player LuaPlayer
 ---@param event EventData.on_pre_build
 ---@return integer
 function lifecycle.pre_build(player, event)
-  if not (player and player.valid) or event.build_mode ~= defines.build_mode.normal then
+  if not (player and player.valid) then
     return 0
   end
   local ct = player.controller_type
-  if ct ~= defines.controllers.character and ct ~= defines.controllers.god and ct ~= defines.controllers.editor then
+  if ct ~= defines.controllers.character and ct ~= defines.controllers.god and ct ~= defines.controllers.editor
+    and ct ~= defines.controllers.remote then
     return 0
   end
   local st = player.cursor_stack

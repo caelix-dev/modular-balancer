@@ -6,7 +6,7 @@
 -- W=8 and corner bits NE=16 SE=32 SW=64 NW=128, a corner bit kept only when both of its sides are
 -- set (it only decides the inner corner of an L). That leaves 47 masks; the variation of a mask
 -- is its position in `look.masks()` (ascending), so a lone block is variation 1. The sprite sheets
--- (graphics/entity/balancer/, made by tools/gen_sprites.py) use the same order.
+-- (graphics/entity/balancer/, rendered by tools/render/) use the same order.
 local look = {}
 
 local N, E, S, W, NE, SE, SW, NW = 1, 2, 4, 8, 16, 32, 64, 128

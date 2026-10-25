@@ -41,26 +41,24 @@ local function raw(kind, name)
   return p
 end
 
--- Graphics: original sprites made by tools/gen_sprites.py (graphics/entity/balancer/), HR at
--- scale 0.5. One sheet per tier with 47 frames, one per connected neighbourhood (scripts/look.lua:
--- a group reads as one machine, its frame only around the outline), plus a shared shadow sheet.
--- The tile sits 16 px from the left and 4 px from the top of each 96 px frame; the front face and
--- the shadow hang below and to the right.
+-- Graphics: Blender renders (tools/render/), sprite set chosen in prototypes/gfx.lua. One sheet
+-- per tier with 47 frames, one per connected neighbourhood (scripts/look.lua: a group reads as one
+-- machine, its rounded frame only around the outline), plus a shared shadow sheet. The tile is
+-- centred in each frame; the housing shows above its footprint and the shadow falls to the right.
 local GFX = "__modular-balancer__/graphics/"
-local FRAME = 96
+local gfx = require("prototypes.gfx")
 local FRAMES = #look.masks()
 
 local function pictures(colour)
   local function layer(file, shadow)
     return {
-      filename = GFX .. "entity/balancer/" .. file,
+      filename = gfx.dir .. file,
       priority = "high",
-      width = FRAME,
-      height = FRAME,
+      width = gfx.frame,
+      height = gfx.frame,
       variation_count = FRAMES,
       line_length = 8,
-      scale = 0.5,
-      shift = { 0, 12 / 64 },
+      scale = gfx.scale,
       draw_as_shadow = shadow or nil,
     }
   end

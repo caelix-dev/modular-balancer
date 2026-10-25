@@ -785,8 +785,6 @@ local function refresh_group(st, gid, ctx, player_index)
     end
   end
   rec.units, rec.tiles = units, tiles
-  -- the connected look: each block's graphics variation from the group's own tiles
-  look.dress(g.blocks, groups.where)
   ctx.refreshed[#ctx.refreshed + 1] = gid
   if #fresh > 0 then
     balancer.notify(player_index, fresh, g.surface_index)
@@ -1142,6 +1140,16 @@ function balancer.flush(budget)
         break
       end
       work(st, { units = math.huge, refreshed = ctx.refreshed })
+    end
+  end
+  -- the connected look (scripts/look.lua): each refreshed block's graphics variation from its
+  -- group's tiles, next to the GUI hook so a staged rebuild that completes here is covered too
+  local dressed = {}
+  for _, gid in ipairs(ctx.refreshed) do
+    local g = groups.get(gid)
+    if g and not dressed[gid] then
+      dressed[gid] = true
+      look.dress(g.blocks, groups.where)
     end
   end
   -- scripts/gui.lua: settings of refused rebuilds, open GUIs; with the groups refreshed here and

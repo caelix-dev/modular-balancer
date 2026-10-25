@@ -1,3 +1,4 @@
 .superpowers/
 spikes/local-enable.lua
 __pycache__/
+tools/render/out/

@@ -1,5 +1,5 @@
 -- Connected look (scripts/look.lua): the neighbourhood masks and their graphics variations, in
--- the order the sprite sheets use (tools/gen_sprites.py).
+-- the order the sprite sheets use (tools/render/pack.py).
 local look = require("scripts.look")
 
 return {

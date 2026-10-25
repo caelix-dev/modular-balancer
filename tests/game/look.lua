@@ -13,7 +13,7 @@ local function expected(blocks, b)
       m = m + o[3]
     end
   end
-  return look.variation(m, (math.floor(b.position.x) + math.floor(b.position.y)) % 2)
+  return look.variation(m)
 end
 
 local function check(blocks, what)
@@ -61,8 +61,8 @@ describe("look", function()
       end
     end
     check(basic, "L-shape")
-    assert(corner.graphics_variation ~= expected({}, corner), "the corner block reads as joined")
-    assert(fast.graphics_variation == expected({}, fast), "a different tier must not join: " .. tostring(fast.graphics_variation))
+    assert(corner.graphics_variation ~= 1, "the corner block reads as joined")
+    assert(fast.graphics_variation == 1, "a different tier must not join: " .. tostring(fast.graphics_variation))
     -- removing the bent block turns the row's end back into an end
     bent.destroy({ raise_destroy = true })
     balancer.flush()

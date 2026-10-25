@@ -50,14 +50,11 @@ function look.masks()
   return list
 end
 
--- The graphics variation of a block whose neighbours are given by `mask` (any of 0..255) on a tile
--- of `parity` (x + y even: 0, odd: 1): 1..47 for even tiles, 48..94 for odd ones (the same
--- neighbourhood with the top detail turned around, so a row alternates).
+-- The graphics variation (1..47) of a block whose neighbours are given by `mask` (any of 0..255).
 ---@param mask integer
----@param parity integer?
 ---@return integer
-function look.variation(mask, parity)
-  return (index[canonical(mask)] or 1) + #list * ((parity or 0) % 2)
+function look.variation(mask)
+  return index[canonical(mask)] or 1
 end
 
 -- Neighbour offsets and their bits.
@@ -88,7 +85,7 @@ function look.dress(blocks, where)
           m = m + o[3]
         end
       end
-      local v = look.variation(m, (x + y) % 2)
+      local v = look.variation(m)
       if e.graphics_variation ~= v then
         e.graphics_variation = v
       end

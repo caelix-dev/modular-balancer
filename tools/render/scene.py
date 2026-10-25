@@ -55,6 +55,7 @@ FRAMES = 16
 
 with open(os.path.join(HERE, "tiers.json")) as f:
     TIERS = {k: tuple(v) for k, v in json.load(f).items()}  # linear base colours
+STEEL = TIERS.pop("steel", (0.10, 0.095, 0.088))  # the housing top and steel parts
 
 N, E, S, W, NE, SE, SW, NW = 1, 2, 4, 8, 16, 32, 64, 128
 CELL = {N: (0, 1), E: (1, 0), S: (0, -1), W: (-1, 0), NE: (1, 1), SE: (1, -1), SW: (-1, -1), NW: (-1, 1)}
@@ -220,7 +221,7 @@ def mul(nt, a, b):
     return m.outputs[0]
 
 
-BARE = (0.03, 0.022, 0.016)  # chipped paint: dark, slightly rusty bare metal (vanilla keeps chips dark)
+BARE = (0.022, 0.016, 0.011)  # chipped paint: dark, slightly rusty bare metal (vanilla keeps chips dark)
 GRIME = (0.035, 0.028, 0.02)
 DUST = (0.30, 0.27, 0.22)
 OIL = (0.012, 0.010, 0.008)
@@ -241,14 +242,14 @@ def material(name, base, metallic=0.1, roughness=0.6, chips=0.0, grime=0.8, dust
     big, sep = periodic_noise(nt, 3.0)
     fine, _ = periodic_noise(nt, 11.0, detail=3.0, w_offset=5.0)
     blot = ramp(nt, big, 0.4, 0.7)
-    col = mix(nt, mul(nt, blot, 0.35), base, tuple(v * 0.55 for v in base))
+    col = mix(nt, mul(nt, blot, 0.5), base, tuple(v * 0.5 for v in base))
     col = mix(nt, mul(nt, ramp(nt, fine, 0.5, 0.75), 0.25), col, tuple(v * 0.7 for v in base))
     geo = nt.nodes.new("ShaderNodeNewGeometry")
     if top is not None:
         sepn = nt.nodes.new("ShaderNodeSeparateXYZ")
         nt.links.new(geo.outputs["Normal"], sepn.inputs[0])
         up = ramp(nt, sepn.outputs["Z"], 0.55, 0.8)
-        tcol = mix(nt, mul(nt, blot, 0.35), top, tuple(v * 0.6 for v in top))
+        tcol = mix(nt, mul(nt, blot, 0.85), top, tuple(v * 0.45 for v in top))
         col = mix(nt, up, col, tcol)
     if chips:
         # convex edges: where a bevel-rounded normal leaves the true normal (pointiness is per
@@ -260,22 +261,23 @@ def material(name, base, metallic=0.1, roughness=0.6, chips=0.0, grime=0.8, dust
         dot.operation = "DOT_PRODUCT"
         nt.links.new(bev.outputs["Normal"], dot.inputs[0])
         nt.links.new(geo.outputs["Normal"], dot.inputs[1])
-        edge = ramp(nt, {o.identifier: o for o in dot.outputs}["Value"], 0.985, 0.9)
-        chipmask = ramp(nt, fine, 0.3, 0.5)
+        edge = ramp(nt, {o.identifier: o for o in dot.outputs}["Value"], 0.995, 0.95)
+        chipmask = ramp(nt, fine, 0.2, 0.36)
         # more wear on the walls than on the top
         sepc = nt.nodes.new("ShaderNodeSeparateXYZ")
         nt.links.new(geo.outputs["Normal"], sepc.inputs[0])
         upc = ramp(nt, sepc.outputs["Z"], 0.5, 0.9)
         wallw = nt.nodes.new("ShaderNodeMath")
         wallw.operation = "MULTIPLY_ADD"
-        wallw.inputs[1].default_value = -0.65
+        wallw.inputs[1].default_value = -0.3
         wallw.inputs[2].default_value = 1.0
         nt.links.new(upc, wallw.inputs[0])
         chip = mul(nt, mul(nt, mul(nt, edge, chipmask), wallw.outputs[0]), chips)
         col = mix(nt, chip, col, BARE)
         # patches of chipped paint low on the walls and around the corners
-        low = ramp(nt, sep.outputs["Z"], 0.22, 0.05)
-        patch = mul(nt, mul(nt, ramp(nt, fine, 0.62, 0.7), low), mul(nt, ramp(nt, sepc.outputs["Z"], 0.4, 0.1), chips))
+        low = ramp(nt, sep.outputs["Z"], 0.5, 0.2)
+        coarse, _ = periodic_noise(nt, 6.0, detail=3.0, roughness=0.7, w_offset=17.0)
+        patch = mul(nt, mul(nt, ramp(nt, coarse, 0.5, 0.54), low), mul(nt, ramp(nt, sepc.outputs["Z"], 0.4, 0.1), chips))
         col = mix(nt, patch, col, BARE)
         # bare metal is glossier than paint
         rough = nt.nodes.new("ShaderNodeMapRange")
@@ -372,16 +374,16 @@ def tread_material(name, accent):
 
 def materials(tier):
     c = TIERS[tier]
-    steel = (0.10, 0.095, 0.088)
+    steel = STEEL
     return {
-        "body": material("body-" + tier, c, 0.0, 0.42, chips=0.9, oil=0.5, top=steel, dust=0.1, specular=0.35,
-                         streaks=0.9),
-        "paint": material("paint-" + tier, c, 0.0, 0.42, chips=0.9, oil=0.3, specular=0.35, streaks=0.8),
-        "steel": material("steel-" + tier, steel, 0.6, 0.38, chips=0.0, oil=0.5),
-        "light": material("light-" + tier, (0.26, 0.25, 0.235), 0.5, 0.55, dust=0.1),
+        "body": material("body-" + tier, c, 0.0, 0.32, chips=1.0, oil=0.8, top=steel, dust=0.05, specular=0.5,
+                         streaks=0.7),
+        "paint": material("paint-" + tier, c, 0.0, 0.32, chips=1.0, oil=0.3, specular=0.5, streaks=0.6),
+        "steel": material("steel-" + tier, steel, 0.7, 0.3, chips=0.0, oil=0.4),
+        "light": material("light-" + tier, tuple(v * 2.6 for v in steel), 0.7, 0.3, dust=0.1),
         "dark": material("dark-" + tier, (0.02, 0.018, 0.016), 0.2, 0.7, dust=0.0, grime=0.0),
         "tread": tread_material("tread-" + tier, c),
-        "accent": material("accent-" + tier, c, 0.0, 0.45, dust=0.1, specular=0.3),
+        "accent": material("accent-" + tier, c, 0.0, 0.32, dust=0.1, specular=0.5),
     }
 
 
@@ -463,8 +465,8 @@ def gear(parent, mat, x, y, z, r, teeth, thick, angle, name="gear"):
 
 def housing(parent, mat, cells, height, opening=None):
     """One connected housing over `cells`: top faces and outline walls with shared vertices (the
-    bevel rounds the outline only, inner corners too). `opening` = (x0, y0, x1, y1), a rectangular
-    opening in cell (0, 0) with walls down to height - PIT and a floor."""
+    bevel rounds the outline only, inner corners too). `opening` = half size of a square opening
+    in cell (0, 0), with walls down to height - PIT and a floor."""
     bm = bmesh.new()
     vs = {}
 
@@ -481,9 +483,9 @@ def housing(parent, mat, cells, height, opening=None):
         x0, x1, y0, y1 = cx - 0.5, cx + 0.5, cy - 0.5, cy + 0.5
         h = height
         if opening and (cx, cy) == (0, 0):
-            ox0, oy0, ox1, oy1 = opening
+            o = opening
             outer = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
-            inner = [(ox0, oy0), (ox1, oy0), (ox1, oy1), (ox0, oy1)]
+            inner = [(-o, -o), (o, -o), (o, o), (-o, o)]
             for i in range(4):
                 a, b = outer[i], outer[(i + 1) % 4]
                 c, d = inner[(i + 1) % 4], inner[i]
@@ -491,7 +493,7 @@ def housing(parent, mat, cells, height, opening=None):
             for i in range(4):
                 a, b = inner[i], inner[(i + 1) % 4]
                 quad((a[0], a[1], h), (b[0], b[1], h), (b[0], b[1], h - PIT), (a[0], a[1], h - PIT))
-            quad((ox0, oy0, h - PIT), (ox0, oy1, h - PIT), (ox1, oy1, h - PIT), (ox1, oy0, h - PIT))
+            quad((-o, -o, h - PIT), (-o, o, h - PIT), (o, o, h - PIT), (o, -o, h - PIT))
         else:
             quad((x0, y0, h), (x1, y0, h), (x1, y1, h), (x0, y1, h))
         for (dx, dy), (a, b) in (((0, -1), ((x0, y0), (x1, y0))), ((1, 0), ((x1, y0), (x1, y1))),
@@ -530,9 +532,60 @@ def rim_bands(parent, mat, cells, height, width=0.09, raise_=0.035):
                 put(qx, qy, qx + width, qy + width)
 
 
-# The opening per parity (x + y of the tile, even or odd): off centre, mirrored for odd tiles, so a
-# row of blocks alternates instead of repeating one framed square.
-OPENINGS = {0: (-0.36, -0.30, 0.28, 0.20), 1: (-0.28, -0.20, 0.36, 0.30)}
+def block(root, m, mask):
+    """The static block: housing with the opening, rim bands, opening frame, bolts, and on an open
+    south side the front: a louvred vent with a roller behind it and a dark kick plate."""
+    cells = {(0, 0)}
+    for bit, cell in CELL.items():
+        if mask & bit:
+            cells.add(cell)
+    housing(root, m["body"], cells, H, opening=WIN)
+    rim_bands(root, m["paint"], cells, H)
+    o = WIN
+    fw = 0.035
+    for (x0, y0, x1, y1) in ((-o - fw, -o - fw, o + fw, -o), (-o - fw, o, o + fw, o + fw),
+                             (-o - fw, -o, -o, o), (o, -o, o + fw, o)):
+        box(root, m["light"], x0, y0, H - 0.005, x1, y1, H + 0.02, bev=0.008, name="frame")
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            b = cyl(root, m["light"], 0.025, 0.03, segs=10, name="bolt")
+            b.location = (sx * (o + 0.065), sy * (o + 0.065), H + 0.01)
+    if not mask & S:
+        # front vent: a dark recess with louvres and a roller seen through them
+        y = -0.5
+        box(root, m["dark"], -0.3, y - 0.004, 0.12, 0.3, y + 0.03, 0.4, name="vent")
+        for i in range(4):
+            z = 0.16 + i * 0.065
+            lv = box(root, m["steel"], -0.29, y - 0.02, z, 0.29, y + 0.01, z + 0.022, bev=0.006, name="louvre")
+        box(root, m["steel"], -0.47, y - 0.012, 0.0, 0.47, y + 0.02, 0.07, bev=0.01, name="kick")
+        for x in (-0.38, 0.38):
+            b = cyl(root, m["light"], 0.022, 0.03, segs=10, name="fbolt")
+            b.location = (x, y - 0.012, 0.27)
+            b.rotation_euler = (math.radians(90), 0, 0)
+
+
+def machinery(root, m, frame):
+    """The working parts in the opening at animation frame `frame` of FRAMES: two belt lanes
+    crossing (treads moving outward from the centre, toward the four corners), a diverter gear in
+    the middle and four corner rollers, all looping."""
+    t = frame / FRAMES
+    z0 = H - PIT
+    box(root, m["dark"], -WIN + 0.005, -WIN + 0.005, z0 - 0.01, WIN - 0.005, WIN - 0.005, z0 + 0.003, name="floor")
+    lane_w = 0.17
+    for ang in (45, 135):
+        # long enough that the ends are hidden under the housing top past the opening's frame,
+        # short enough to stay inside the block: no cut ends, nothing poking out
+        ln = box(root, m["tread"], -0.5, -lane_w / 2, z0, 0.5, lane_w / 2, z0 + 0.035, bev=0.008, name="lane")
+        ln.rotation_euler = (0, 0, math.radians(ang))
+    m["tread"].node_tree.nodes["offset"].outputs[0].default_value = 0.2 * t
+    teeth = 10
+    gear(root, m["light"], 0, 0, z0 + 0.075, 0.11, teeth, 0.035, 2 * math.pi * t / teeth, name="diverter")
+    cap = cyl(root, m["accent"], 0.04, 0.02, segs=12, name="cap")
+    cap.location = (0, 0, z0 + 0.11)
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            g = gear(root, m["light"], sx * 0.24, sy * 0.24, z0 + 0.04, 0.06, 8,
+                     0.025, -2 * math.pi * t / 8 * (1 if sx * sy > 0 else -1), name="small")
 
 
 def group(parent, name, rot=0.0):
@@ -541,134 +594,6 @@ def group(parent, name, rot=0.0):
     g.parent = parent
     g.rotation_euler = (0, 0, rot)
     return g
-
-
-def cyl_between(parent, mat, a, b, r, segs=12, name="pipe"):
-    """A cylinder from point a to point b."""
-    a, b = Vector(a), Vector(b)
-    d = b - a
-    ob = cyl(parent, mat, r, d.length, segs=segs, name=name)
-    ob.location = (a + b) / 2
-    ob.rotation_mode = "QUATERNION"
-    ob.rotation_quaternion = d.to_track_quat("Z", "Y")
-    return ob
-
-
-def greebles(root, m, parity):
-    """Layered, asymmetric detail on the top of tile (0, 0), built for the even layout and turned
-    180 degrees for odd tiles: a lying drive motor with cooling fins on a base (it sticks up and
-    casts a shadow), a cable into the opening, a pipe with brackets, an elbow and a flange, a hinged
-    inspection hatch propped open over one corner of the opening, a junction box with a conduit,
-    and a lip on two sides of the opening only."""
-    g = group(root, "greebles", math.pi if parity else 0.0)
-    ox0, oy0, ox1, oy1 = OPENINGS[0]
-    top = H
-    mx = 0.37
-    box(g, m["steel"], mx - 0.075, -0.27, top - 0.01, mx + 0.075, 0.13, top + 0.035, bev=0.012, name="motor-base")
-    motor = cyl(g, m["paint"], 0.068, 0.34, segs=20, name="motor")
-    motor.location = (mx, -0.08, top + 0.1)
-    motor.rotation_euler = (math.radians(90), 0, 0)
-    for k in range(6):
-        fin = cyl(g, m["steel"], 0.078, 0.014, segs=20, name="fin")
-        fin.location = (mx, -0.2 + k * 0.045, top + 0.1)
-        fin.rotation_euler = (math.radians(90), 0, 0)
-    cap = cyl(g, m["light"], 0.05, 0.05, segs=16, name="motor-cap")
-    cap.location = (mx, 0.11, top + 0.1)
-    cap.rotation_euler = (math.radians(90), 0, 0)
-    cyl_between(g, m["dark"], (mx - 0.05, -0.24, top + 0.06), (ox1 - 0.01, -0.24, top - 0.02), 0.014, name="cable")
-    py = 0.3
-    cyl_between(g, m["light"], (-0.38, py, top + 0.045), (0.24, py, top + 0.045), 0.028, name="pipe")
-    cyl_between(g, m["light"], (-0.38, py, top - 0.02), (-0.38, py, top + 0.045), 0.03, name="elbow")
-    for bx in (-0.2, 0.1):
-        box(g, m["steel"], bx - 0.02, py - 0.045, top - 0.005, bx + 0.02, py + 0.045, top + 0.08, bev=0.006,
-            name="bracket")
-    flange = cyl(g, m["steel"], 0.042, 0.02, segs=16, name="flange")
-    flange.location = (0.25, py, top + 0.045)
-    flange.rotation_euler = (0, math.radians(90), 0)
-    hatch = group(g, "hatch")
-    hatch.location = (ox0 + 0.01, oy0 + 0.17, top + 0.01)
-    hatch.rotation_euler = (math.radians(-12), 0, 0)
-    box(hatch, m["body"], 0.0, -0.17, 0.0, 0.17, 0.0, 0.025, bev=0.008, name="hatch-plate")
-    box(hatch, m["paint"], 0.02, -0.15, 0.024, 0.15, -0.13, 0.032, name="hatch-stripe")
-    hinge = cyl(g, m["steel"], 0.016, 0.17, segs=10, name="hinge")
-    hinge.location = (ox0 + 0.095, oy0 + 0.17, top + 0.015)
-    hinge.rotation_euler = (0, math.radians(90), 0)
-    box(g, m["steel"], -0.1, -0.41, top - 0.005, 0.07, -0.32, top + 0.07, bev=0.01, name="jbox")
-    box(g, m["dark"], -0.085, -0.415, top + 0.02, 0.055, -0.405, top + 0.05, name="jbox-label")
-    cyl_between(g, m["dark"], (0.07, -0.36, top + 0.03), (0.2, -0.36, top + 0.03), 0.012, name="conduit")
-    box(g, m["light"], ox0 - 0.03, oy1, top - 0.005, ox1, oy1 + 0.03, top + 0.02, bev=0.008, name="lip")
-    box(g, m["light"], ox0 - 0.03, oy0 + 0.17, top - 0.005, ox0, oy1, top + 0.02, bev=0.008, name="lip")
-    for (bx, by) in ((ox1 + 0.04, oy1 + 0.04), (ox0 - 0.05, oy1 + 0.04), (ox1 + 0.04, oy0 - 0.04)):
-        b = cyl(g, m["light"], 0.022, 0.03, segs=10, name="bolt")
-        b.location = (bx, by, top + 0.01)
-
-
-def block(root, m, mask, parity=0):
-    """The static block: housing with the opening, rim bands, the top detail, and on an open south
-    side the front: a louvred vent, an access panel, bolts and a dark kick plate."""
-    cells = {(0, 0)}
-    for bit, cell in CELL.items():
-        if mask & bit:
-            cells.add(cell)
-    housing(root, m["body"], cells, H, opening=OPENINGS[parity])
-    rim_bands(root, m["paint"], cells, H)
-    greebles(root, m, parity)
-    if not mask & S:
-        y = -0.5
-        vx = (-0.34, 0.14) if parity == 0 else (-0.14, 0.34)
-        box(root, m["dark"], vx[0], y - 0.004, 0.12, vx[1], y + 0.03, 0.4, name="vent")
-        for i in range(4):
-            z = 0.16 + i * 0.065
-            box(root, m["steel"], vx[0] + 0.01, y - 0.02, z, vx[1] - 0.01, y + 0.01, z + 0.022, bev=0.006,
-                name="louvre")
-        box(root, m["steel"], -0.47, y - 0.012, 0.0, 0.47, y + 0.02, 0.07, bev=0.01, name="kick")
-        # steel stiffeners and a rail break up the painted front
-        for x in (-0.47, 0.44) if parity == 0 else (-0.44, 0.47):
-            box(root, m["steel"], x, y - 0.025, 0.0, x + 0.03, y + 0.02, H - 0.02, bev=0.008, name="stiffener")
-        box(root, m["steel"], -0.47, y - 0.02, 0.42, 0.47, y + 0.02, 0.46, bev=0.008, name="rail")
-        px = 0.3 if parity == 0 else -0.3
-        box(root, m["steel"], px - 0.09, y - 0.03, 0.14, px + 0.09, y + 0.01, 0.36, bev=0.012, name="access-panel")
-        for x in (px - 0.06, px + 0.06):
-            b = cyl(root, m["light"], 0.018, 0.03, segs=10, name="fbolt")
-            b.location = (x, y - 0.035, 0.33)
-            b.rotation_euler = (math.radians(90), 0, 0)
-
-
-def machinery(root, m, frame, parity=0):
-    """The working parts in the opening at animation frame `frame` of FRAMES. Even tiles: two belt
-    lanes crossing around a diverter gear, with three small gears. Odd tiles: two lanes side by side
-    running opposite ways, a large transfer gear between them, end rollers. All loop."""
-    t = frame / FRAMES
-    z0 = H - PIT
-    ox0, oy0, ox1, oy1 = OPENINGS[parity]
-    cx, cy = (ox0 + ox1) / 2, (oy0 + oy1) / 2
-    box(root, m["dark"], ox0 + 0.005, oy0 + 0.005, z0 - 0.01, ox1 - 0.005, oy1 - 0.005, z0 + 0.003, name="floor")
-    m["tread"].node_tree.nodes["offset"].outputs[0].default_value = 0.2 * t
-    lane_w = 0.16
-    if parity == 0:
-        for ang in (40, 140):
-            # the lanes run on under the housing top (no cut ends in the opening) but stay
-            # inside the outer walls
-            ln = box(root, m["tread"], -0.55, -lane_w / 2, z0, 0.55, lane_w / 2, z0 + 0.035, bev=0.008, name="lane")
-            ln.location = (cx, cy, 0)
-            ln.rotation_euler = (0, 0, math.radians(ang))
-        gear(root, m["light"], cx, cy, z0 + 0.075, 0.1, 10, 0.035, 2 * math.pi * t / 10, name="diverter")
-        c = cyl(root, m["accent"], 0.035, 0.02, segs=12, name="cap")
-        c.location = (cx, cy, z0 + 0.11)
-        for sx, sy in ((-1, -1), (1, 1), (1, -1)):
-            gear(root, m["light"], cx + sx * 0.2, cy + sy * 0.16, z0 + 0.04, 0.055, 8, 0.025,
-                 -2 * math.pi * t / 8 * sx * sy, name="small")
-    else:
-        for k, ang in ((-1, 0), (1, 180)):
-            ln = box(root, m["tread"], -0.43, -lane_w / 2, z0, 0.43, lane_w / 2, z0 + 0.035, bev=0.008, name="lane")
-            ln.location = (cx, cy + k * 0.11, 0)
-            ln.rotation_euler = (0, 0, math.radians(ang))
-            roller(root, m["light"], cx + 0.24, cy + k * 0.11, z0 + 0.045, lane_w + 0.02, 0.03, axis="Y",
-                   spin=2 * math.pi * t * k, name="end")
-        gear(root, m["light"], cx - 0.06, cy, z0 + 0.08, 0.12, 12, 0.035, 2 * math.pi * t / 12, name="transfer")
-        c = cyl(root, m["accent"], 0.04, 0.02, segs=12, name="cap")
-        c.location = (cx - 0.06, cy, z0 + 0.115)
-        gear(root, m["light"], cx + 0.13, cy, z0 + 0.05, 0.05, 8, 0.025, -2 * math.pi * t / 8 * 1.5, name="small")
 
 
 def gloom_material(alpha=0.3):
@@ -691,7 +616,7 @@ def hood(root, m, side):
     in. Modelled with the block to the south ("s") and rotated."""
     g = group(root, "hood", math.radians({"s": 0, "n": 180, "e": 90, "w": -90}[side]))
     hw = 0.47
-    y0, y1 = -0.5, -0.27  # the roof: a short lip next to the block, the belt shows beyond it
+    y0, y1 = -0.5, -0.04  # the roof reaches to the middle of the tile: items come out from under it
     hh = HOOD_H
     box(g, m["body"], -hw, y0, hh - 0.06, hw, y1, hh, bev=0.02, name="roof")
     box(g, m["paint"], -hw + 0.04, y1 - 0.05, hh - 0.005, hw - 0.04, y1 - 0.015, hh + 0.012, name="stripe")
@@ -709,12 +634,10 @@ def hood(root, m, side):
         for by in (y1 + 0.1, y1 + 0.22):
             b = cyl(g, m["light"], 0.014, 0.02, segs=8, name="bolt")
             b.location = (rx, by, 0.055)
-    gloom = gloom_material(0.22)
-    gloom2 = gloom_material(0.35)
+    gloom = gloom_material(0.3)
     # the belt darkens as it runs in under the lip, out to the middle of the tile where the items
     # pass into the link
-    box(g, gloom, -0.4, y0, 0.004, 0.4, -0.02, 0.008, name="gloom")
-    box(g, gloom2, -0.4, y0, 0.009, 0.4, y1 + 0.06, 0.012, name="gloom2")
+    box(g, gloom, -0.4, y0, 0.004, 0.4, y1, 0.008, name="gloom")
     return g
 
 
@@ -747,10 +670,7 @@ def main():
     if CALIB:
         for t in tiers:
             clear(keep)
-            mt = mats[t]["paint"]
-            if os.environ.get("MB_CALIB_PLAIN"):
-                mt = material("plain-" + t, TIERS[t], 0.0, 1.0, chips=0, grime=0, dust=0, specular=0.0)
-            box(root, mt, -0.45, -0.5, 0.0, 0.45, 0.3, H, bev=0.03, name="wall")
+            block(root, mats[t], 0)
             render(os.path.join(OUT, "calib-%s.png" % t), ground, world)
         print("RENDER DONE")
         return
@@ -758,25 +678,22 @@ def main():
     only = os.environ.get("MB_RENDER_ONLY")
     if only:
         ms = [ms[int(i)] for i in only.split(",")]
-    for p in (0, 1):
-        clear(keep)
-        block(root, mats["basic"], 0, p)
-        render(os.path.join(OUT, "block-shadow-%d.png" % p), ground, world, shadow=True)
+    clear(keep)
+    housing(root, mats["basic"]["body"], {(0, 0)}, H)
+    render(os.path.join(OUT, "block-shadow.png"), ground, world, shadow=True)
     for m in ms:
-        for p in (0, 1):
-            for t in tiers:
-                clear(keep)
-                block(root, mats[t], m, p)
-                render(os.path.join(OUT, "block-%s-%03d-%d.png" % (t, m, p)), ground, world)
-    nframes = 2 if only else FRAMES
+        for t in tiers:
+            clear(keep)
+            block(root, mats[t], m)
+            render(os.path.join(OUT, "block-%s-%03d.png" % (t, m)), ground, world)
+    nframes = 2 if os.environ.get("MB_RENDER_ONLY") else FRAMES
     for t in tiers:
-        for p in (0, 1):
-            for f in range(nframes):
-                clear(keep)
-                block(root, mats[t], 0, p)
-                static = [o for o in bpy.context.scene.objects if o.type == "MESH" and o is not ground]
-                machinery(root, mats[t], f, p)
-                render(os.path.join(OUT, "anim-%s-%d-%02d.png" % (t, p, f)), ground, world, holdout=static)
+        for f in range(nframes):
+            clear(keep)
+            block(root, mats[t], 0)
+            static = [o for o in bpy.context.scene.objects if o.type == "MESH" and o is not ground]
+            machinery(root, mats[t], f)
+            render(os.path.join(OUT, "anim-%s-%02d.png" % (t, f)), ground, world, holdout=static)
     for side in "nesw":
         clear(keep)
         hood(root, mats["basic"], side)

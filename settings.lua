@@ -18,6 +18,19 @@ local dev_tests = has_test_mod and marker_ok and marker == true
 local ok, enabled = pcall(require, "spikes.local-enable")
 local dev = dev_tests and ok and enabled ~= nil and enabled ~= false
 local variant = dev and type(enabled) == "table" and enabled.variant or "none"
+
+-- `mb-look` picks one of the block graphics candidates of Plan 3 Task 4 (prototypes/blocks.lua),
+-- for the user to choose from screenshots. Hidden and forced: "bank" unless the git-ignored file
+-- prototypes/look-local.lua returns another candidate's name (fdev cannot set startup settings).
+-- Removed once the user has picked a look.
+local LOOKS = { "bank", "solid", "hood" }
+local look_ok, look_local = pcall(require, "prototypes.look-local")
+local look = "bank"
+for _, name in ipairs(LOOKS) do
+  if look_ok and look_local == name then
+    look = name
+  end
+end
 data:extend({
   {
     type = "bool-setting",
@@ -43,5 +56,14 @@ data:extend({
     allowed_values = { variant },
     hidden = true,
     forced_value = variant,
+  },
+  {
+    type = "string-setting",
+    name = "mb-look",
+    setting_type = "startup",
+    default_value = look,
+    allowed_values = LOOKS,
+    hidden = true,
+    forced_value = look,
   },
 })

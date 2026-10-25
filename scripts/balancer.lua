@@ -762,6 +762,9 @@ end
 ---@param player_index integer?
 function balancer.add_loose(e, player_index)
   state().loose[e.unit_number] = e
+  if belt_io.edge_belt(e.name) then
+    belt_io.dress(e) -- the game built it without the drawn half; it goes with the edge if unclaimed
+  end
   balancer.mark_near(e, player_index)
   arm()
 end

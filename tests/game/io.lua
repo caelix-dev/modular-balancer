@@ -4,6 +4,7 @@
 local H = require("tests.game.harness")
 local balancer = require("scripts.balancer")
 local groups = require("scripts.groups")
+local belt_io = require("scripts.io")
 
 local D = defines.direction
 
@@ -49,6 +50,62 @@ describe("io", function()
       end
     end
     assert(n >= 6, "only " .. n .. " edges")
+  end)
+
+  -- Plan 3 Task 2 (spec Update 2026-10-25, edge look): an edge looks and behaves like its belt.
+  -- Every edge has no hatch structure, the belt's fast-replace group and next upgrade, and is
+  -- hidden from Factoriopedia only (an upgrade source must not be hidden). A swapped edge carries
+  -- one drawing of the belt's straight animation for its direction (the half tile a linked belt
+  -- leaves blank), which goes with the edge.
+  test("edges_look_like_belts", function()
+    for name, belt in pairs(prototypes.get_entity_filtered({ { filter = "type", type = "transport-belt" } })) do
+      for _, role in ipairs({ "in", "out" }) do
+        local e = prototypes.entity["mb-edge-" .. role .. "-" .. name]
+        assert(e and e.type == "linked-belt", "no " .. role .. " edge for " .. name)
+        assert(e.fast_replaceable_group == belt.fast_replaceable_group, name .. " " .. role .. " edge replace group " .. tostring(e.fast_replaceable_group))
+        local want, got = belt.next_upgrade, e.next_upgrade
+        assert((want and want.name) == (got and got.name), name .. " " .. role .. " edge next upgrade " .. tostring(got and got.name))
+        assert(not e.hidden and e.hidden_in_factoriopedia, name .. " " .. role .. " edge hidden flags")
+      end
+      for _, dir in ipairs({ "north", "east", "south", "west" }) do
+        assert(helpers.is_valid_animation_path("mb-edge-belt-" .. name .. "-" .. dir), "no " .. dir .. " animation for " .. name)
+      end
+    end
+    local o = area(8, 8)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.north, 2, { stock = 0 })
+    H.sink(o, 4, 4, D.west, 2)
+    balancer.flush()
+    -- the mod's drawings on entity `e`
+    ---@param e LuaEntity
+    ---@return LuaRenderObject[]
+    local function drawings(e)
+      local list = {}
+      for _, obj in ipairs(rendering.get_all_objects(script.mod_name)) do
+        local t = obj.target
+        if t and t.entity == e then
+          list[#list + 1] = obj
+        end
+      end
+      return list
+    end
+    local ein, eout = H.at(o, 4, 3, "linked-belt"), H.at(o, 3, 4, "linked-belt")
+    assert(ein and eout, "edges not swapped")
+    local li, lout = drawings(ein), drawings(eout)
+    assert(#li == 1 and #lout == 1, "drawings per edge: " .. #li .. ", " .. #lout)
+    local di, dout = li[1], lout[1]
+    assert(di.animation == "mb-edge-belt-" .. H.BELT .. "-south", "input edge drawing: " .. di.animation)
+    assert(dout.animation == "mb-edge-belt-" .. H.BELT .. "-west", "output edge drawing: " .. dout.animation)
+    assert(di.render_layer == "floor", "drawn on layer " .. tostring(di.render_layer))
+    -- a configuration change draws what is missing (an old save), once
+    di.destroy()
+    assert(belt_io.dress_all() == 1, "dress_all did not draw exactly the missing edge")
+    li = drawings(ein)
+    assert(#li == 1 and #drawings(eout) == 1, "drawings after dress_all: " .. #li .. ", " .. #drawings(eout))
+    di = li[1]
+    b.destroy({ raise_destroy = true })
+    balancer.flush()
+    assert(not di.valid and not dout.valid, "the drawings outlived their edges")
   end)
 
   -- A full belt tile swapped for an edge and back keeps every item: the input and output tiles

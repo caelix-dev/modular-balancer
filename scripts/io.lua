@@ -404,6 +404,83 @@ function belt_io.put_back(e, inv, items)
   inv.destroy()
 end
 
+-- Animation prototype name -> it exists (the same on every peer: prototypes are identical).
+---@type table<string, boolean>
+local has_animation = {}
+---@param name string
+local function has(name)
+  local ok = has_animation[name]
+  if ok == nil then
+    ok = helpers.is_valid_animation_path(name)
+    has_animation[name] = ok
+  end
+  return ok
+end
+local DIR_NAME = { [D.north] = "north", [D.east] = "east", [D.south] = "south", [D.west] = "west" }
+
+-- Draws the half of edge `edge`'s tile that the linked belt leaves blank (prototypes/hidden.lua):
+-- the straight belt animation of its belt and direction, under the edge's own half belt and its
+-- items, running at the belt's animation speed. The render object belongs to the edge (it goes
+-- when the edge goes or leaves the surface), so nothing is stored and nothing runs per tick.
+-- Does nothing for a belt without such animations. Returns the render object or nil.
+---@param edge LuaEntity
+---@return LuaRenderObject?
+function belt_io.dress(edge)
+  local belt = belt_io.edge_belt(edge.name)
+  local dir = DIR_NAME[edge.direction]
+  if not (belt and dir) then
+    return nil
+  end
+  local name = "mb-edge-belt-" .. belt .. "-" .. dir
+  local x, y = floor_pos(edge.position)
+  if (x + y) % 2 == 1 and has(name .. "-odd") then
+    name = name .. "-odd" -- an alternate belt's odd tile (prototypes/hidden.lua)
+  elseif not has(name) then
+    return nil
+  end
+  local p = prototypes.entity[belt]
+  return rendering.draw_animation({
+    animation = name,
+    target = edge,
+    surface = edge.surface,
+    render_layer = "floor",
+    animation_speed = (p.belt_speed or 0) * (p.animation_speed_coefficient or 0),
+  })
+end
+
+-- Draws the missing half (belt_io.dress) under every edge on every surface that has none: edges
+-- of a save made before the drawing existed, or whose drawing went with a changed animation
+-- prototype. Only on a configuration change. Returns the number of edges dressed.
+---@return integer
+function belt_io.dress_all()
+  local dressed = {}
+  for _, o in ipairs(rendering.get_all_objects(script.mod_name)) do
+    local t = o.target
+    local e = t and t.entity
+    if e and e.valid and e.unit_number then
+      dressed[e.unit_number] = true
+    end
+  end
+  local names = {}
+  for name in pairs(prototypes.get_entity_filtered({ { filter = "type", type = "linked-belt" } })) do
+    if belt_io.edge_belt(name) then
+      names[#names + 1] = name
+    end
+  end
+  if #names == 0 then
+    return 0
+  end
+  local n = 0
+  for _, s in pairs(game.surfaces) do
+    for _, e in ipairs(s.find_entities_filtered({ type = "linked-belt", name = names })) do
+      if not dressed[e.unit_number] and belt_io.dress(e) then
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+
 -- Swaps a plain belt for the edge of its belt and `role`, keeping its direction, force,
 -- quality, health, items and deconstruction mark. Returns the edge, or nil (the belt is left as it was) if the edge cannot
 -- be created.
@@ -435,6 +512,7 @@ function belt_io.swap(belt, role)
     return nil
   end
   edge.health = health
+  belt_io.dress(edge)
   belt_io.put_back(edge, inv, items)
   if decon then
     edge.order_deconstruction(force) -- a deconstruction planner's mark stays on the tile

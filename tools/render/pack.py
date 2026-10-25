@@ -53,6 +53,8 @@ def load(name):
 
 
 def clip(img, mask):
+    """Nothing to cut: the block is modelled without its neighbours (round 8)."""
+    return img
     a = np.array(img)
     if mask & W:
         a[:, :TILE0] = 0
@@ -109,7 +111,8 @@ def main():
     hood_shadow = {s: shadow(load("hood-shadow-%s.png" % s)) for s in "nesw"}
     raw_blocks = {(t, m): clip(load("block-%s-%03d.png" % (t, m)), m) for t in TIERS for m in ms}
     raw_hoods = {(t, s): load("hood-%s-%s.png" % (t, s)) for t in TIERS for s in "nesw"}
-    raw_anim = {(t, f): load("anim-%s-%02d.png" % (t, f)) for t in TIERS for f in range(FRAMES)}
+    raw_anim = {(t, x, f): load("anim-%s%s-%02d.png" % (t, x, f)) for t in TIERS for x in ("", "-s")
+                for f in range(FRAMES)}
     for key, (size, blur) in SETS.items():
         d = os.path.join(OUT, key)
         os.makedirs(d, exist_ok=True)
@@ -120,8 +123,9 @@ def main():
         for t in TIERS:
             sheet([outline(shrink(raw_blocks[(t, m)], size, blur)) for m in ms], 8, size).save(
                 os.path.join(d, "balancer-%s.png" % t), optimize=True)
-            sheet([shrink(raw_anim[(t, f)], size, blur) for f in range(FRAMES)], 8, size).save(
-                os.path.join(d, "machinery-%s.png" % t), optimize=True)
+            for x in ("", "-s"):
+                sheet([shrink(raw_anim[(t, x, f)], size, blur) for f in range(FRAMES)], 8, size).save(
+                    os.path.join(d, "machinery-%s%s.png" % (t, x)), optimize=True)
             h = {s: outline(shrink(raw_hoods[(t, s)], size, blur)) for s in "nesw"}
             sheet([h[s] for s in order], 6, size).save(os.path.join(d, "hood-%s.png" % t), optimize=True)
     # icons: a lone block with an input hood above and an output hood below
@@ -130,7 +134,7 @@ def main():
         scene = Image.new("RGBA", (RES, RES + 2 * PX), (0, 0, 0, 0))
         scene.alpha_composite(raw_hoods[(t, "s")], (0, 0))
         scene.alpha_composite(raw_blocks[(t, 0)], (0, PX))
-        scene.alpha_composite(raw_anim[(t, 0)], (0, PX))
+        scene.alpha_composite(raw_anim[(t, "", 0)], (0, PX))
         scene.alpha_composite(raw_hoods[(t, "n")], (0, 2 * PX))
         icon = scene.crop(scene.getbbox())
         k = 62 / max(icon.size)

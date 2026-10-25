@@ -76,7 +76,9 @@ local function animations(colour)
       layers = {
         still("balancer-" .. colour .. ".png"),
         {
-          filename = gfx.dir .. "machinery-" .. colour .. ".png",
+          -- the machinery loop rendered with the front housing in front of it, or without it for a
+          -- block whose south side joins another block
+          filename = gfx.dir .. "machinery-" .. colour .. (math.floor(look.masks()[i] / 4) % 2 == 1 and "-s" or "") .. ".png",
           priority = "high",
           width = gfx.frame,
           height = gfx.frame,

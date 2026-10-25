@@ -7,7 +7,10 @@
 --            on_entity_died, script_raised_destroy
 --   moved:   script_raised_teleported
 --   changed: on_player_rotated_entity, on_player_flipped_entity, on_entity_settings_pasted
---            (the inserter positions or a belt direction change)
+--            (the inserter positions or a belt direction change; between two blocks, the
+--            balancer settings, scripts/gui.lua)
+--   settings (scripts/gui.lua): on_gui_checked_state_changed, on_gui_closed, and the linked
+--            custom inputs mb-open-gui, mb-copy-settings, mb-paste-settings
 --   forces:  on_forces_merged (the blocks of the source force now belong to the destination)
 --   lifecycle (scripts/lifecycle.lua):
 --            on_player_setup_blueprint, on_player_configured_blueprint (edges become belts),
@@ -33,6 +36,7 @@ local groups = require("scripts.groups")
 local balancer = require("scripts.balancer")
 local belt_io = require("scripts.io")
 local lifecycle = require("scripts.lifecycle")
+local gui = require("scripts.gui")
 
 local events = {}
 
@@ -87,7 +91,13 @@ local function built(entity, event)
       return
     end
     script.register_on_object_destroyed(entity)
-    local ids, gone = groups.on_block_built(entity)
+    -- a block from a blueprint carries its balancer's settings (a new group takes them); a clone
+    -- takes its source's group's
+    local settings = gui.settings_from_tags(event.tags)
+    if not settings and event.source and event.source.valid and groups.of(event.source.unit_number) then
+      settings = groups.settings(groups.of(event.source.unit_number))
+    end
+    local ids, gone = groups.on_block_built(entity, settings)
     balancer.mark(ids, gone, player)
     balancer.mark_block(entity, player)
   elseif relevant(entity) then
@@ -125,6 +135,17 @@ function events.on_rotated(event)
   changed(event.entity, event)
 end
 events.on_flipped = events.on_rotated
+
+-- on_entity_settings_pasted: between two blocks, the destination's balancer takes the source's
+-- settings (scripts/gui.lua); otherwise the inserter or belt changed. A field for tests.
+function events.on_settings_pasted(event)
+  local src, dst = event.source, event.destination
+  if src and src.valid and dst and dst.valid and groups.tier_of(src.name) and groups.tier_of(dst.name) then
+    gui.paste(src, dst, event.player_index)
+  else
+    changed(dst, event)
+  end
+end
 
 function events.register()
   local f = filters()
@@ -173,9 +194,12 @@ function events.register()
   end, f)
   script.on_event(E.on_player_rotated_entity, events.on_rotated)
   script.on_event(E.on_player_flipped_entity, events.on_flipped)
-  script.on_event(E.on_entity_settings_pasted, function(event)
-    changed(event.destination, event)
-  end)
+  script.on_event(E.on_entity_settings_pasted, events.on_settings_pasted)
+  script.on_event(E.on_gui_checked_state_changed, gui.on_checked)
+  script.on_event(E.on_gui_closed, gui.on_closed)
+  script.on_event("mb-open-gui", gui.on_open_input)
+  script.on_event("mb-copy-settings", gui.on_copy_input)
+  script.on_event("mb-paste-settings", gui.on_paste_input)
   script.on_event(E.on_forces_merged, function(event)
     local ids, gone = groups.on_forces_merged(event.source_index, event.destination)
     balancer.mark(ids, gone)

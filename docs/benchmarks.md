@@ -2,6 +2,24 @@
 
 Plan 3 Task 1 (2026-10-25). Factorio 2.1.23, vanilla preset, express tier everywhere.
 
+## Outcome: per-balancer recirculation toggle (Plan 3 Task 3)
+
+The user accepted the cost below and chose a per-balancer toggle (spec Update 2026-10-25 (2)).
+Every balancer's settings window (click a block) has the checkbox **"Redistribute unused
+shares"** ("남는 몫 되돌려 보내기"):
+
+- **On (the default):** the recirculating network, the rows "recirculating, after" below. Every
+  output stays equal even when some outputs take less than their share.
+- **Off:** the plain network (`network.build(n, m, { recirc = false })`), the rows "plain (recirc
+  off), after" below: 0.98x-1.07x BBB at 2:3 and 9:1 and, with all outputs free, at 8:3 and
+  64:64; 1.08x-1.54x elsewhere. All outputs are still equal while they are all free; a slow
+  output gives its unused share to its last-stage sibling only.
+
+Turning it on or off rebuilds that balancer once, items kept (tests/game/lanes.lua
+`toggle_recirc_on_full_balancer`). The setting travels with settings paste and blueprints, and a
+merge keeps the larger group's setting. The release gate is now: zero per-tick script (met), plus
+these numbers published.
+
 ## Verdict (round 2, after the network optimisation)
 
 **Fail at 2:3, 3:5, 8:3, 17:2, 33:5 and 64:64**, with all outputs free and with one output

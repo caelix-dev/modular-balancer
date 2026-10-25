@@ -21,6 +21,13 @@
 -- merged into another (game.merge_forces moves the entities without build or remove events).
 -- A script that sets LuaEntity::force on a block raises no event either; that is not tracked.
 --
+-- Settings (Plan 3 Task 3): each group carries the balancer's two per-group settings, `lanes`
+-- (balance lanes, default off) and `recirc` (redistribute unused shares, default on; nil reads as
+-- on, so groups from older saves keep the full guarantee). They live on the group, so they follow
+-- its id: a merge keeps the setting of the group that absorbs the others (the larger one, the
+-- lower id on a tie), the parts of a split all keep the old group's setting, and a new group takes
+-- the settings it is given (a block built from a blueprint, scripts/events.lua) or the defaults.
+--
 -- Cost: a removal only floods the group when the removed block had two or more neighbours in
 -- it, and stops as soon as all of them are reached, so taking a group apart from its ends is
 -- O(1) per block. Callers that rebuild per changed group (Task 4) should coalesce: one rebuild
@@ -39,6 +46,8 @@ groups.TIERS = { "basic", "fast", "express", "turbo" }
 ---@field force LuaForce
 ---@field count integer number of blocks
 ---@field blocks table<integer, LuaEntity> unit_number -> block
+---@field lanes boolean? balance lanes (nil: off)
+---@field recirc boolean? redistribute unused shares (nil: on)
 
 ---@class mb.BlockRecord
 ---@field entity LuaEntity
@@ -92,11 +101,18 @@ end
 
 ---@param st mb.GroupsState
 ---@param force LuaForce
+---@param from { lanes: boolean?, recirc: boolean? }? settings to copy (a split part, a blueprint)
 ---@return mb.Group
-local function new_group(st, tier, si, force)
+local function new_group(st, tier, si, force, from)
   local id = st.next_id
   st.next_id = id + 1
   local g = { id = id, tier = tier, surface_index = si, force_index = force.index, force = force, count = 0, blocks = {} }
+  if from then
+    g.lanes = from.lanes == true or nil
+    if from.recirc == false then
+      g.recirc = false
+    end
+  end
   st.by_id[id] = g
   return g
 end
@@ -242,7 +258,7 @@ local function remove(st, unit, ids, gone)
     return #a > #b
   end)
   for i = 2, #parts do
-    local ng = new_group(st, g.tier, g.surface_index, g.force)
+    local ng = new_group(st, g.tier, g.surface_index, g.force, g)
     for _, u in ipairs(parts[i]) do
       move_to(st, ng, u)
     end
@@ -262,8 +278,10 @@ local function drop_stale(st, unit, ids, gone)
 end
 
 ---@param entity LuaEntity a block
+---@param settings { lanes: boolean?, recirc: boolean? }? for a new group only (a block that joins
+---   a group takes that group's settings)
 ---@return integer[] ids, integer[] gone
-function groups.on_block_built(entity)
+function groups.on_block_built(entity, settings)
   local st = state()
   local ids, gone = {}, {}
   local unit = entity.valid and entity.unit_number
@@ -310,7 +328,7 @@ function groups.on_block_built(entity)
   ---@type mb.Group
   local target
   if #list == 0 then
-    target = new_group(st, tier, si, entity.force --[[@as LuaForce]])
+    target = new_group(st, tier, si, entity.force --[[@as LuaForce]], settings)
   else
     -- Merge into the largest group, so the fewest blocks move.
     table.sort(list, function(a, b)
@@ -352,10 +370,11 @@ end
 function groups.on_block_moved(entity)
   local st, ids, gone = state(), {}, {}
   local unit = entity.unit_number
+  local settings = groups.settings(groups.of(unit))
   if unit then
     remove(st, unit, ids, gone)
   end
-  local i2, g2 = groups.on_block_built(entity)
+  local i2, g2 = groups.on_block_built(entity, settings)
   for _, id in ipairs(i2) do
     ids[#ids + 1] = id
   end
@@ -412,6 +431,38 @@ end
 ---@return mb.Group?
 function groups.get(id)
   return id and state().by_id[id] or nil
+end
+
+-- The settings of group `id`: { lanes = boolean, recirc = boolean } (defaults: lanes off,
+-- recirculation on; also for a group that does not exist).
+---@param id integer?
+---@return { lanes: boolean, recirc: boolean }
+function groups.settings(id)
+  local g = groups.get(id)
+  return { lanes = g ~= nil and g.lanes == true, recirc = g == nil or g.recirc ~= false }
+end
+
+-- Sets the settings of group `id` (fields left nil keep their value). Returns true when one
+-- changed.
+---@param id integer?
+---@param s { lanes: boolean?, recirc: boolean? }
+---@return boolean
+function groups.set_settings(id, s)
+  local g = groups.get(id)
+  if not g then
+    return false
+  end
+  local old = groups.settings(id)
+  if s.lanes ~= nil then
+    g.lanes = s.lanes == true or nil
+  end
+  if s.recirc == false then
+    g.recirc = false
+  elseif s.recirc ~= nil then
+    g.recirc = nil
+  end
+  local new = groups.settings(id)
+  return old.lanes ~= new.lanes or old.recirc ~= new.recirc
 end
 
 -- The group id of a block, or nil.

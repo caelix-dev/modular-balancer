@@ -10,6 +10,15 @@ A Factorio 2.1 mod that provides a modular N:M belt balancer. Place 1x1 blocks i
 - Inserters taking from a block count as one more output of that block (several inserters on one block split that block's share); inserters putting into a block count as one input.
 - Removing the last block of a balancer hands everything inside its network to whoever removed it (a player's inventory, a robot's storage chests, a space platform's hub). A large, full balancer can hold thousands of items. When it is destroyed (nobody mines it) they are spilled next to it, never on its tiles, marked for construction robots to collect.
 
+## Settings
+
+Click a block to open its balancer's settings (E or Esc closes them). They apply to the whole balancer:
+
+- **Balance lanes** (off by default): both lanes of every output carry the same, even when the inputs fill only one lane.
+- **Redistribute unused shares** (on by default): what one output does not take goes back into the balancer, so the other outputs stay equal. Turning it off uses a smaller hidden network that costs less game update time (close to Better Belt Balancer at some ratios, up to about 1.5x at others; docs/benchmarks.md). The outputs are still equal while they all run freely, but a slow output then passes its unused share to one neighbour only.
+
+Changing a setting rebuilds the balancer once; its items are kept. Copy-paste settings (Shift + right click, Shift + left click on another block) copies both settings to the other balancer, and blueprints and copy-paste keep them. When two balancers are joined, the joined balancer keeps the settings of the one with more blocks.
+
 ## Limits
 
 - Refused, with a message where it happens:

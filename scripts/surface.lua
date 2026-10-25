@@ -91,6 +91,8 @@ end
 ---@param h integer
 ---@return {x: integer, y: integer} origin top-left tile corner of a free w x h rectangle (chunks generated)
 function surface.reserve(w, h)
+  -- the surface first: making a new one (the old one was deleted) resets the regions
+  local s = surface.get()
   local r = regions()
   local region
   for i, f in ipairs(r.free) do
@@ -110,7 +112,6 @@ function surface.reserve(w, h)
   end
   r.used[key(region.x, region.y)] = region
 
-  local s = surface.get()
   for cx = region.x / CHUNK, (region.x + region.w) / CHUNK - 1 do
     for cy = region.y / CHUNK, (region.y + region.h) / CHUNK - 1 do
       if not s.is_chunk_generated({ cx, cy }) then

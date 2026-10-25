@@ -42,7 +42,7 @@ end)
 -- which release zips leave out, so a player with factorio-test enabled gets none of it).
 if settings.startup["mb-dev"].value then
   require("tests.game.remote")
-  local suites = { "tests/game/smoke", "tests/game/placement", "tests/game/exactness", "tests/game/rebuild", "tests/game/groups", "tests/game/io", "tests/game/play", "tests/game/lifecycle", "tests/game/lanes" }
+  local suites = { "tests/game/smoke", "tests/game/placement", "tests/game/exactness", "tests/game/rebuild", "tests/game/groups", "tests/game/io", "tests/game/play", "tests/game/lifecycle", "tests/game/lanes", "tests/game/staged" }
   if settings.startup["mb-spikes"].value then
     suites[#suites + 1] = "spikes/multi_belt/test"
     suites[#suites + 1] = "spikes/hidden_surface/test"

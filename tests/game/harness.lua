@@ -545,12 +545,19 @@ function H.count_box(box, item)
     end
   end
   local recs = storage.balancer and storage.balancer.recs or {}
+  -- networks of live groups (also those draining into a new network), and of removed groups
+  -- still being taken out (staged spills)
+  local owners = {}
   for _, rec in pairs(recs) do
-    local a = rec.anchor
+    owners[#owners + 1] = { anchor = rec.anchor, nets = balancer.nets_of(rec) }
+  end
+  for _, sp in ipairs(storage.balancer and storage.balancer.spill_queue or {}) do
+    owners[#owners + 1] = sp
+  end
+  for _, o in ipairs(owners) do
+    local a = o.anchor
     if a and a.position.x >= box[1][1] and a.position.x <= box[2][1] and a.position.y >= box[1][2] and a.position.y <= box[2][2] then
-      local nets = { table.unpack(rec.extra) }
-      nets[#nets + 1] = rec.placed
-      for _, p in ipairs(nets) do
+      for _, p in ipairs(o.nets) do
         for _, it in ipairs(builder.contents(p)) do
           if not item or it.name == item then
             n = n + it.count
@@ -569,9 +576,7 @@ function H.network_of(id)
   local rec = storage.balancer and storage.balancer.recs[id] or nil
   local n = 0.0
   if rec then
-    local nets = { table.unpack(rec.extra) }
-    nets[#nets + 1] = rec.placed
-    for _, p in ipairs(nets) do
+    for _, p in ipairs(balancer.nets_of(rec)) do
       for _, it in ipairs(builder.contents(p)) do
         n = n + it.count
       end

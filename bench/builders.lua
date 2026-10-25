@@ -37,6 +37,7 @@
 local network = require("scripts.network")
 local builder = require("scripts.builder")
 local balancer = require("scripts.balancer")
+local groups = require("scripts.groups")
 
 local D = defines.direction
 local LOADER = "mb-test-loader-express"
@@ -90,9 +91,19 @@ local function prepare(s, x1, y1, x2, y2)
   s.set_tiles(tiles)
 end
 
-local function source(s, x, y)
+-- Items the sources of the next bench_build feed (bench_items), input i the i-th (cycling).
+local function source_item(i)
+  local items = bench_state().items
+  if not (items and #items > 0 and i) then
+    return "iron-plate"
+  end
+  return items[(i - 1) % #items + 1]
+end
+
+local function source(s, x, y, i)
   local chest = ce(s, { name = "infinity-chest", position = { x, y } })
-  chest.set_infinity_container_filter(1, { name = "iron-plate", count = 100, mode = "exactly" })
+  local item = source_item(i)
+  chest.set_infinity_container_filter(1, { name = item, count = math.min(100, prototypes.item[item].stack_size), mode = "exactly" })
   ce(s, { name = LOADER, position = { x + 1, y }, direction = D.east, type = "output" })
   return chest
 end
@@ -119,7 +130,7 @@ local function build_copy(s, kind, n, m, ox, oy, throttle)
   end
   for i = 1, n do
     local y = oy + i - 1 + 0.5
-    source(s, ox + 0.5, y)
+    source(s, ox + 0.5, y, i)
     ce(s, { name = "express-transport-belt", position = { ox + 2.5, y }, direction = D.east })
     if kind == "plain" then
       local edge = ce(s, { name = "mb-hidden-linked-belt-express", position = { ox + 3.5, y }, direction = D.east, type = "input" }, false)
@@ -311,7 +322,96 @@ local function bench_add_output(first, count)
   return true
 end
 
+-- Items the sources of later bench_build calls feed: nil for iron plates, "unmergeable" for items
+-- with a stack size of 1 (every item its own inventory slot: the worst case for buffers and
+-- spills), or a list of item names.
+local UNMERGEABLE = { "light-armor", "heavy-armor", "modular-armor", "power-armor", "power-armor-mk2", "car", "tank",
+  "locomotive", "cargo-wagon", "fluid-wagon", "artillery-wagon", "spidertron" }
+local function bench_items(items)
+  if items == "unmergeable" then
+    items = {}
+    for _, name in ipairs(UNMERGEABLE) do
+      if prototypes.item[name] then
+        items[#items + 1] = name
+      end
+    end
+  end
+  bench_state().items = items
+  return items
+end
+
+-- Staged rebuild hitch (Plan 3 Task 5): like bench_add_output, but the flush is left to the tick
+-- handler (balancer.tick_budget per tick). Every handler call from now on until no work remains is
+-- timed; each tick's time goes to the log ("mb-bench tick"), and the longest and the number of
+-- ticks to the log line "mb-bench staged". Run ticks afterwards (run_ticks) to let it finish.
+-- With `remove`, the copies' blocks are removed instead (their networks are taken out and spilled).
+local function bench_staged(first, count, remove)
+  local s = game.surfaces.nauvis
+  local copies = bench_state().copies
+  for c = first, first + count - 1 do
+    local copy = assert(copies[c], "bench: no copy " .. c)
+    if remove then
+      for _, e in ipairs(s.find_entities_filtered({ area = { { copy.x + 4, copy.y }, { copy.x + 6, copy.y + math.max(copy.n, copy.m) } }, name = PART.mb })) do
+        e.destroy({ raise_destroy = true })
+      end
+    else
+      if not copy or copy.extra then
+        error("bench: no copy " .. c .. ", or it already has its extra output")
+      end
+      copy.extra = true
+      ce(s, { name = "express-transport-belt", position = { copy.x + 5.5, copy.y - 0.5 }, direction = D.north })
+    end
+  end
+  local default = balancer.flush
+  local ticks = 0
+  local start = game.tick
+  balancer.flush = function(budget)
+    local st = storage.balancer
+    local dirty, jobs = table_size(st.dirty), table_size(st.jobs or {})
+    local p = helpers.create_profiler()
+    default(budget)
+    p.stop()
+    ticks = ticks + 1
+    log({ "", "mb-bench tick " .. (game.tick - start) .. ": ", p, " (dirty " .. dirty .. ", jobs " .. jobs .. ")" })
+    if not balancer.pending(storage.balancer) then
+      balancer.flush = default
+      log("mb-bench staged first=" .. first .. " count=" .. count .. (remove and " remove" or "") .. ": " .. ticks .. " handler calls over " .. (game.tick - start + 1) .. " ticks")
+    end
+  end
+  return true
+end
+
+-- Runs `code` (a Lua chunk) in this mod's Lua state and returns its result (bench inspection on an
+-- MCP instance; exec_lua runs in another Lua state). The chunk gets the modules as `...`:
+-- local M = ...; M.builder, M.balancer, M.network, M.groups.
+local function bench_eval(code)
+  local f = assert(load(code, "bench_eval", "t"))
+  return f({ builder = builder, balancer = balancer, network = network, groups = groups })
+end
+
+-- Times the parts of a rebuild of an n:m network on its own: network.build, builder.place and
+-- builder.destroy of the empty network (written to the log, "mb-bench phases").
+local function bench_phases(n, m)
+  local p = helpers.create_profiler()
+  local net = network.build(n, m) --[[@as mb.Network]]
+  p.stop()
+  log({ "", "mb-bench phases " .. n .. ":" .. m .. " generate: ", p })
+  p.reset()
+  local placed = assert(builder.place(net, "express"))
+  p.stop()
+  log({ "", "mb-bench phases " .. n .. ":" .. m .. " place " .. #placed.entities .. " entities: ", p })
+  p.reset()
+  builder.destroy(placed)
+  p.stop()
+  log({ "", "mb-bench phases " .. n .. ":" .. m .. " destroy: ", p })
+  return true
+end
+
 return {
+  bench_eval = bench_eval,
+  bench_staged = bench_staged,
+  bench_items = bench_items,
+  bench_phases = bench_phases,
   bench_build = bench_build,
   bench_counts = bench_counts,
   bench_probe_start = bench_probe_start,

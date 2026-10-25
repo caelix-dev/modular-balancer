@@ -604,7 +604,8 @@ function lifecycle.on_surface_gone(event)
   if ours(event.surface_index) then
     -- a network placed between the pre event and the clear (none measured) lost its entities:
     -- drop it (its region with it) and place it again
-    local any = false
+    -- (or a staged rebuild in progress: its new network's entities are gone)
+    local any = storage.balancer ~= nil and balancer.working(storage.balancer)
     for _, rec in pairs(storage.balancer and storage.balancer.recs or {}) do
       local first = rec.placed and rec.placed.entities[1]
       if first and not first.valid then

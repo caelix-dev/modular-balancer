@@ -53,8 +53,8 @@ describe("io", function()
   end)
 
   -- Plan 3 Task 2 (spec Update 2026-10-25, edge look): an edge looks and behaves like its belt.
-  -- Every edge has no hatch structure, the belt's fast-replace group and next upgrade, and is
-  -- hidden from Factoriopedia only (an upgrade source must not be hidden). A swapped edge carries
+  -- Every edge has the belt's fast-replace group, and is hidden (in no planner list, never an
+  -- upgrade source) with no next upgrade. A swapped edge carries
   -- one drawing of the belt's straight animation for its direction (the half tile a linked belt
   -- leaves blank), which goes with the edge.
   test("edges_look_like_belts", function()
@@ -63,9 +63,7 @@ describe("io", function()
         local e = prototypes.entity["mb-edge-" .. role .. "-" .. name]
         assert(e and e.type == "linked-belt", "no " .. role .. " edge for " .. name)
         assert(e.fast_replaceable_group == belt.fast_replaceable_group, name .. " " .. role .. " edge replace group " .. tostring(e.fast_replaceable_group))
-        local want, got = belt.next_upgrade, e.next_upgrade
-        assert((want and want.name) == (got and got.name), name .. " " .. role .. " edge next upgrade " .. tostring(got and got.name))
-        assert(not e.hidden and e.hidden_in_factoriopedia, name .. " " .. role .. " edge hidden flags")
+        assert(e.hidden and e.hidden_in_factoriopedia and not e.next_upgrade, name .. " " .. role .. " edge is listed or upgradable")
       end
       for _, dir in ipairs({ "north", "east", "south", "west" }) do
         assert(helpers.is_valid_animation_path("mb-edge-belt-" .. name .. "-" .. dir), "no " .. dir .. " animation for " .. name)
@@ -106,6 +104,49 @@ describe("io", function()
     b.destroy({ raise_destroy = true })
     balancer.flush()
     assert(not di.valid and not dout.valid, "the drawings outlived their edges")
+  end)
+
+  -- Review minor 4: edges built by the game are dressed too. A clone of an edge (on_entity_cloned,
+  -- loose until a flush) carries exactly one drawing, which goes when the flush swaps it back.
+  -- An alternate belt (turbo, Space Age only) uses the "-odd" animation on tiles with x + y odd.
+  test("loose_edges_dressed", function()
+    local o = area(12, 9)
+    local s = game.surfaces.nauvis
+    H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 2, { stock = 0 })
+    H.sink(o, 4, 4, D.east, 2)
+    balancer.flush()
+    ---@param e LuaEntity
+    ---@return LuaRenderObject[]
+    local function drawings(e)
+      local list = {}
+      for _, obj in ipairs(rendering.get_all_objects(script.mod_name)) do
+        local t = obj.target
+        if t and t.entity == e then
+          list[#list + 1] = obj
+        end
+      end
+      return list
+    end
+    local base = #rendering.get_all_objects(script.mod_name)
+    local edge = H.at(o, 3, 4, "linked-belt")
+    assert(edge, "no edge")
+    local clone = edge.clone({ position = { o.x + 1, o.y + 1 }, create_build_effect_smoke = false })
+    assert(clone, "not cloned")
+    assert(#drawings(clone) == 1, "drawings on the clone: " .. #drawings(clone))
+    balancer.flush()
+    assert(not clone.valid and #rendering.get_all_objects(script.mod_name) == base, "the clone or its drawing was left behind")
+    local name = "mb-edge-belt-turbo-transport-belt-east"
+    if helpers.is_valid_animation_path(name .. "-odd") then
+      for dx = 1, 2 do
+        local e = H.put(o, dx, 7, "mb-edge-in-turbo-transport-belt", D.east, { type = "input" })
+        local x, y = math.floor(e.position.x), math.floor(e.position.y)
+        local want = (x + y) % 2 == 1 and name .. "-odd" or name
+        local d = drawings(e)
+        assert(#d == 1 and d[1].animation == want, "turbo edge at " .. x .. "," .. y .. ": " .. tostring(d[1] and d[1].animation))
+      end
+      balancer.flush()
+    end
   end)
 
   -- A full belt tile swapped for an edge and back keeps every item: the input and output tiles

@@ -70,6 +70,7 @@ local function state()
   local st = storage.balancer
   st.sinks = st.sinks or {}
   st.loose = st.loose or {}
+  st.redirects = st.redirects or {}
   return st
 end
 
@@ -87,7 +88,8 @@ end
 ---@param st table?
 ---@return boolean
 function balancer.pending(st)
-  return st ~= nil and (next(st.dirty) ~= nil or (st.loose ~= nil and next(st.loose) ~= nil))
+  return st ~= nil and (next(st.dirty) ~= nil or (st.loose ~= nil and next(st.loose) ~= nil)
+    or (st.redirects ~= nil and next(st.redirects) ~= nil))
 end
 
 -- on_load: re-sets the flush handler when a save was made with work pending.
@@ -564,9 +566,23 @@ end
 -- tests that do not want to wait a tick.
 function balancer.flush()
   local st = state()
+  script.on_nth_tick(1, nil)
+  -- upgrade orders whose target was an edge (scripts/lifecycle.lua): an order placed inside
+  -- on_marked_for_upgrade does not hold (measured), so it is placed here, a tick later
+  local redirects = st.redirects
+  st.redirects = {}
+  for _, r in ipairs(redirects) do
+    local e = r.entity
+    if e.valid then
+      e.cancel_upgrade(e.force)
+      if r.target then
+        local player = r.player_index and game.get_player(r.player_index) or nil
+        e.order_upgrade({ target = r.target, force = e.force, player = player })
+      end
+    end
+  end
   local dirty = st.dirty
   st.dirty = {}
-  script.on_nth_tick(1, nil)
   local ids = {}
   for id in pairs(dirty) do
     ids[#ids + 1] = id
@@ -766,6 +782,17 @@ function balancer.add_loose(e, player_index)
     belt_io.dress(e) -- the game built it without the drawn half; it goes with the edge if unclaimed
   end
   balancer.mark_near(e, player_index)
+  arm()
+end
+
+-- An upgrade order on `e` that targets an edge (scripts/lifecycle.lua): the next flush cancels it
+-- and, when `target` ({ name, quality }) is given, orders `target` instead.
+---@param e LuaEntity
+---@param target { name: string, quality: string }?
+---@param player_index integer?
+function balancer.redirect_upgrade(e, target, player_index)
+  local st = state()
+  st.redirects[#st.redirects + 1] = { entity = e, target = target, player_index = player_index }
   arm()
 end
 

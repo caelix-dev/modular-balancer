@@ -28,9 +28,9 @@
 --                                   edges allow side loading like the belt they replace; output
 --                                   edges do not. They look like the belt (no hatch; the half
 --                                   tile a linked belt leaves blank is drawn by scripts/io.lua,
---                                   see below) and share its fast-replace group and next upgrade,
---                                   so belts are dragged and fast-replaced over them and the
---                                   balancer swaps the new belt again
+--                                   see below) and share its fast-replace group, so belts are
+--                                   dragged and fast-replaced over them and the balancer swaps the
+--                                   new belt again. Hidden, so no planner lists them
 -- Tiers: basic, fast, express and turbo (see TIERS).
 --
 -- Required from data-final-fixes.lua, so every speed is read from the final belt prototype: a
@@ -153,11 +153,10 @@ for _, belt in pairs(data.raw["transport-belt"]) do
     e.placeable_by = item and { item = item, count = 1 } or nil
     e.max_health = belt.max_health
     e.resistances = table.deepcopy(belt.resistances)
-    -- the upgrade planner: an unconfigured planner selects an edge like its belt (next_upgrade),
-    -- and scripts/lifecycle.lua hands the order to the plain belt. An upgrade source must not be
-    -- `hidden` (measured: order_upgrade on an edge is refused while it is), so edges are hidden
-    -- from Factoriopedia only
-    e.next_upgrade = belt.next_upgrade
+    -- `hidden` (below) keeps edges out of the planners' lists and makes them invalid upgrade
+    -- sources (order_upgrade on an edge is refused); scripts/lifecycle.lua follows the planner
+    -- through the edge's neighbours instead, and redirects any order whose target is an edge
+    e.next_upgrade = nil
     -- the belt's look (spec Update 2026-10-25): no hatch structure, the belt's animation set,
     -- sounds, corpse and explosion; selected and fast-replaced like the belt
     e.structure = {}
@@ -173,7 +172,7 @@ for _, belt in pairs(data.raw["transport-belt"]) do
     e.collision_mask = table.deepcopy(belt.collision_mask)
     e.selection_priority = belt.selection_priority
     e.fast_replaceable_group = belt.fast_replaceable_group
-    e.hidden = false
+    e.hidden = true
     e.hidden_in_factoriopedia = true
     protos[#protos + 1] = e
   end

@@ -520,6 +520,96 @@ describe("lanes", function()
     assert(H.count_box(box, ITEM) == 0, "items appeared")
   end)
 
+  -- Final review m5 (Task 5a review m4): the paths that close a frame, with a stand-in player
+  -- (gui.lookup_player replaced, so gui.after_flush and the event handlers find it). A flush
+  -- keeps a frame in reach open, and opens it again as the player's opened GUI when the game let
+  -- go of it; gui.after_flush closes the frame of a mined block; gui.check and the on_moved
+  -- handler close a frame out of reach; remote view keeps it; an unknown player's entry goes.
+  test("frames_close_when_their_block_goes_or_is_out_of_reach", function()
+    local o, box = area(10, 6)
+    local a = H.block(o, 2, 2, H.TIER)
+    local b = H.block(o, 6, 2, H.TIER)
+    balancer.flush()
+    storage.mb_gui = storage.mb_gui or { open = {}, copy = {} }
+    local C = defines.controllers
+    local reach = true
+    local closed = { n = 0 }
+    ---@type any
+    local stand_in = {
+      valid = true, index = 77, name = "stand-in", force = game.forces.player, controller_type = C.character,
+      opened_gui_type = defines.gui_type.custom, gui = { screen = {} },
+      can_reach_entity = function()
+        return reach
+      end,
+    }
+    local real_lookup = gui.lookup_player
+    gui.lookup_player = function(i)
+      if i == 77 then
+        return stand_in --[[@as LuaPlayer]]
+      end
+      return real_lookup(i)
+    end
+    local function open_on(block)
+      storage.mb_gui.open[77] = block
+      -- no mb_inner: gui.check's refill leaves it alone
+      stand_in.gui.screen.mb_settings = { valid = true, destroy = function() closed.n = closed.n + 1 end }
+    end
+    ---@return integer
+    local function closes()
+      return closed.n
+    end
+    ---@return boolean
+    local function is_open()
+      return storage.mb_gui.open[77] ~= nil
+    end
+    local ok, err = pcall(function()
+      open_on(a)
+      balancer.flush()
+      assert(is_open() and closes() == 0, "a flush closed a frame in reach")
+      -- the game let go of the frame (no on_gui_closed): the next check makes it opened again
+      stand_in.opened_gui_type = defines.gui_type.none
+      balancer.flush()
+      assert(stand_in.opened == stand_in.gui.screen.mb_settings, "the frame was not opened again")
+      stand_in.opened_gui_type = defines.gui_type.custom
+      -- its block is mined: the next flush closes the frame
+      a.destroy({ raise_destroy = true })
+      balancer.flush()
+      assert(not is_open() and closes() == 1, "the frame of a mined block stayed open")
+      -- out of reach: gui.check closes it
+      open_on(b)
+      reach = false
+      ---@diagnostic disable-next-line: param-type-mismatch
+      gui.check(stand_in)
+      assert(not is_open() and closes() == 2, "gui.check left a frame out of reach open")
+      -- on_moved: in reach it stays, out of reach it closes, without a frame nothing happens
+      reach = true
+      open_on(b)
+      gui.on_moved({ player_index = 77 } --[[@as any]])
+      assert(is_open() and closes() == 2, "on_moved closed a frame in reach")
+      reach = false
+      gui.on_moved({ player_index = 77 } --[[@as any]])
+      assert(not is_open() and closes() == 3, "on_moved left a frame out of reach open")
+      gui.on_moved({ player_index = 77 } --[[@as any]])
+      assert(closes() == 3, "on_moved closed something without an open frame")
+      -- remote view keeps a frame out of reach; back in the body, the next flush closes it
+      open_on(b)
+      stand_in.controller_type = C.remote
+      balancer.flush()
+      assert(is_open(), "remote view: the frame was closed")
+      stand_in.controller_type = C.character
+      balancer.flush()
+      assert(not is_open() and closes() == 4, "out of reach after remote view: the frame stayed open")
+      -- an entry whose player does not exist (any more) is dropped by the next flush
+      storage.mb_gui.open[78] = b
+      balancer.flush()
+      assert(storage.mb_gui.open[78] == nil, "the entry of an unknown player was kept")
+    end)
+    gui.lookup_player = real_lookup
+    storage.mb_gui.open[77], storage.mb_gui.open[78] = nil, nil
+    assert(ok, err)
+    assert(H.count_box(box, ITEM) == 0, "items appeared")
+  end)
+
   -- M9: a block built from a blueprint with settings tags that joins an existing group takes the
   -- group's settings (the tags only start a new group).
   test("tagged_block_joining_a_group_ignores_its_tags", function()

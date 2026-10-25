@@ -1,5 +1,8 @@
--- Places a generated network (scripts/network.lua) on the hidden surface, rebuilds it with its
--- items carried over, and removes it.
+-- Places a generated network (scripts/network.lua) on the hidden surface over several calls
+-- (start/advance/abort), moves the items of an old network into a new one (seal/drain/settle),
+-- takes them out (take) and removes a network (destroy). Every step is bounded by a work-unit
+-- budget (builder.COST), so scripts/balancer.lua can spread a rebuild over ticks. Test code
+-- places or rebuilds at once with tests/game/harness.lua H.place and H.rebuild_net.
 --
 -- Every node gets a cell on a grid inside the network's region. A cell is CELL_W x CELL_H tiles,
 -- all nodes facing east:
@@ -58,7 +61,8 @@ builder.max_buffer_slots = 65535
 -- item count: a full 96:96 holds about 65 000 single items. A field so a test can lower it.
 builder.max_take_slots = 65535
 
--- Test hook (tests/game/placement.lua): when set to k, place fails while creating entity k.
+-- Test hook (tests/game/placement.lua): when set to k, a placement (builder.advance) fails while
+-- creating entity k.
 ---@type integer?
 builder.fail_after = nil
 
@@ -76,7 +80,7 @@ local function grid(net)
   return cols, math.max(1, math.ceil(cells / cols))
 end
 
--- Size in tiles of the rectangle `place` reserves for `net`.
+-- Size in tiles of the rectangle builder.start reserves for `net`.
 ---@param net mb.Network
 ---@return integer w, integer h
 function builder.size(net)
@@ -327,30 +331,10 @@ function builder.advance(job, budget)
   return true, used
 end
 
--- Places `net` in a region it reserves on the hidden surface, at once. All or nothing: on any
--- failure every entity it created is destroyed, the region is released, and it returns nil and
--- the error.
----@param net mb.Network network.build result
----@param tier string "basic" | "fast" | "express" | "turbo"
----@param force? ForceID owner of the hidden entities (default "player")
----@return table? placed { origin, size, tier, force, inputs, outputs, entities, buffer, dead_ends }
----@return string? err
-function builder.place(net, tier, force)
-  local job, err = builder.start(net, tier, force)
-  if not job then
-    return nil, err
-  end
-  local done, _, e = builder.advance(job, math.huge)
-  if not done then
-    return nil, e
-  end
-  return job.placed
-end
-
 -- The items on (and in) every entity of `placed`: one entry per item and quality, sorted by name
 -- then quality: { {name = "iron-plate", quality = "normal", count = 10}, ... }. A count summary
--- (rebuild carries the stacks themselves). `mb-hidden-never` is left out: it can only exist by
--- cheating, and dropping it on destroy or rebuild clears the lane it jams.
+-- (a drain moves the stacks themselves). `mb-hidden-never` is left out: it can only exist by
+-- cheating, and dropping it on destroy or drain clears the lane it jams.
 ---@param placed table
 ---@return {name: string, quality: string, count: integer}[] items
 function builder.contents(placed)
@@ -412,200 +396,10 @@ function builder.destroy(placed)
   return items
 end
 
--- Every item stack on (and in) the entities of `placed`, as LuaItemStack handles into those
--- entities (not copies): belt items via get_detailed_contents, the buffer slot by slot. Items
--- of `mb-hidden-never` are left out.
-local function stacks_of(placed)
-  local list = {}
-  for _, e in ipairs(placed.entities) do
-    if e.valid then
-      if e.type == "container" then
-        local inv = e.get_inventory(defines.inventory.chest)
-        for i = 1, #inv do
-          local st = inv[i]
-          if st.valid_for_read and st.name ~= NEVER then
-            list[#list + 1] = st
-          end
-        end
-      else
-        for i = 1, e.get_max_transport_line_index() do
-          for _, d in ipairs(e.get_transport_line(i).get_detailed_contents()) do
-            if d.stack.name ~= NEVER then
-              list[#list + 1] = d.stack
-            end
-          end
-        end
-      end
-    end
-  end
-  return list
-end
-
--- Puts copies of `sources` (LuaItemStacks of the old network, left untouched) into `placed`,
--- keeping item data and spoilage:
--- - onto the hidden belts, one item at a time (insert_at with the stack itself and
---   belt_stack_size 1, so each belt item keeps its own data and spoil fraction), wherever there
---   is room. A stack that a free belt position refuses goes to the buffer. So does a stack of
---   several items with per-item state (ammo, tools such as repair packs and science packs,
---   damaged items): copying one of them would copy the top item's partial ammo, durability or
---   health onto every copy.
--- - the rest into the buffer chest, slot by slot. A whole stack is inserted as itself; the
---   rest of a partly moved stack is a full copy of the stack (set_stack into a one-slot script
---   inventory, which keeps every field) with its count lowered. Inserting merges stacks like
---   any chest: merged spoilables average their spoil fraction, so the total spoilage is kept.
---   The chest is then sorted and shrunk to the slots it uses.
--- Returns false if more than builder.max_buffer_slots slots would be needed.
--- A stack that must not be split onto belts one item at a time (see carry_in).
+-- A stack that must not be split onto belts one item at a time (see put_into).
 local SPLIT_UNSAFE = { ammo = true, tool = true, ["repair-tool"] = true }
 local function keep_whole(st)
   return st.count > 1 and (SPLIT_UNSAFE[st.type] or st.health < 1)
-end
-
----@return boolean
-local function carry_into(placed, sources, tmp)
-  local left = {} -- items of sources[i] not yet carried
-  for i, st in ipairs(sources) do
-    left[i] = st.count
-  end
-  local k = 1
-  local function current()
-    while k <= #sources and (left[k] == 0 or keep_whole(sources[k])) do
-      k = k + 1
-    end
-    return k <= #sources and sources[k] or nil
-  end
-  local st = current()
-  for _, e in ipairs(placed.entities) do
-    if not st then
-      break
-    end
-    -- not onto a dead-end splitter: an item put on its closed output line would stay there
-    if e.type ~= "container" and e.type ~= "loader-1x1" and not placed.dead_ends[e.unit_number] then
-      for i = 1, e.get_max_transport_line_index() do
-        local line = e.get_transport_line(i)
-        local pos = 0.0
-        while st and pos < line.line_length do
-          if line.can_insert_at(pos) then
-            local before = line.get_item_count()
-            local moved = line.insert_at(pos, st, 1) and line.get_item_count() - before or 0
-            if moved > 0 then
-              if moved > left[k] then
-                error("builder: a belt took " .. moved .. " items of a stack with " .. left[k] .. " left")
-              end
-              left[k] = left[k] - moved
-            else
-              k = k + 1 -- refused on a free position: this stack goes to the buffer
-            end
-            st = current()
-          end
-          pos = pos + 0.25
-        end
-      end
-    end
-  end
-  local rest = 0
-  for i = 1, #sources do
-    if left[i] > 0 then
-      rest = rest + 1
-    end
-  end
-  if rest == 0 then
-    return true
-  end
-  local buffer = placed.buffer
-  -- one slot per remaining stack after what the buffer already holds is always enough, but that
-  -- counts unmerged stacks (one per belt item): the size is capped at builder.max_buffer_slots
-  -- and the inserts merge as they go, so it refuses only when the merged items do not fit
-  local inv = buffer.get_inventory(defines.inventory.chest)
-  inv.sort_and_merge()
-  local held = #inv - inv.count_empty_stacks()
-  buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, math.min(held + rest, builder.max_buffer_slots)))
-  inv = buffer.get_inventory(defines.inventory.chest)
-  for i, src in ipairs(sources) do
-    local n = left[i] --[[@as integer]]
-    if n > 0 then
-      local stack = src
-      if n < src.count then
-        tmp[1].set_stack(src)
-        tmp[1].count = n
-        stack = tmp[1]
-      end
-      local moved = inv.insert(stack)
-      if moved ~= n then
-        local rest_n = (n - moved) --[[@as uint32]]
-        inv.sort_and_merge()
-        if moved > 0 then
-          tmp[1].set_stack(src)
-          tmp[1].count = rest_n
-          stack = tmp[1]
-        end
-        if inv.insert(stack) ~= rest_n then
-          return false -- the caller destroys the new network: nothing was taken from the old one
-        end
-      end
-      tmp[1].clear()
-    end
-  end
-  inv.sort_and_merge()
-  local used = #inv - inv.count_empty_stacks()
-  buffer.set_inventory_size_override(defines.inventory.chest, math.max(1, used))
-  return true
-end
-
----@return boolean
-local function carry_in(placed, sources)
-  local tmp = game.create_inventory(1)
-  local ok, fits = pcall(carry_into, placed, sources, tmp)
-  tmp.destroy()
-  if not ok then
-    error(fits)
-  end
-  return fits == true
-end
-
--- Replaces `old` by `net`: places the new network, copies every item stack of the old one into it
--- (carry_in, item data and spoilage kept) and then destroys the old one. All or nothing: if the
--- new network cannot be placed, cannot hold the items, or carrying them in raises an error, the
--- new one is destroyed, `old` is left as it was, and it returns nil and the error. The caller
--- relinks the visible edges to the new inputs and outputs.
--- `extra` (optional) lists more old networks (balancers merged into this one) whose items are
--- carried in and which are destroyed too, all or nothing with `old`.
----@param old table Placed
----@param net mb.Network
----@param tier string
----@param force? ForceID
----@param extra? table[] more Placed
----@return table? placed
----@return string? err
-function builder.rebuild(old, net, tier, force, extra)
-  local new, err = builder.place(net, tier, force)
-  if not new then
-    return nil, err
-  end
-  local olds = { old }
-  for _, p in ipairs(extra or {}) do
-    olds[#olds + 1] = p
-  end
-  local carried, result = pcall(function()
-    local sources = {}
-    for _, p in ipairs(olds) do
-      for _, st in ipairs(stacks_of(p)) do
-        sources[#sources + 1] = st
-      end
-    end
-    return carry_in(new, sources)
-  end)
-  if not carried or not result then
-    builder.destroy(new)
-    if carried then
-      return nil, "too-many-items"
-    end
-    return nil, tostring(result)
-  end
-  for _, p in ipairs(olds) do
-    builder.destroy(p)
-  end
-  return new
 end
 
 -- Moves every item stack of `inv` (a script inventory, emptied) into `placed`'s buffer chest,
@@ -883,43 +677,6 @@ function builder.settle(placed)
   end
 end
 
--- Replaces `old` by `net` with the staged primitives, at once: places the new network, seals the
--- old ones and drains them into it (builder.drain). The placement is all or nothing (nil and the
--- error, `old` untouched). A drain that gets stuck (the new buffer full) leaves the rest of the
--- items in the old networks and returns the new network, the error "too-many-items" and the old
--- networks still holding items: nothing is lost. The live balancer (scripts/balancer.lua) runs
--- the same steps spread over ticks; tests use this to check the drain keeps item data.
----@param old table Placed
----@param net mb.Network
----@param tier string
----@param force? ForceID
----@param extra? table[]
----@return table? placed
----@return string? err
----@return table[]? left
-function builder.rebuild_staged(old, net, tier, force, extra)
-  local new, err = builder.place(net, tier, force)
-  if not new then
-    return nil, err
-  end
-  local olds = { old }
-  for _, p in ipairs(extra or {}) do
-    olds[#olds + 1] = p
-  end
-  local left = {}
-  for _, p in ipairs(olds) do
-    builder.seal(p)
-    if builder.drain(new, p, math.huge) ~= "done" then
-      left[#left + 1] = p
-    end
-  end
-  builder.settle(new)
-  if #left > 0 then
-    return new, "too-many-items", left
-  end
-  return new
-end
-
 -- Takes every item out of `placed` into script inventories of at most builder.max_take_slots
 -- slots each (item data and spoilage kept), destroying its entities as they are emptied (see
 -- drain_into). The items are inserted one source stack at a time, so they merge as they go (a
@@ -973,27 +730,6 @@ function builder.take(placed, budget)
     v.sort_and_merge()
   end
   return invs, n, status == "done", used
-end
-
--- Destroys `placed` and spills every item it held (merged into whole stacks first, item data and
--- spoilage kept) on the ground around `position` of `surf`, marked to be looted. Returns the
--- number of items spilled.
----@param placed table
----@param surf LuaSurface
----@param position MapPosition
----@return integer
-function builder.spill(placed, surf, position)
-  local invs, n = builder.take(placed)
-  for _, inv in ipairs(invs) do
-    for i = 1, #inv do
-      local st = inv[i] --[[@as LuaItemStack]]
-      if st.valid_for_read then
-        surf.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true })
-      end
-    end
-    inv.destroy()
-  end
-  return n
 end
 
 -- Shrinks `placed`'s buffer chest back to its prototype size once it is empty (after a big

@@ -17,7 +17,7 @@
 --   bbb     Better Belt Balancer parts bbb-balancer-part
 --   bb3     Belt Balancer 3 parts balancer-part
 --   plain   no parts: the Plan 1 generator's plain network (network.build with recirc = false)
---           placed by builder.place on the hidden surface, joined to the belts by hidden
+--           placed by H.place on the hidden surface, joined to the belts by hidden
 --           linked belts on columns 3 and 6 (the "vanilla splitter balancer" reference)
 --   none    sources and sinks only, no balancer (inputs and outputs end in the empty columns)
 --
@@ -36,6 +36,7 @@
 --                                              result goes to the log ("mb-bench flush")
 local network = require("scripts.network")
 local builder = require("scripts.builder")
+local H = require("tests.game.harness")
 local balancer = require("scripts.balancer")
 local groups = require("scripts.groups")
 
@@ -122,7 +123,7 @@ local function build_copy(s, kind, n, m, ox, oy, throttle)
   local placed = {}
   if kind == "plain" then
     local net = network.build(n, m, { recirc = false }) --[[@as mb.Network]]
-    local p = builder.place(net, "express") --[[@as table?]]
+    local p = H.place(net, "express") --[[@as table?]]
     if not p then
       error("bench: could not place the plain network")
     end
@@ -255,7 +256,7 @@ end
 -- endless sources and emptied by two sinks. `mode` joins consecutive splitters by:
 --   "direct"  nothing: the next splitter stands right after the previous one
 --   "belt"    one express belt tile per row
---   "linked"  a hidden linked-belt pair per row (input-type, then output-type), as builder.place
+--   "linked"  a hidden linked-belt pair per row (input-type, then output-type), as H.place
 --             joins every network edge
 local function bench_edge_probe(mode, chains, length)
   local s = game.surfaces.nauvis
@@ -390,7 +391,7 @@ local function bench_eval(code)
   return f({ builder = builder, balancer = balancer, network = network, groups = groups })
 end
 
--- Times the parts of a rebuild of an n:m network on its own: network.build, builder.place and
+-- Times the parts of a rebuild of an n:m network on its own: network.build, H.place and
 -- builder.destroy of the empty network (written to the log, "mb-bench phases").
 local function bench_phases(n, m)
   local p = helpers.create_profiler()
@@ -398,7 +399,7 @@ local function bench_phases(n, m)
   p.stop()
   log({ "", "mb-bench phases " .. n .. ":" .. m .. " generate: ", p })
   p.reset()
-  local placed = assert(builder.place(net, "express"))
+  local placed = assert(H.place(net, "express"))
   p.stop()
   log({ "", "mb-bench phases " .. n .. ":" .. m .. " place " .. #placed.entities .. " entities: ", p })
   p.reset()

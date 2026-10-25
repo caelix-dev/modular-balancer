@@ -12,7 +12,7 @@
 --                                   hidden and has no recipe; only a cheat (a console insert, an
 --                                   editor filter) can create it. Such an item takes the closed
 --                                   side and jams that splitter lane; builder.contents and
---                                   builder.rebuild drop it, so the next rebuild clears the jam
+--                                   builder.drain drop it, so the next rebuild clears the jam
 --   mb-hidden-buffer                the buffer chest (one per network) that holds what a rebuild
 --                                   could not put back on the belts; its size is set per network
 --                                   at runtime with set_inventory_size_override

@@ -1,5 +1,5 @@
 -- Placement on the hidden surface: scripts/surface.lua (region allocator) and
--- scripts/builder.lua (place / destroy). Plain assert, not luassert.
+-- scripts/builder.lua (start / advance / destroy, through H.place). Plain assert, not luassert.
 local network = require("scripts.network")
 local surface = require("scripts.surface")
 local builder = require("scripts.builder")
@@ -38,7 +38,7 @@ describe("placement", function()
     for _, tier in ipairs(TIERS) do
       for _, c in ipairs({ { 1, 1 }, { 2, 3 }, { 3, 5 }, { 8, 3 }, { 1, 5 }, { 5, 1 }, { 9, 1 }, { 16, 16 }, { 8, 3, true }, { 1, 1, true } }) do
         local net = assert(network.build(c[1], c[2], { balance_lanes = c[3] }))
-        local placed, err = builder.place(net, tier)
+        local placed, err = H.place(net, tier)
         local what = string.format("%s %d:%d%s", tier, c[1], c[2], c[3] and " lanes" or "")
         assert(placed, what .. ": place failed: " .. tostring(err))
         assert(placed.tier == tier and placed.force == "player" and placed.buffer and placed.buffer.valid, what .. ": Placed fields")
@@ -105,21 +105,21 @@ describe("placement", function()
     for _, k in ipairs({ 1, 2, 40, 120 }) do
       local entities, regions = s.count_entities_filtered({}), used_regions()
       builder.fail_after = k
-      local placed, err = builder.place(net, "express")
+      local placed, err = H.place(net, "express")
       builder.fail_after = nil
       assert(placed == nil and err and err:find("test hook"), "place did not fail at entity " .. k .. ": " .. tostring(err))
       assert(s.count_entities_filtered({}) == entities, "entities left after a failure at entity " .. k)
       assert(used_regions() == regions, "region not released after a failure at entity " .. k)
     end
     -- and the next place works
-    local placed = assert(builder.place(net, "express"))
+    local placed = assert(H.place(net, "express"))
     builder.destroy(placed)
   end)
 
   -- 10 normal iron plates (and, when the quality "uncommon" exists, as in Space Age, 3 uncommon
   -- iron plates and 2 normal copper plates) on hidden belts come back per item and quality.
   test("destroy_returns_items", function()
-    local placed = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local placed = assert(H.place(assert(network.build(3, 5)), "express"))
     local want = { { name = "iron-plate", quality = "normal", count = 10 } }
     ---@diagnostic disable-next-line: unnecessary-if
     if prototypes.quality["uncommon"] then

@@ -9,8 +9,17 @@
 --   sinks = { [group id] = { player_index?, robot? } },   who removed the last block of a group
 --   loose = { [unit number] = LuaEntity },                 edges built by the game, not by this
 --                                                           mod (an upgrade, a ghost, a clone)
+--   loose_retired = { [unit number] = true },              loose edges of removed groups whose
+--                                                           swap back waits for budget
+--   redirects = { { entity, target?, player_index? } },    upgrade orders on edges, moved to
+--                                                           their belts by the next flush
 --   jobs  = { [group id] = job },                          staged rebuilds ("Staged rebuilds")
+--   job_seq = integer,                                     order in which jobs were started
+--   last_generated = tick,                                 last tick that generated a large
+--                                                           network (one per tick at most)
 --   drains = { [group id] = true },                        groups whose old networks drain
+--   stuck = { [group id] = true },                         drains paused by a full buffer,
+--                                                           retried every STUCK_RETRY ticks
 --   spill_queue = { { nets, anchor, sink, tiles, force_index, cursor } },  removed networks
 --                                                           being taken out and given away
 --   retry = { [group id] = true },                         marked by an event since the last
@@ -20,6 +29,12 @@
 --
 -- Bounded work (Plan 3 Task 5): the handler spends balancer.tick_budget work units per tick on
 -- scans, rebuilds, drains and spills; what does not fit waits for the next tick.
+--
+-- Conditional handlers, both re-set in on_load from storage alone (MODDING-RULES §2):
+--   on_nth_tick(1)    the flush handler, registered exactly while balancer.pending(st);
+--   on_nth_tick(300)  the stuck-drain retry, registered exactly while st.stuck is non-empty.
+-- Every registration goes through set_flush_handler / set_stuck_handler, which also keep
+-- balancer.registered (a per-peer mirror for tests, never read by product code).
 --
 -- Coalescing. Events only mark groups dirty (balancer.mark, mark_near, mark_block). The next
 -- tick flushes them all at once (an on_nth_tick(1) handler that exists only while something is
@@ -94,6 +109,12 @@ function balancer.after_flush(_) end
 -- can take longer (64:65: about 90 ms). A module constant, the same on every peer; tests lower it.
 balancer.tick_budget = 30000
 
+-- Work units the last budgeted flush charged (budget minus what was left; a single operation can
+-- take it a little over the budget, and generating a large network much more). Per peer, for
+-- tests (tests/game/staged.lua rebuild_cost_is_bounded); never read by product code.
+---@type number?
+balancer.spent = nil
+
 local function state()
   storage.balancer = storage.balancer or { recs = {}, dirty = {} }
   local st = storage.balancer
@@ -109,30 +130,54 @@ local function state()
   return st
 end
 
+-- The conditional handlers as registered in this Lua state (tests compare it with storage:
+-- tests/game/staged.lua handlers_match). Written next to every on_nth_tick call, never read by
+-- product code, so it cannot make peers differ.
+balancer.registered = { flush = false, stuck = false }
+
+local function set_flush_handler(on)
+  balancer.registered.flush = on
+  if on then
+    script.on_nth_tick(1, function()
+      balancer.flush(balancer.tick_budget)
+    end)
+  else
+    script.on_nth_tick(1, nil)
+  end
+end
+
 local function arm()
-  script.on_nth_tick(1, function()
-    balancer.flush(balancer.tick_budget)
-  end)
+  set_flush_handler(true)
 end
 
 -- Drains that got stuck (the new buffer full) are retried every STUCK_RETRY ticks while any is
 -- stuck: their new network may have emptied its buffer by itself. Registered exactly while
 -- st.stuck is non-empty: st.stuck gains entries only next to arm_stuck() and is emptied only by
--- the handler, which unregisters itself; on_load re-sets it from st.stuck (multiplayer: a client
--- that joins registers the same). Ids of groups gone or resumed meanwhile are harmless (the
--- drain step drops them). A drain whose new buffer stays full (outputs blocked for good) is
--- retried every STUCK_RETRY ticks for as long as that lasts; each retry merges the buffer once.
+-- the handler, which unregisters itself, and by balancer.drop_networks, which unregisters it too;
+-- on_load re-sets it from st.stuck (multiplayer: a client that joins registers the same). Ids of
+-- groups gone or resumed meanwhile are harmless (the drain step drops them). A drain whose new
+-- buffer stays full (outputs blocked for good) is retried every STUCK_RETRY ticks for as long as
+-- that lasts; each retry merges the buffer once.
 local STUCK_RETRY = 300
-local function arm_stuck()
-  script.on_nth_tick(STUCK_RETRY, function()
-    local st = storage.balancer
+local function set_stuck_handler(on)
+  balancer.registered.stuck = on
+  if on then
+    script.on_nth_tick(STUCK_RETRY, function()
+      local st = storage.balancer
+      set_stuck_handler(false)
+      for gid in pairs(st.stuck or {}) do
+        st.drains[gid] = true
+      end
+      st.stuck = {}
+      arm()
+    end)
+  else
     script.on_nth_tick(STUCK_RETRY, nil)
-    for gid in pairs(st.stuck or {}) do
-      st.drains[gid] = true
-    end
-    st.stuck = {}
-    arm()
-  end)
+  end
+end
+
+local function arm_stuck()
+  set_stuck_handler(true)
 end
 
 -- True while a flush has work to do: dirty groups, or loose edges to claim or swap back. The one
@@ -684,7 +729,7 @@ local function refresh_group(st, gid, ctx, player_index)
       end
       if status == "failed" then
         log("modular-balancer: group " .. gid .. " " .. n .. ":" .. m .. " not rebuilt: " .. tostring(err))
-        refused[#refused + 1] = { reason = err == "too-many-items" and "too-many-items" or "rebuild-failed",
+        refused[#refused + 1] = { reason = "rebuild-failed",
           position = rec.anchor and rec.anchor.position or { x = 0, y = 0 } }
         if rec.placed then
           -- keep the old network: link only as many ports as it has
@@ -890,7 +935,7 @@ local function drain_group(st, gid, ctx)
       if not rec.stuck_shown then
         rec.stuck_shown = true
         log("modular-balancer: group " .. gid .. ": old network not emptied, the buffer is full")
-        local r = { reason = "too-many-items", position = rec.anchor and rec.anchor.position or { x = 0, y = 0 } }
+        local r = { reason = "drain-stuck", position = rec.anchor and rec.anchor.position or { x = 0, y = 0 } }
         if rec.anchor then
           balancer.notify(rec.player_index, { r }, rec.anchor.surface_index)
         end
@@ -1099,11 +1144,10 @@ function balancer.flush(budget)
   -- scripts/gui.lua: settings of refused rebuilds, open GUIs; with the groups refreshed here and
   -- those whose staged rebuild completed in this call
   balancer.after_flush(ctx.refreshed)
-  if balancer.pending(st) then
-    arm()
-  else
-    script.on_nth_tick(1, nil)
+  if budget then
+    balancer.spent = budget - ctx.units
   end
+  set_flush_handler(balancer.pending(st))
 end
 
 -- Spills every stack of `inv` (a script inventory, destroyed) on the ground near `position` of
@@ -1365,8 +1409,16 @@ function balancer.drop_networks()
       end
     end
     rec.placed, rec.extra, rec.draining, rec.n, rec.m = nil, {}, nil, 0, 0
+    rec.stuck_shown = nil
   end
+  -- no drain is left to retry
+  st.stuck = {}
+  set_stuck_handler(false)
   balancer.mark_all()
+  -- mark_all arms only when a live group is left: with none (the last balancer was just mined
+  -- and its network was being spilled), nothing is pending any more and the handler goes, so the
+  -- registration matches storage as on_load would set it (review m1)
+  set_flush_handler(balancer.pending(st))
 end
 
 -- Marks group `id` and flushes at once (the interface of the plan; events mark and let the next

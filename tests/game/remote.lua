@@ -108,7 +108,7 @@ local function bench_hidden(copies)
   local entities = 0
   for _ = 1, copies do
     local net = assert(network.build(8, 3))
-    local placed = assert(builder.place(net, "express"))
+    local placed = assert(H.place(net, "express"))
     entities = entities + #placed.entities
     local o = H.area(16, 8 * 2)
     for i = 1, 8 do

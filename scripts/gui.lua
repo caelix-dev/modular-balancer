@@ -35,8 +35,10 @@
 --                                                              copy-entity-settings control;
 --                                                              its current settings are pasted
 -- }
--- Both are cleared for a removed player. A rebuild refused for too many items sets the group's
--- settings back to those of the network it keeps (gui.after_flush).
+-- Both are cleared for a removed player. A refused rebuild (its new network could not be placed)
+-- sets the group's settings back to those of the network it keeps (gui.after_flush). A drain that
+-- waits for room (refusal "drain-stuck") is not a refusal of the settings: the new network, with
+-- the new settings, already works.
 -- Everything runs in events, so all players compute the same (multiplayer-safe); nothing is done
 -- in on_load.
 local groups = require("scripts.groups")
@@ -46,6 +48,13 @@ local gui = {}
 
 local FRAME = "mb_settings"
 local TAG_LANES, TAG_RECIRC = "mb_lanes", "mb_recirc"
+
+-- How player indices become players: game.get_player, replaced by tests (a headless test has no
+-- LuaPlayer, tests/game/lanes.lua uses a stand-in). Not state: the same function on every peer.
+---@type fun(index: integer): LuaPlayer?
+gui.lookup_player = function(index)
+  return game.get_player(index)
+end
 
 local function state()
   storage.mb_gui = storage.mb_gui or { open = {}, copy = {} }
@@ -88,7 +97,7 @@ end
 local function refresh_open(id)
   local st = state()
   for pi, block in pairs(st.open) do
-    local player = game.get_player(pi)
+    local player = gui.lookup_player(pi)
     local frame = player and player.valid and player.gui.screen[FRAME] --[[@as LuaGuiElement?]]
     if frame and group_of(block) == id then
       fill(frame, id)
@@ -346,7 +355,7 @@ function gui.after_flush(refreshed)
     local rec = balancer.get(gid)
     if rec and rec.placed and groups.get(gid) then
       for _, r in ipairs(rec.refused) do
-        if r.reason == "too-many-items" or r.reason == "rebuild-failed" then
+        if r.reason == "rebuild-failed" then
           groups.set_settings(gid, { lanes = rec.lanes == true, recirc = rec.recirc ~= false })
           break
         end
@@ -363,7 +372,7 @@ function gui.after_flush(refreshed)
   end
   table.sort(list)
   for _, pi in ipairs(list) do
-    local player = game.get_player(pi)
+    local player = gui.lookup_player(pi)
     if player and player.valid then
       gui.check(player)
     else
@@ -377,7 +386,7 @@ balancer.after_flush = gui.after_flush
 
 ---@return LuaPlayer?
 local function player_of(event)
-  local player = game.get_player(event.player_index)
+  local player = gui.lookup_player(event.player_index)
   return player and player.valid and player or nil
 end
 

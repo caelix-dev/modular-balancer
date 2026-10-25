@@ -3,6 +3,8 @@
 -- that small balancers take many ticks), every item is counted on every tick in between, and
 -- the handler goes away when the work is done. Also eggs spoiling on the hidden surface, a space
 -- platform as the visible side and balancers of two forces side by side.
+-- On every tick of each_tick and after every test, handlers_match checks that the conditional
+-- handlers registered are those on_load would register from storage (final review rec. 2).
 -- Plain assert, not luassert.
 local H = require("tests.game.harness")
 local balancer = require("scripts.balancer")
@@ -79,13 +81,29 @@ local function regions_match(what)
   assert(used == nets, what .. ": " .. used .. " regions in use, " .. nets .. " networks")
 end
 
+-- The conditional handlers registered now (balancer.registered, kept next to every
+-- script.on_nth_tick call of the mod) are exactly those balancer.on_load would register from
+-- storage: the flush handler while balancer.pending, the stuck-drain retry while st.stuck is
+-- non-empty (MODDING-RULES §2: a client joining now registers the same). A test that removes a
+-- handler by hand (a client that has not loaded yet) updates balancer.registered too.
+local function handlers_match(what)
+  local st = storage.balancer
+  local want_flush = balancer.pending(st)
+  local want_stuck = st ~= nil and st.stuck ~= nil and next(st.stuck) ~= nil
+  assert(balancer.registered.flush == want_flush, what .. ": flush handler registered: " .. tostring(balancer.registered.flush)
+    .. ", on_load would register it: " .. tostring(want_flush))
+  assert(balancer.registered.stuck == want_stuck, what .. ": stuck-drain handler registered: "
+    .. tostring(balancer.registered.stuck) .. ", on_load would register it: " .. tostring(want_stuck))
+end
+
 -- Calls `check(ticks)` every tick while the balancer has work (at most `limit` ticks), then
--- `finish(ticks)`.
+-- `finish(ticks)`. Checks handlers_match on every tick.
 local function each_tick(limit, check, finish)
   local ticks = 0
   local function step()
     after_ticks(1, function()
       ticks = ticks + 1
+      handlers_match("tick " .. ticks)
       check(ticks)
       if balancer.pending(storage.balancer) then
         assert(ticks < limit, "staged work not finished after " .. limit .. " ticks")
@@ -107,6 +125,7 @@ describe("staged", function()
       H.clear_blocks(box)
     end
     boxes = {}
+    handlers_match("after the test")
   end)
 
   -- A backed-up 1:1 balancer gets a second output with a tiny budget: the new network is placed
@@ -330,7 +349,9 @@ describe("staged", function()
         assert(next(storage.balancer.stuck) ~= nil, "a refresh emptied st.stuck behind the retry handler")
         -- a client that joins now: no handler of its own until on_load sets it from storage
         script.on_nth_tick(300, nil)
+        balancer.registered.stuck = false
         balancer.on_load()
+        handlers_match("after on_load")
         -- no event touches the group: the periodic retry (every 300 ticks while a drain is
         -- stuck, set by on_load here) resumes it once the buffer may grow
         builder.max_buffer_slots = 65535
@@ -773,7 +794,7 @@ describe("staged", function()
   -- Stacked belt items (several items in one belt stack) keep their count through the staged
   -- carry.
   test("stacked_belt_items_drain", function()
-    local old = assert(builder.place(assert(network.build(3, 5)), "turbo"))
+    local old = assert(H.place(assert(network.build(3, 5)), "turbo"))
     for _, e in ipairs(old.entities) do
       if e.type == "linked-belt" then
         for li = 1, 2 do
@@ -782,12 +803,123 @@ describe("staged", function()
       end
     end
     local before = builder.contents(old)
-    local new, err = builder.rebuild_staged(old, assert(network.build(3, 5)), "turbo")
+    local new, err = H.rebuild_net(old, assert(network.build(3, 5)), "turbo")
     new = assert(new, err)
     local after = builder.contents(new)
     assert(serpent.line(before) == serpent.line(after), "contents changed: " .. serpent.line(before) .. " -> " .. serpent.line(after))
     builder.destroy(new)
   end)
+  -- Review Focus 5, rebuild_cost_is_bounded (final review m7): a rebuild of many items that
+  -- cannot merge costs at most the budget per tick, measured in work units (balancer.spent, the
+  -- units a budgeted flush charged), never in wall time, so the check is deterministic. A 1:1
+  -- whose buffer holds 300 stack-size-1 items of five kinds (no two merge: each takes its own
+  -- slot and its own move) gets a second output at a budget of 400. Every tick: every item is
+  -- counted, the handlers match storage, and the flush charged at most the budget plus SLACK.
+  -- The work is spread over at least the ticks the item moves alone need, and no tick idles.
+  test("rebuild_cost_is_bounded", function()
+    async(3000)
+    local BUDGET = 400
+    -- larger than any single charge in this rig that can start just under the budget: one hidden
+    -- belt emptied at once (2 lines x 4 items, 12 each, plus its destroy), the whole plan of a
+    -- 1:2 network (2 per operation)
+    local SLACK = 150
+    local o, box = area(10, 10)
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 3, { stock = 0 })
+    stop(H.sink(o, 4, 4, D.east, 3))
+    balancer.flush()
+    local rec0, id = rec_of(b)
+    assert(nm(rec0) == "1:1", "test setup: network " .. nm(rec0))
+    local kinds = {}
+    for _, name in ipairs({ "light-armor", "heavy-armor", "modular-armor", "power-armor", "power-armor-mk2", "car", "tank" }) do
+      local p = prototypes.item[name]
+      if p and p.stack_size == 1 and #kinds < 5 then
+        kinds[#kinds + 1] = name
+      end
+    end
+    assert(#kinds == 5, "test setup: only " .. #kinds .. " stack-size-1 kinds")
+    local per = 60
+    local buffer = assert(rec0.placed).buffer
+    buffer.set_inventory_size_override(defines.inventory.chest, per * #kinds)
+    local binv = buffer.get_inventory(defines.inventory.chest) --[[@as LuaInventory]]
+    for _, k in ipairs(kinds) do
+      assert(binv.insert({ name = k, count = per }) == per, "test setup: " .. k .. " did not fit")
+    end
+    local total = H.count_box(box)
+    local held = H.network_of(id)
+    assert(total == per * #kinds and held == total, "test setup: " .. total .. " items, " .. held .. " in the network")
+    local old = rec0.placed
+    balancer.tick_budget = BUDGET
+    local flushes = 0
+    ---@type number, number
+    local units, max_spent = 0, 0
+    local over = {} ---@type string[]
+    balancer.flush = function(budget)
+      balancer.spent = nil
+      default_flush(budget)
+      if budget then
+        local spent = (balancer.spent --[[@as number?]]) or -1
+        flushes = flushes + 1
+        units = units + spent
+        max_spent = math.max(max_spent, spent)
+        if spent < 0 or spent > budget + SLACK then
+          over[#over + 1] = game.tick .. ": " .. spent
+        end
+      end
+    end
+    stop(H.sink(o, 4, 4, D.south, 3)) -- raise_built marks the group; the handler does the rest
+    each_tick(2000, function(t)
+      assert(#over == 0, "tick " .. t .. ": units charged over the budget " .. BUDGET .. " + " .. SLACK .. ": " .. table.concat(over, ", "))
+      local n = H.count_box(box)
+      assert(n == total, "tick " .. t .. ": " .. n .. " of " .. total)
+    end, function(t)
+      local rec = rec_of(b)
+      assert(nm(rec) == "1:2" and rec.placed ~= old, "network " .. nm(rec))
+      assert(#(rec.draining or {}) == 0, "old networks left over")
+      regions_match("after the rebuild")
+      H.report("rebuild_cost_is_bounded: %d unmergeable items, %d ticks, %d flushes, %d units, at most %d per tick (budget %d)",
+        total, t, flushes, units, max_spent, BUDGET)
+      -- every item moves once, at builder.COST.item each: that alone needs this many ticks
+      local least = math.ceil(total * builder.COST.item / (BUDGET + SLACK))
+      assert(flushes >= least, "done in " .. flushes .. " flushes, the item moves alone need " .. least)
+      -- and every flush but the last spends its budget: no tick idles while work is left
+      assert(flushes <= math.ceil(units / BUDGET) + 1, flushes .. " flushes for " .. units .. " units: ticks idled")
+      done()
+    end)
+  end)
+
+  -- Final review m1: the hidden surface is about to go (balancer.drop_networks) while the last
+  -- balancer's network is being taken out over ticks. Afterwards nothing is queued, the items
+  -- are all on the ground, and the flush handler is registered exactly while something is
+  -- pending, as on_load would set it; with it, a flush runs on the next tick only then.
+  test("drop_networks_leaves_handlers_matching_storage", function()
+    async(1500)
+    local o, box = area(12, 12)
+    local b = H.block(o, 5, 5, H.TIER)
+    H.feed(o, 5, 5, D.west, 3, { stock = 1500 })
+    stop(H.sink(o, 5, 5, D.east, 3))
+    balancer.flush()
+    after_ticks(600, function()
+      local total = H.count_box(box, ITEM)
+      balancer.tick_budget = 100
+      b.destroy({ raise_destroy = true })
+      after_ticks(3, function()
+        assert(#storage.balancer.spill_queue > 0, "test setup: the removed network is not being taken out")
+        handlers_match("mid spill")
+        balancer.drop_networks()
+        assert(#storage.balancer.spill_queue == 0, "spills left after drop_networks")
+        assert(H.count_box(box, ITEM) == total, "after drop_networks: " .. H.count_box(box, ITEM) .. " of " .. total)
+        handlers_match("after drop_networks")
+        local pending = balancer.pending(storage.balancer)
+        local c = count_flushes()
+        after_ticks(2, function()
+          assert((c.n > 0) == pending, c.n .. " flushes in 2 ticks, pending was " .. tostring(pending))
+          done()
+        end)
+      end)
+    end)
+  end)
+
   -- Review m6, save and load mid-rebuild, as far as FactorioTest can go (it cannot load a save;
   -- the full check on an MCP instance is in docs/benchmarks.md): mid-placement the handler is
   -- removed, as in a client that has just loaded the save, and only balancer.on_load (which reads
@@ -808,10 +940,12 @@ describe("staged", function()
         local r = balancer.get(id)
         assert(storage.balancer.jobs[id] or (r and r.draining and #r.draining > 0), "test setup: no rebuild under way")
         script.on_nth_tick(1, nil)
+        balancer.registered.flush = false
         local c = count_flushes()
         after_ticks(5, function()
           assert(c.n == 0, "the handler ran while unregistered")
           balancer.on_load()
+          handlers_match("after on_load")
           each_tick(3000, function(t)
             assert(H.count_box(box, ITEM) == total, "tick " .. t .. ": " .. H.count_box(box, ITEM) .. " of " .. total)
           end, function()

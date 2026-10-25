@@ -249,7 +249,7 @@ function gui.check(player)
   local frame = player.gui.screen[FRAME] --[[@as LuaGuiElement?]]
   if frame then
     fill(frame, id)
-    if player.opened == nil then
+    if player.opened_gui_type == defines.gui_type.none then
       -- the game let go of it without on_gui_closed (measured, F11: leaving remote view by
       -- script); opened again so E and Esc still close it
       player.opened = frame

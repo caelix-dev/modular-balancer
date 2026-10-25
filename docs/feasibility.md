@@ -1017,9 +1017,17 @@ that lost `player.opened` gets it back.
 
 ## Concerns for Plan 2 from Task 5 (parked review minors)
 
-Status after Plan 2 Task 2: the first item is fixed (`builder.place` is all or nothing), and
-`Placed` now records origin, size, tier and force. The allocator and cross-force items are still
-open.
+Status: all three are fixed.
+- Plan 2 Task 2: placement is all or nothing, and `Placed` records origin, size, tier and force.
+- Plan 3 Task 5: the allocator is best fit, splits regions and joins freed ones
+  (`scripts/surface.lua`, offline tests in `tests/unit/allocator_test.lua`), and two forces'
+  balancers side by side are tested (`tests/game/staged.lua` `two_forces_side_by_side`).
+- Since the Plan 3 final review, `builder.place` and `builder.rebuild` are gone from product code:
+  networks are placed and rebuilt only in budgeted steps (`builder.start`/`advance`,
+  `seal`/`drain`); tests use `H.place` and `H.rebuild_net` (`tests/game/harness.lua`). Mentions of
+  `builder.place` and `builder.rebuild` elsewhere in this file are historical.
+
+The original notes follow.
 
 - **A failed `builder.place` leaves a half-built network.** If a `create_entity` fails, the
   builder asserts after earlier entities already exist, and they are never destroyed. Review

@@ -22,6 +22,9 @@ these numbers published.
 
 ## Verdict (round 2, after the network optimisation)
 
+Historical: this verdict was written before the user chose the toggle (the "Outcome" section
+above), so "no toggle was added" below describes round 2 only. The toggle now exists.
+
 **Fail at 2:3, 3:5, 8:3, 17:2, 33:5 and 64:64**, with all outputs free and with one output
 throttled. The recirculating network passes only at 9:1.
 

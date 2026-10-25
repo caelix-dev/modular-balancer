@@ -39,8 +39,14 @@
 -- priority splitter at its root, see merging() below. So even with recirc = false an N:1
 -- network for N not a power of two has one priority node, unlike Plan 1's plain N:1.
 --
--- Splitters left with no input or no output are removed, and a splitter left with one input
--- and one output becomes a plain edge; repeated until nothing changes.
+-- Two butterflies in a row are built as a Benes network (2k - 1 stages, see stages()): the
+-- second runs in reverse, so its first stage would repeat the last stage of the first.
+--
+-- Splitters left with no input or no output are removed, a splitter left with one input and
+-- one output becomes a plain edge, and a plain splitter whose two outputs feed the two inputs
+-- of one node is dropped (fold(): that node already splits and draws equally); repeated until
+-- nothing changes. The recirculating network's F runs its stages in reverse so that its last
+-- stage pairs neighbouring wires, which merge_groups merges anyway: fold() removes that stage.
 --
 -- With opts.balance_lanes, a lane splitter sits on every input (N of them), so both lanes
 -- carry equal totals before the keep-lanes network. Not on the outputs: there each output's
@@ -118,6 +124,30 @@ local function stage(b, wires, S, t)
   end
 end
 
+-- Stage order of a core on 2^k wires. One butterfly: t = 0 .. k-1 (reversed for a transposed
+-- core). Two butterflies are a Benes network: the second butterfly runs in the opposite order, so
+-- its first stage would pair the same wires as the last stage of the first one; two splitters in
+-- a row on the same pair of wires act as one, so that stage is built once (2k - 1 stages).
+local function stages(k, butterflies, reversed)
+  local list = {}
+  for t = 0, k - 1 do
+    list[#list + 1] = t
+  end
+  if butterflies == 2 then
+    for t = k - 2, 0, -1 do
+      list[#list + 1] = t
+    end
+  end
+  if reversed then
+    local r = {}
+    for i = #list, 1, -1 do
+      r[#r + 1] = list[i]
+    end
+    list = r
+  end
+  return list
+end
+
 -- A wire whose source is set later in b.loop_source (resolve_loops).
 local function loop_wire(b)
   b.next_loop = b.next_loop + 1
@@ -134,7 +164,7 @@ end
 
 -- Core with `live` input wires and `n_out` outputs on S = 2^k >= max(#live, n_out) wires.
 -- Unused input slots: `S - n_out` loops, the rest unconnected. Returns n_out output wires.
-local function core(b, live, n_out, butterflies)
+local function core(b, live, n_out, butterflies, reversed)
   local S, k = ceil_pow2(math.max(#live, n_out))
   local n_loops = S - n_out
   assert(S - #live - n_loops >= 0, "core: more outputs looped than free inputs")
@@ -153,10 +183,8 @@ local function core(b, live, n_out, butterflies)
       wires[w] = false
     end
   end
-  for _ = 1, butterflies do
-    for t = 0, k - 1 do
-      stage(b, wires, S, t)
-    end
+  for _, t in ipairs(stages(k, butterflies, reversed)) do
+    stage(b, wires, S, t)
   end
   local outs = {}
   for w = 1, S do
@@ -185,10 +213,8 @@ local function transposed_core(b, live, n_out, butterflies)
       wires[w] = lw
     end
   end
-  for _ = 1, butterflies do
-    for t = k - 1, 0, -1 do
-      stage(b, wires, S, t)
-    end
+  for _, t in ipairs(stages(k, butterflies, true)) do
+    stage(b, wires, S, t)
   end
   local outs = {}
   for w = 1, S do
@@ -308,11 +334,60 @@ local function simplify(b)
   b.nodes, b.edges = nodes, edges
 end
 
+-- A plain splitter whose two outputs feed the two inputs of one node does nothing that node
+-- does not do anyway (that node splits and draws equally on its own): its inputs go straight
+-- to that node. Returns true if it removed any.
+local function fold(b)
+  local out_of = {}
+  for _, ed in ipairs(b.edges) do
+    local f = ed.from
+    if f.kind == "splitter" then
+      out_of[f.id] = out_of[f.id] or {}
+      out_of[f.id][f.port] = ed
+    end
+  end
+  local drop, target = {}, {}
+  for _, n in ipairs(b.nodes) do
+    local o = n.kind == "splitter" and out_of[n.id]
+    local o1, o2 = o and o[1], o and o[2]
+    if o1 and o2 and INTERNAL[o1.to.kind] and o1.to.kind == o2.to.kind and o1.to.id == o2.to.id
+      and not target[n.id] and not (o1.to.kind == "splitter" and drop[o1.to.id]) then
+      drop[n.id] = { [1] = o1.to, [2] = o2.to }
+      if o1.to.kind == "splitter" then
+        target[o1.to.id] = true
+      end
+    end
+  end
+  if next(drop) == nil then
+    return false
+  end
+  local nodes, edges = {}, {}
+  for _, n in ipairs(b.nodes) do
+    if not (n.kind == "splitter" and drop[n.id]) then
+      nodes[#nodes + 1] = n
+    end
+  end
+  for _, ed in ipairs(b.edges) do
+    local f, d = ed.from, ed.to
+    if not (f.kind == "splitter" and drop[f.id]) then
+      if d.kind == "splitter" and drop[d.id] then
+        ed.to = drop[d.id][d.port]
+      end
+      edges[#edges + 1] = ed
+    end
+  end
+  b.nodes, b.edges = nodes, edges
+  return true
+end
+
 -- Renumbers splitters and priority splitters 1..K in creation order.
 ---@return mb.Network
 local function finish(b, n_in, n_out)
   resolve_loops(b)
   simplify(b)
+  while fold(b) do
+    simplify(b)
+  end
   local new_id, splitters, priority = { splitter = {}, priority = {} }, {}, {}
   for _, n in ipairs(b.nodes) do
     if n.kind == "splitter" then
@@ -343,7 +418,9 @@ local function forward(n, m)
   local b = new_builder()
   local wires = input_wires(n)
   if n < m and ceil_pow2(n) ~= n then
-    wires = core(b, wires, n, 1)
+    -- Reversed, so its last stage pairs neighbouring wires like the first stage of the M:M
+    -- core: fold() drops one of the two.
+    wires = core(b, wires, n, 1, true)
   end
   if m > 1 then
     -- 1:2^k is a plain splitter tree and 2:2 is one splitter; everything else needs both
@@ -436,7 +513,9 @@ local function recirculating(n, m)
   local b = new_builder()
   local wires = input_wires(n)
   if n > 1 then
-    wires = core(b, wires, n, 1)
+    -- Last stage t = 0 pairs neighbouring wires, as the first level of merge_groups does:
+    -- fold() then drops those splitters.
+    wires = core(b, wires, n, 1, true)
   end
   ---@type (mb.Port|false)[]
   wires = merge_groups(b, wires, group_count(n, m))

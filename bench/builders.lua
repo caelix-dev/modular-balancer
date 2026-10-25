@@ -239,6 +239,59 @@ local function bench_block(on)
   return true
 end
 
+-- Edge cost probe (how to join splitters on the hidden surface): `chains` rows of `length`
+-- express splitters in series, both outputs of each feeding both inputs of the next, fed by two
+-- endless sources and emptied by two sinks. `mode` joins consecutive splitters by:
+--   "direct"  nothing: the next splitter stands right after the previous one
+--   "belt"    one express belt tile per row
+--   "linked"  a hidden linked-belt pair per row (input-type, then output-type), as builder.place
+--             joins every network edge
+local function bench_edge_probe(mode, chains, length)
+  local s = game.surfaces.nauvis
+  local gap = ({ direct = 0, belt = 1, linked = 2 })[mode]
+  if not gap then
+    error("bench: unknown mode " .. tostring(mode))
+  end
+  local w = 6 + length * (gap + 1)
+  prepare(s, ORIGIN.x - 4, ORIGIN.y - 4, ORIGIN.x + w + 4, ORIGIN.y + chains * 3 + 4)
+  for _, e in ipairs(s.find_entities_filtered({ force = "enemy" })) do
+    e.destroy()
+  end
+  s.peaceful_mode = true
+  local st = bench_state()
+  for c = 1, chains do
+    local y = ORIGIN.y + (c - 1) * 3
+    local copy = { kind = "edge-" .. mode, x = ORIGIN.x, y = y, sinks = {}, sink_loaders = {} }
+    for r = 0, 1 do
+      source(s, ORIGIN.x + 0.5, y + r + 0.5)
+      ce(s, { name = "express-transport-belt", position = { ORIGIN.x + 2.5, y + r + 0.5 }, direction = D.east })
+    end
+    local x = ORIGIN.x + 3
+    for k = 1, length do
+      ce(s, { name = "express-splitter", position = { x + 0.5, y + 1 }, direction = D.east })
+      x = x + 1
+      if k < length then
+        for r = 0, 1 do
+          if mode == "belt" then
+            ce(s, { name = "express-transport-belt", position = { x + 0.5, y + r + 0.5 }, direction = D.east })
+          elseif mode == "linked" then
+            local a = ce(s, { name = "mb-hidden-linked-belt-express", position = { x + 0.5, y + r + 0.5 }, direction = D.east, type = "input" }, false)
+            local b = ce(s, { name = "mb-hidden-linked-belt-express", position = { x + 1.5, y + r + 0.5 }, direction = D.east, type = "output" }, false)
+            a.connect_linked_belts(b)
+          end
+        end
+        x = x + gap
+      end
+    end
+    for r = 0, 1 do
+      ce(s, { name = "express-transport-belt", position = { x + 0.5, y + r + 0.5 }, direction = D.east })
+      copy.sink_loaders[r + 1], copy.sinks[r + 1] = sink(s, x + 1.5, y + r + 0.5)
+    end
+    st.copies[#st.copies + 1] = copy
+  end
+  return { mode = mode, chains = chains, length = length }
+end
+
 local function bench_add_output(first, count)
   local s = game.surfaces.nauvis
   local copies = bench_state().copies
@@ -265,4 +318,5 @@ return {
   bench_probe_stop = bench_probe_stop,
   bench_block = bench_block,
   bench_add_output = bench_add_output,
+  bench_edge_probe = bench_edge_probe,
 }

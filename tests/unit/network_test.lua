@@ -750,6 +750,35 @@ return {
     end
   end,
 
+  -- Two butterflies are a Benes network: (2k - 1) * 2^(k - 1) splitters for a plain 2^k:2^k.
+  benes_core_sizes = function()
+    for k, want in pairs({ [2] = 6, [3] = 20, [4] = 56, [6] = 352, [7] = 832 }) do
+      local net = build(2 ^ k, 2 ^ k, { recirc = false })
+      assert(#net.splitters == want, string.format("%d:%d plain has %d splitters, expected %d", 2 ^ k, 2 ^ k, #net.splitters, want))
+    end
+  end,
+
+  -- fold(): no plain splitter sends both its outputs into the same node.
+  no_redundant_splitter_pairs = function()
+    for _, ratios in ipairs({ exhaustive_ratios(), sampled_ratios() }) do
+      for _, r in ipairs(ratios) do
+        for _, opts in ipairs({ {}, { recirc = false }, { balance_lanes = true } }) do
+          local net = build(r[1], r[2], opts)
+          local target = {}
+          for _, ed in ipairs(net.edges) do
+            if ed.from.kind == "splitter" then
+              local key = ed.to.kind .. ":" .. ed.to.id
+              local prev = target[ed.from.id]
+              assert(not (prev and prev == key and ed.to.kind ~= "out"),
+                string.format("%s: splitter %d feeds both inputs of %s", tag(net), ed.from.id, key))
+              target[ed.from.id] = key
+            end
+          end
+        end
+      end
+    end
+  end,
+
   size_table = function()
     local parts = {}
     for _, r in ipairs({ { 1, 2 }, { 2, 2 }, { 5, 2 }, { 2, 3 }, { 3, 5 }, { 8, 3 }, { 9, 1 }, { 17, 2 }, { 33, 5 }, { 16, 16 }, { 64, 64 } }) do

@@ -1,0 +1,2 @@
+   2.600 Script @__modular-balancer__/bench/builders.lua:310: mb-bench flush first=1 count=1: Duration: 513.123600ms
+   9.154 Script @__modular-balancer__/bench/builders.lua:310: mb-bench flush first=2 count=10: Duration: 6066.874400ms

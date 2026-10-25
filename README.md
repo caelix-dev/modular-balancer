@@ -19,7 +19,7 @@ A Factorio 2.1 mod that provides a modular N:M belt balancer. Place 1x1 blocks i
   - inserters that both take from and put into the same block;
   - a belt of another force.
 - Loaders next to a block are ignored.
-- Size: there is no limit on the number of inputs or outputs, but the hidden network grows with them and costs engine time like any splitter network of that size. Examples (splitters, with recirculation): 8:3 about 45, 64:64 about 960, 96:96 about 2 770, 128:128 about 2 180, 160:160 about 6 350. The size jumps just above each power of two (96:96 is larger than 128:128). Changing the number of inputs or outputs of a full 64:64 rebuilds it in about 0.2 s.
+- Size: there is no limit on the number of inputs or outputs, but the hidden network grows with them and costs engine time like any splitter network of that size. Examples (splitters, with recirculation): 8:3 about 38, 64:64 about 860, 96:96 about 2 560, 128:128 about 1 980, 160:160 about 5 920. The size jumps just above each power of two (96:96 is larger than 128:128). Changing the number of inputs or outputs of a full 64:64 (about 30 000 items) rebuilds it in about 0.5 s, during which the game pauses; ten such rebuilds at once pause it for about 6 s (docs/benchmarks.md).
 
 Blueprints, copy-paste, undo/redo, ghosts and the upgrade planner work with balancers: a blueprint holds the blocks and the player's own belts, and the mod connects them again where they are built.
 

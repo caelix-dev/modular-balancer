@@ -2,7 +2,255 @@
 
 Plan 3 Task 1 (2026-10-25). Factorio 2.1.23, vanilla preset, express tier everywhere.
 
-## Verdict
+## Verdict (round 2, after the network optimisation)
+
+**Fail at 2:3, 3:5, 8:3, 17:2, 33:5 and 64:64**, with all outputs free and with one output
+throttled. The recirculating network passes only at 9:1.
+
+The user then decided to shrink the hidden network and measure again (follow-up to Task 1). This is
+that second round. Per the stop rule nothing else was changed and no toggle was added.
+
+- **Script time: met.** There is still no per-tick script.
+- **Total update time: not met.** The optimisation made the hidden networks 5-24 % smaller. The
+  recirculating network now costs 1.27x-2.14x BBB's total update time with all outputs free and
+  1.29x-2.11x with one throttled. It was 1.31x-2.93x before, in the same session.
+- **Without recirculation ("how far from BBB?"):** the optimised plain network is within the noise
+  of BBB at 2:3 (1.01x, 1.02x), 8:3 free (1.07x), 9:1 and 64:64 free (0.99x). It is worse at:
+  - 3:5 (1.08x, 1.17x);
+  - 8:3 throttled (1.09x);
+  - 17:2 (1.15x, 1.42x);
+  - 33:5 (1.16x, 1.54x);
+  - 64:64 throttled (1.11x).
+
+  A recirculation toggle alone would therefore not pass the gate at every ratio.
+
+### Summary (ratio to BBB, median of 10 runs; BBB pooled over 20 runs)
+
+| ratio | outputs | recirculating before | recirculating after | plain before | plain after |
+| --- | --- | --- | --- | --- | --- |
+| 2:3 | free / throttled | 1.64x / 1.40x | 1.35x / 1.44x | 1.19x / 1.09x | **1.01x / 1.02x** |
+| 3:5 | free / throttled | 1.31x / 1.42x | 1.27x / 1.42x | 1.33x / 1.33x | 1.08x / 1.17x |
+| 8:3 | free / throttled | 1.36x / 1.41x | 1.27x / 1.29x | 1.18x / 1.06x | **1.07x** / 1.09x |
+| 9:1 | free / throttled | **0.90x / 0.96x** | same network | **1.05x / 0.98x** | same network |
+| 17:2 | free / throttled | 1.42x / 1.44x | 1.29x / 1.52x | 1.28x / 1.49x | 1.15x / 1.42x |
+| 33:5 | free / throttled | 1.59x / 1.81x | 1.37x / 1.91x | 1.29x / 1.72x | 1.16x / 1.54x |
+| 64:64 | free / throttled | 2.93x / 2.69x | 2.14x / 2.11x | **1.12x** / 1.32x | **0.99x** / 1.11x |
+
+Bold: within the noise of BBB. Noise is 2 SE of the difference of the run-median means.
+
+**Caveat: the machine was busy during round 2.** The user's desktop applications kept CPU load at
+50-80 %, against an idle machine in round 1, so absolute times are about 20-35 % higher than in
+round 1. The A/A deltas reached 15-35 % on some saves. Each ratio was therefore measured as one
+block of back-to-back runs (BBB, the four variants, BBB again), and the BBB reference pools both
+BBB runs. 17:2 free was measured again in full after a load spike. Ratios within a block are
+comparable; absolute numbers across blocks and rounds are not.
+
+### What changed in the network (`scripts/network.lua`, commit 572655f)
+
+- **Benes cores.** Two butterflies in a row are built as a Benes network (2k - 1 stages): the second
+  butterfly runs in reverse, so its first stage repeats the last stage of the first, and two
+  splitters on the same pair of wires act as one. A plain 64:64 goes from 384 to 352 splitters.
+- **fold().** A plain splitter whose two outputs feed the two inputs of one node is dropped. That
+  node splits and draws equally anyway.
+- **Stage order.** The recirculating network's input balancer F, and the front core of the plain
+  network, run their stages in reverse. Their last stage then pairs neighbouring wires, which the
+  next stage pairs too, and fold() removes it.
+- **Every guarantee is unchanged.** The offline suite checks exact N:M, equal input draw under
+  backpressure, throughput-unlimited for any subset (max flow and the splitter model), outputs equal
+  for any input mix, and recirculation with slow outputs. It is exhaustive up to 8:8 plus 16:16,
+  3:16 and 16:3, sampled up to 64, and passes 43/43, including two new tests:
+  - `benes_core_sizes`;
+  - `no_redundant_splitter_pairs`.
+- **In-game suites:** 181/181 (vanilla) and 183/183 (space-age).
+
+Splitters / linked belts per network (counted in the saves; the buffer's merge splitter is
+excluded):
+
+| network | before | after | plain before | plain after | BBB |
+| --- | --- | --- | --- | --- | --- |
+| 2:3 | 32 / 125 | 26 / 101 | 8 / 33 | 6 / 25 | 4 + 3 lane / 16 (+4 belts) |
+| 3:5 | 44 / 170 | 39 / 150 | 28 / 112 | 22 / 88 | 12 + 6 lane / 38 (+16 belts) |
+| 8:3 | 46 / 175 | 38 / 143 | 24 / 93 | 19 / 73 | 12 + 8 lane / 38 (+16 belts) |
+| 9:1 | 21 / 66 | 21 / 66 | 21 / 66 | 21 / 66 | 32 + 16 lane / 82 (+48 belts) |
+| 17:2 | 119 / 459 | 112 / 431 | 143 / 559 | 120 / 467 | 80 + 32 lane / 196 (+128 belts) |
+| 33:5 | 298 / 1 156 | 281 / 1 088 | 351 / 1 378 | 302 / 1 182 | 192 + 64 lane / 458 (+320 belts) |
+| 64:64 | 960 / 3 714 | 864 / 3 330 | 384 / 1 538 | 352 / 1 410 | 192 + 64 lane / 576 (+320 belts) |
+
+### Why the gap remains
+
+Three ideas did not help:
+- **Linked belts are not the cost.** A probe with 120 chains of 20 express splitters in series
+  (`bench_edge_probe`) joined them three ways: directly (no belts), by one belt tile, or by a
+  linked-belt pair (as builder.place does). transportLinesUpdate was 0.233, 0.257 and 0.244 ms,
+  and wholeUpdate 0.586, 0.629 and 0.589 ms (raw/edge-*.json). The three are within the noise.
+  Replacing linked belts by adjacency or plain belts would not pay, so the layout was not changed.
+- **The recirculation stage cannot be made cheaper this way.** Its core G takes the L input lines
+  plus one overflow wire per output (L >= M). Each overflow wire can carry a full belt (all outputs
+  but one blocked), so the wires cannot be merged. G therefore spans at least 2M wires and needs two
+  butterflies to stay throughput-unlimited.
+- **G needs both butterflies.** With one butterfly, 10 offline tests fail: equal outputs, input
+  draw, slow outputs and throughput.
+
+Two structural limits remain:
+- **The input balancer F is costly at awkward sizes.** At 33:5 it is a butterfly over 64 wires,
+  already as large as BBB's whole network.
+- **Throughput-unlimited costs more than one butterfly.** BBB's 64:64 is one butterfly (192
+  splitters), which is not throughput-unlimited. The cheapest throughput-unlimited 64:64 is a Benes
+  network of 352 splitters.
+
+### Review Focus 1: `load_time_with_200_balancers`
+
+200 x 8:3 (36 800 hidden entities, 1.78 MB of script storage), loaded three times with
+`server_start`. The times are from the instance log: "Loading map" to "Hosting game" for the whole
+map, and "Loading script.dat" to "Hosting game" for the script part (raw/load-times.txt).
+
+| save | whole map load | script part | script.dat |
+| --- | --- | --- | --- |
+| harness only, no balancer | 0.165-0.197 s | 0.027-0.037 s | 42 KB |
+| 200 modular-balancer 8:3 | 0.371-0.427 s | 0.089-0.111 s | 1.78 MB |
+| 200 BBB 8:3 (reference) | 0.541-0.558 s | 0.334-0.349 s | 1.87 MB |
+
+- Loading costs about 1 ms per balancer, of which 0.3 ms is the storage. This is a deserialisation
+  cost, not a rebuild: on_load only re-registers the flush handler when work is pending.
+- Load time grows with the save's size and no network is rebuilt on load. BBB's script part is 3.5x
+  longer (its wasm runtime).
+
+### Rebuild hitch
+
+Save `hitch-64`: 11 x 64:64 with every sink stopped until full, 329 670 items, about 30 000 per
+network. `bench_add_output` adds one output to some groups and times `balancer.flush()` with
+`helpers.create_profiler` (raw/rebuild-hitch.txt):
+
+| flush | duration |
+| --- | --- |
+| one full 64:64 group rebuilt (64:64 to 64:65) | 513 ms |
+| ten full 64:64 groups rebuilt in one flush | 6 067 ms |
+
+- Each rebuild carries about 30 000 items (F9: about 11 µs per item). Ten at once freeze the game
+  for 6 s.
+- This is Review Focus 5 (Task 5 `rebuild_cost_is_bounded`: bound the work per flush and spread it
+  over ticks). The README's size note now gives these numbers.
+- Measured on the busy machine, so the times are upper bounds.
+
+### Round 2 tables
+
+From `python -I bench/tables2.py` (raw/r2-*.json, r2b-*.json). Variants: recirculating
+(the default) and plain (`recirc = false`), each before (commit 70f1051) and after (572655f) the
+optimisation.
+
+#### 50 x 2:3
+
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| --- | --- | --- | --- | --- | --- | --- |
+| Better Belt Balancer | all free | 0.295 [0.265..0.349] (20 runs) | | | | 4 + 3 lane / 16 (+4 belts) |
+| recirculating, before | all free | 0.483 [0.450..0.530] | 1.64x (+0.188) | 0.020 | **no** | 32 / 125 |
+| recirculating, after | all free | 0.399 [0.354..0.421] | 1.35x (+0.104) | 0.018 | **no** | 26 / 101 |
+| plain (recirc off), before | all free | 0.351 [0.304..0.379] | 1.19x (+0.057) | 0.018 | **no** | 8 / 33 |
+| plain (recirc off), after | all free | 0.298 [0.264..0.322] | 1.01x (+0.004) | 0.016 | yes | 6 / 25 |
+| Better Belt Balancer | one throttled | 0.291 [0.260..0.338] (20 runs) | | | | 4 + 3 lane / 16 (+4 belts) |
+| recirculating, before | one throttled | 0.408 [0.353..0.458] | 1.40x (+0.117) | 0.025 | **no** | 32 / 125 |
+| recirculating, after | one throttled | 0.418 [0.366..0.427] | 1.44x (+0.127) | 0.018 | **no** | 26 / 101 |
+| plain (recirc off), before | one throttled | 0.318 [0.284..0.345] | 1.09x (+0.027) | 0.017 | **no** | 8 / 33 |
+| plain (recirc off), after | one throttled | 0.297 [0.265..0.330] | 1.02x (+0.006) | 0.017 | yes | 6 / 25 |
+
+#### 50 x 3:5
+
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| --- | --- | --- | --- | --- | --- | --- |
+| Better Belt Balancer | all free | 0.378 [0.334..0.426] (20 runs) | | | | 12 + 6 lane / 38 (+16 belts) |
+| recirculating, before | all free | 0.496 [0.445..0.570] | 1.31x (+0.118) | 0.024 | **no** | 44 / 170 |
+| recirculating, after | all free | 0.479 [0.447..0.594] | 1.27x (+0.101) | 0.034 | **no** | 39 / 150 |
+| plain (recirc off), before | all free | 0.504 [0.481..0.562] | 1.33x (+0.126) | 0.021 | **no** | 28 / 112 |
+| plain (recirc off), after | all free | 0.409 [0.375..0.430] | 1.08x (+0.031) | 0.016 | **no** | 22 / 88 |
+| Better Belt Balancer | one throttled | 0.395 [0.323..0.478] (20 runs) | | | | 12 + 6 lane / 38 (+16 belts) |
+| recirculating, before | one throttled | 0.561 [0.494..0.657] | 1.42x (+0.165) | 0.034 | **no** | 44 / 170 |
+| recirculating, after | one throttled | 0.560 [0.483..0.628] | 1.42x (+0.164) | 0.034 | **no** | 39 / 150 |
+| plain (recirc off), before | one throttled | 0.525 [0.438..0.589] | 1.33x (+0.129) | 0.037 | **no** | 28 / 112 |
+| plain (recirc off), after | one throttled | 0.463 [0.441..0.511] | 1.17x (+0.068) | 0.025 | **no** | 22 / 88 |
+
+#### 50 x 8:3
+
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| --- | --- | --- | --- | --- | --- | --- |
+| Better Belt Balancer | all free | 0.437 [0.386..0.531] (20 runs) | | | | 12 + 8 lane / 38 (+16 belts) |
+| recirculating, before | all free | 0.595 [0.535..0.658] | 1.36x (+0.159) | 0.031 | **no** | 46 / 175 |
+| recirculating, after | all free | 0.553 [0.519..0.653] | 1.27x (+0.116) | 0.031 | **no** | 38 / 143 |
+| plain (recirc off), before | all free | 0.516 [0.503..0.569] | 1.18x (+0.080) | 0.023 | **no** | 24 / 93 |
+| plain (recirc off), after | all free | 0.466 [0.429..0.574] | 1.07x (+0.029) | 0.031 | yes | 19 / 73 |
+| Better Belt Balancer | one throttled | 0.413 [0.372..0.527] (20 runs) | | | | 12 + 8 lane / 38 (+16 belts) |
+| recirculating, before | one throttled | 0.581 [0.538..0.625] | 1.41x (+0.168) | 0.025 | **no** | 46 / 175 |
+| recirculating, after | one throttled | 0.533 [0.474..0.653] | 1.29x (+0.120) | 0.043 | **no** | 38 / 143 |
+| plain (recirc off), before | one throttled | 0.437 [0.409..0.488] | 1.06x (+0.025) | 0.024 | **no** | 24 / 93 |
+| plain (recirc off), after | one throttled | 0.449 [0.399..0.492] | 1.09x (+0.036) | 0.028 | **no** | 19 / 73 |
+
+#### 50 x 9:1
+
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| --- | --- | --- | --- | --- | --- | --- |
+| Better Belt Balancer | all free | 0.340 [0.296..0.410] (20 runs) | | | | 32 + 16 lane / 82 (+48 belts) |
+| recirculating, before | all free | 0.307 [0.288..0.330] | 0.90x (-0.033) | 0.017 | yes | 21 / 66 |
+| recirculating, after (same network as before) | all free | 0.307 [0.288..0.330] | 0.90x (-0.033) | 0.017 | yes | 21 / 66 |
+| plain (recirc off), before | all free | 0.358 [0.280..0.455] | 1.05x (+0.018) | 0.036 | yes | 21 / 66 |
+| plain (recirc off), after (same network as before) | all free | 0.358 [0.280..0.455] | 1.05x (+0.018) | 0.036 | yes | 21 / 66 |
+| Better Belt Balancer | one throttled | 0.265 [0.225..0.333] (20 runs) | | | | 32 + 16 lane / 82 (+48 belts) |
+| recirculating, before | one throttled | 0.254 [0.220..0.269] | 0.96x (-0.012) | 0.017 | yes | 21 / 66 |
+| recirculating, after (same network as before) | one throttled | 0.254 [0.220..0.269] | 0.96x (-0.012) | 0.017 | yes | 21 / 66 |
+| plain (recirc off), before | one throttled | 0.259 [0.218..0.280] | 0.98x (-0.006) | 0.019 | yes | 21 / 66 |
+| plain (recirc off), after (same network as before) | one throttled | 0.259 [0.218..0.280] | 0.98x (-0.006) | 0.019 | yes | 21 / 66 |
+
+#### 50 x 17:2
+
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| --- | --- | --- | --- | --- | --- | --- |
+| Better Belt Balancer | all free | 0.356 [0.321..0.412] (20 runs) | | | | 80 + 32 lane / 196 (+128 belts) |
+| recirculating, before | all free | 0.506 [0.450..0.596] | 1.42x (+0.150) | 0.031 | **no** | 119 / 459 |
+| recirculating, after | all free | 0.461 [0.433..0.523] | 1.29x (+0.105) | 0.021 | **no** | 112 / 431 |
+| plain (recirc off), before | all free | 0.455 [0.407..0.489] | 1.28x (+0.099) | 0.020 | **no** | 143 / 559 |
+| plain (recirc off), after | all free | 0.409 [0.377..0.438] | 1.15x (+0.053) | 0.017 | **no** | 120 / 467 |
+| Better Belt Balancer | one throttled | 0.314 [0.272..0.421] (20 runs) | | | | 80 + 32 lane / 196 (+128 belts) |
+| recirculating, before | one throttled | 0.454 [0.399..0.583] | 1.44x (+0.140) | 0.043 | **no** | 119 / 459 |
+| recirculating, after | one throttled | 0.478 [0.400..0.507] | 1.52x (+0.163) | 0.031 | **no** | 112 / 431 |
+| plain (recirc off), before | one throttled | 0.467 [0.394..0.488] | 1.49x (+0.153) | 0.030 | **no** | 143 / 559 |
+| plain (recirc off), after | one throttled | 0.448 [0.368..0.514] | 1.42x (+0.133) | 0.035 | **no** | 120 / 467 |
+
+#### 50 x 33:5
+
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| --- | --- | --- | --- | --- | --- | --- |
+| Better Belt Balancer | all free | 0.960 [0.820..1.379] (20 runs) | | | | 192 + 64 lane / 458 (+320 belts) |
+| recirculating, before | all free | 1.529 [1.303..2.034] | 1.59x (+0.569) | 0.161 | **no** | 298 / 1156 |
+| recirculating, after | all free | 1.310 [1.206..1.449] | 1.37x (+0.351) | 0.084 | **no** | 281 / 1088 |
+| plain (recirc off), before | all free | 1.241 [1.172..1.520] | 1.29x (+0.281) | 0.105 | **no** | 351 / 1378 |
+| plain (recirc off), after | all free | 1.117 [0.980..1.301] | 1.16x (+0.157) | 0.091 | **no** | 302 / 1182 |
+| Better Belt Balancer | one throttled | 0.797 [0.707..1.112] (20 runs) | | | | 192 + 64 lane / 458 (+320 belts) |
+| recirculating, before | one throttled | 1.447 [1.307..1.781] | 1.81x (+0.650) | 0.127 | **no** | 298 / 1156 |
+| recirculating, after | one throttled | 1.519 [1.315..1.609] | 1.91x (+0.721) | 0.087 | **no** | 281 / 1088 |
+| plain (recirc off), before | one throttled | 1.372 [1.233..1.904] | 1.72x (+0.575) | 0.140 | **no** | 351 / 1378 |
+| plain (recirc off), after | one throttled | 1.224 [1.161..1.546] | 1.54x (+0.427) | 0.096 | **no** | 302 / 1182 |
+
+#### 4 x 64:64
+
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| --- | --- | --- | --- | --- | --- | --- |
+| Better Belt Balancer | all free | 0.423 [0.349..0.710] (20 runs) | | | | 192 + 64 lane / 576 (+320 belts) |
+| recirculating, before | all free | 1.238 [0.959..1.369] | 2.93x (+0.815) | 0.096 | **no** | 960 / 3714 |
+| recirculating, after | all free | 0.904 [0.706..1.236] | 2.14x (+0.481) | 0.125 | **no** | 864 / 3330 |
+| plain (recirc off), before | all free | 0.472 [0.442..0.793] | 1.12x (+0.049) | 0.085 | yes | 384 / 1538 |
+| plain (recirc off), after | all free | 0.418 [0.350..0.578] | 0.99x (-0.005) | 0.068 | yes | 352 / 1410 |
+| Better Belt Balancer | one throttled | 0.467 [0.381..0.596] (20 runs) | | | | 192 + 64 lane / 576 (+320 belts) |
+| recirculating, before | one throttled | 1.258 [1.062..1.785] | 2.69x (+0.791) | 0.127 | **no** | 960 / 3714 |
+| recirculating, after | one throttled | 0.985 [0.906..1.120] | 2.11x (+0.518) | 0.052 | **no** | 864 / 3330 |
+| plain (recirc off), before | one throttled | 0.615 [0.495..0.710] | 1.32x (+0.148) | 0.049 | **no** | 384 / 1538 |
+| plain (recirc off), after | one throttled | 0.517 [0.470..0.649] | 1.11x (+0.050) | 0.041 | **no** | 352 / 1410 |
+
+- recirculating, before: worse than BBB at 2:3 all free (1.64x), 2:3 one throttled (1.40x), 3:5 all free (1.31x), 3:5 one throttled (1.42x), 8:3 all free (1.36x), 8:3 one throttled (1.41x), 17:2 all free (1.42x), 17:2 one throttled (1.44x), 33:5 all free (1.59x), 33:5 one throttled (1.81x), 64:64 all free (2.93x), 64:64 one throttled (2.69x)
+- recirculating, after: worse than BBB at 2:3 all free (1.35x), 2:3 one throttled (1.44x), 3:5 all free (1.27x), 3:5 one throttled (1.42x), 8:3 all free (1.27x), 8:3 one throttled (1.29x), 17:2 all free (1.29x), 17:2 one throttled (1.52x), 33:5 all free (1.37x), 33:5 one throttled (1.91x), 64:64 all free (2.14x), 64:64 one throttled (2.11x)
+- plain (recirc off), before: worse than BBB at 2:3 all free (1.19x), 2:3 one throttled (1.09x), 3:5 all free (1.33x), 3:5 one throttled (1.33x), 8:3 all free (1.18x), 8:3 one throttled (1.06x), 17:2 all free (1.28x), 17:2 one throttled (1.49x), 33:5 all free (1.29x), 33:5 one throttled (1.72x), 64:64 one throttled (1.32x)
+- plain (recirc off), after: worse than BBB at 3:5 all free (1.08x), 3:5 one throttled (1.17x), 8:3 one throttled (1.09x), 17:2 all free (1.15x), 17:2 one throttled (1.42x), 33:5 all free (1.16x), 33:5 one throttled (1.54x), 64:64 one throttled (1.11x)
+
+The rest of this document is round 1, before the optimisation, on an idle machine.
+
+## Round 1 verdict (before the optimisation)
 
 **Fail at 2:3, 3:5, 8:3, 17:2, 33:5 and 64:64**, with all outputs free and with one output
 throttled. It passes only at 9:1.
@@ -63,7 +311,7 @@ So BBB is cheaper but gives weaker guarantees. The scout runs measured this (ite
 Network size does not grow monotonically with the ratio (Plan 2 final review Minor 10): 4 x 96:96
 costs 4.40 ms/tick, against 2.62 ms for 4 x 128:128.
 
-## Method
+## Method (both rounds)
 
 ### Saves
 
@@ -133,7 +381,7 @@ ticklens sampled it, and was then saved.
   the run medians, the ticklens summary and the entity counts. `python -I bench/tables.py` prints
   the tables below.
 
-## Tables
+## Round 1 tables
 
 ms/tick values are medians over 10 runs. "vs BBB" gives the ratio to BBB with the same outputs and
 the difference in ms. The gate passes when the difference is not above the noise.
@@ -227,7 +475,9 @@ the difference in ms. The gate passes when the difference is not above the noise
 
 Computed verdict: fail at 2:3 all free (1.40x), 2:3 one throttled (1.39x), 3:5 all free (1.40x), 3:5 one throttled (1.39x), 8:3 all free (1.30x), 8:3 one throttled (1.36x), 17:2 all free (1.36x), 17:2 one throttled (1.26x), 33:5 all free (1.71x), 33:5 one throttled (1.74x), 64:64 all free (2.33x), 64:64 one throttled (2.48x)
 
-## Not measured (stop rule)
+## Not measured in round 1 (stop rule)
+
+Round 2 measured `load_time_with_200_balancers` and the rebuild hitch (above).
 
 - **Belt Balancer 3:** no benchmark saves were built. It is not part of the gate, which compares
   against BBB only. In the scout runs it worked at every ratio here, including 96:96 and 128:128.

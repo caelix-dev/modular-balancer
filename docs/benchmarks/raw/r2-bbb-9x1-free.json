@@ -1,0 +1,147 @@
+{
+ "counts": {
+  "bbb-hidden": {
+   "by_name": {
+    "bbb-belt": 2400,
+    "bbb-lane-splitter": 800,
+    "bbb-linked-belt": 3600,
+    "bbb-splitter": 1600
+   },
+   "total": 8400
+  },
+  "nauvis": {
+   "by_name": {
+    "bbb-balancer-part": 900,
+    "bbb-linked-belt": 500,
+    "express-transport-belt": 1000,
+    "infinity-chest": 500,
+    "mb-test-loader-express": 500
+   },
+   "total": 3400
+  }
+ },
+ "metrics": {
+  "entityUpdate": {
+   "aa_delta_pct": 11.660329531051964,
+   "max_ms": 0.11035,
+   "median_ms": 0.081625,
+   "min_ms": 0.06935,
+   "run_medians_ms": [
+    0.06935,
+    0.07289999999999999,
+    0.08,
+    0.09895000000000001,
+    0.0779,
+    0.08835000000000001,
+    0.07275000000000001,
+    0.08324999999999999,
+    0.11035,
+    0.0864
+   ],
+   "stdev_ms": 0.012739575258923582
+  },
+  "gameUpdate": {
+   "aa_delta_pct": 7.165548888104478,
+   "max_ms": 0.3536,
+   "median_ms": 0.291775,
+   "min_ms": 0.25845,
+   "run_medians_ms": [
+    0.25845,
+    0.272,
+    0.2859,
+    0.31915,
+    0.28600000000000003,
+    0.30475,
+    0.26539999999999997,
+    0.29755,
+    0.3536,
+    0.29835
+   ],
+   "stdev_ms": 0.027942421453171645
+  },
+  "scriptUpdate": {
+   "aa_delta_pct": 15.68627450980391,
+   "max_ms": 0.0083,
+   "median_ms": 0.005350000000000001,
+   "min_ms": 0.0046,
+   "run_medians_ms": [
+    0.0046,
+    0.0049,
+    0.0051,
+    0.0068,
+    0.0049,
+    0.0059,
+    0.0048,
+    0.0056,
+    0.0083,
+    0.0056
+   ],
+   "stdev_ms": 0.001138468757195871
+  },
+  "transportLinesUpdate": {
+   "aa_delta_pct": 6.907894736842104,
+   "max_ms": 0.12179999999999999,
+   "median_ms": 0.09287499999999999,
+   "min_ms": 0.0846,
+   "run_medians_ms": [
+    0.0846,
+    0.08775,
+    0.0914,
+    0.1041,
+    0.09104999999999999,
+    0.0956,
+    0.0863,
+    0.09434999999999999,
+    0.12179999999999999,
+    0.0967
+   ],
+   "stdev_ms": 0.0108952856777599
+  },
+  "wholeUpdate": {
+   "aa_delta_pct": 6.933292155651645,
+   "max_ms": 0.4105,
+   "median_ms": 0.3316,
+   "min_ms": 0.29635,
+   "run_medians_ms": [
+    0.29635,
+    0.31155,
+    0.325,
+    0.36705,
+    0.32435,
+    0.3456,
+    0.30295,
+    0.3382,
+    0.4105,
+    0.34395
+   ],
+   "stdev_ms": 0.03364930245273377
+  }
+ },
+ "mods": [
+  "base",
+  "better-belt-balancer",
+  "factorio-test",
+  "modular-balancer"
+ ],
+ "name": "r2-bbb-9x1-free",
+ "runs": 10,
+ "ticklens": {
+  "elapsed_s": 30.000736,
+  "engine_mod_max_ms": {
+   "factorio-test": 0.4199
+  },
+  "engine_mod_mean_ms": {
+   "factorio-test": 0.01182938888888889
+  },
+  "idle": 29960,
+  "sampled_mod_self_ms": {
+   "[level]": 3.0017746056098455,
+   "factorio-test": 2.001183070406564
+  },
+  "samples": 29983,
+  "scriptUpdate_mean_ms": 0.014071055555555555,
+  "ticks": 1800,
+  "wholeUpdate_mean_ms": 0.6187502777777778
+ },
+ "ticks_per_run": 900
+}

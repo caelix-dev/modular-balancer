@@ -75,6 +75,8 @@ function balancer.after_flush(_) end
 ---@field failed string? the shape (job_key) whose staged placement failed, not retried until the
 ---  group changes shape or is marked by an event
 ---@field failed_err string?
+---@field player_index integer? the last player whose action refreshed the group
+---@field stuck_shown boolean? a stuck drain's refusal was shown
 ---@field n integer network inputs of `placed`
 ---@field m integer network outputs of `placed`
 ---@field lanes boolean? `placed` has lane splitters (nil: no, a network from an older save)
@@ -102,12 +104,29 @@ local function state()
   st.drains = st.drains or {}
   st.spill_queue = st.spill_queue or {}
   st.retry = st.retry or {}
+  st.stuck = st.stuck or {}
   return st
 end
 
 local function arm()
   script.on_nth_tick(1, function()
     balancer.flush(balancer.tick_budget)
+  end)
+end
+
+-- Drains that got stuck (the new buffer full) are retried every STUCK_RETRY ticks while any is
+-- stuck: their new network may have emptied its buffer by itself. Registered only while a drain
+-- is stuck (st.stuck), re-set in on_load; nothing runs in the steady state.
+local STUCK_RETRY = 300
+local function arm_stuck()
+  script.on_nth_tick(STUCK_RETRY, function()
+    local st = storage.balancer
+    script.on_nth_tick(STUCK_RETRY, nil)
+    for gid in pairs(st.stuck or {}) do
+      st.drains[gid] = true
+    end
+    st.stuck = {}
+    arm()
   end)
 end
 
@@ -137,6 +156,9 @@ end
 function balancer.on_load()
   if balancer.pending(storage.balancer) then
     arm()
+  end
+  if storage.balancer and storage.balancer.stuck and next(storage.balancer.stuck) then
+    arm_stuck()
   end
 end
 
@@ -233,7 +255,7 @@ function balancer.notify(player_index, refused, surface_index)
 end
 
 local function link(a, b)
-  if a.valid and b and b.valid and a.linked_belt_neighbour ~= b then
+  if a and a.valid and b and b.valid and a.linked_belt_neighbour ~= b then
     a.connect_linked_belts(b)
   end
 end
@@ -390,7 +412,8 @@ local function retire(st, id, ctx, live)
   for _, list in ipairs({ rec.inputs, rec.outputs }) do
     for _, p in ipairs(list) do
       if p.visible and p.visible.valid then
-        ctx.pool[#ctx.pool + 1] = { entity = p.visible, gid = target, tiles = rec.tiles, sink = st.sinks[id], force_index = rec.force_index }
+        ctx.pool[#ctx.pool + 1] = { entity = p.visible, gid = target, tiles = rec.tiles, sink = st.sinks[id], force_index = rec.force_index,
+          retired = true }
       end
     end
   end
@@ -409,6 +432,11 @@ local function retire(st, id, ctx, live)
     if not trec then
       trec = new_rec()
       st.recs[target] = trec
+    end
+    if not trec.anchor then
+      -- a record not refreshed yet (its refresh deferred): until it is, the retired group's place
+      -- stands for it, so if it goes too its networks are found again or spilled there
+      trec.anchor, trec.tiles, trec.force_index = rec.anchor, rec.tiles, rec.force_index
     end
     for _, p in ipairs(nets) do
       trec.extra[#trec.extra + 1] = p
@@ -484,11 +512,23 @@ local function run_job(st, gid, job, ctx)
   if ctx.units <= 0 then
     return "pending"
   end
+  -- the group's force as it is now (forces merged since the job started: the old LuaForce is
+  -- invalid, and the entities already placed have moved to the new force)
+  local g = groups.get(gid)
+  if g then
+    job.force = g.force
+    if job.b then
+      job.b.placed.force = g.force
+    end
+  end
   if not (job.b or job.net) then
     -- generating cannot be split: a large network is generated only at the start of a tick's
     -- budget, so nothing else shares its tick
     if ctx.units < ctx.budget and math.max(job.n, job.m) > SMALL then
       return "pending"
+    end
+    if math.max(job.n, job.m) > SMALL then
+      st.last_generated = game.tick
     end
     local net = assert(network.build(job.n, job.m, { balance_lanes = job.lanes, recirc = job.recirc }))
     job.net = net -- plain tables, kept until the next step plans it
@@ -592,6 +632,9 @@ local function refresh_group(st, gid, ctx, player_index)
     rec.force_index = g.force_index
   end
 
+  if player_index and player_index > 0 then
+    rec.player_index = player_index -- shown a stuck drain's refusal later
+  end
   local n, m = #inputs, #outputs
   local want = groups.settings(gid)
   local key = job_key(n, m, want)
@@ -605,6 +648,7 @@ local function refresh_group(st, gid, ctx, player_index)
   end
   if rec.draining and #rec.draining > 0 then
     st.drains[gid] = true -- also resumes a drain that got stuck (the new buffer was full)
+    st.stuck[gid] = nil
   end
   if n > 0 and m > 0 then
     local stale = rec.placed and ((rec.lanes == true) ~= want.lanes or (rec.recirc ~= false) ~= want.recirc)
@@ -625,8 +669,9 @@ local function refresh_group(st, gid, ctx, player_index)
         status, err = "failed", rec.failed_err -- a staged placement of this shape failed
       else
         if not job then
+          st.job_seq = (st.job_seq or 0) + 1
           job = { key = key, n = n, m = m, lanes = want.lanes, recirc = want.recirc, tier = g.tier, force = g.force,
-            player_index = player_index }
+            player_index = player_index, seq = st.job_seq }
           st.jobs[gid] = job
         end
         status, err = run_job(st, gid, job, ctx)
@@ -705,8 +750,11 @@ local function link_shared(st, ctx)
             local other = st.recs[groups.of(p.far) or 0]
             if other and other.placed then
               for i, q in ipairs(other[side.theirs]) do
-                if q.kind == "shared" and q.tx == p.tx and q.ty == p.ty then
-                  link(rec.placed[side.own][k], other.placed[side.theirs][i])
+                -- while a rebuild is pending, a port beyond the old network's count has no
+                -- network side yet: it is linked when the new network is complete (relink)
+                local mine = rec.placed[side.own][k]
+                if mine and q.kind == "shared" and q.tx == p.tx and q.ty == p.ty then
+                  link(mine, other.placed[side.theirs][i])
                 end
               end
             end
@@ -757,8 +805,10 @@ local function cleanup(st, ctx)
       -- a port of a group whose refresh was deferred: left as it is, claimed or swapped back by
       -- a later flush
       st.loose[e.unit_number] = e
-    elseif e.valid and not ctx.claimed[e.unit_number] and ctx.units <= 0 and belt_io.edge_belt(e.name) then
-      -- out of budget (the ports of many removed groups): swapped back by a later flush
+    elseif e.valid and not ctx.claimed[e.unit_number] and ctx.units <= 0 and entry.retired and belt_io.edge_belt(e.name) then
+      -- out of budget (the ports of many removed groups): swapped back by a later flush. Only
+      -- removed groups' edges: a live group's dropped port (a failed rebuild) is swapped back
+      -- now, so its tile ends the flush as it began and nothing re-marks the group
       st.loose[e.unit_number] = e
     elseif e.valid and not ctx.claimed[e.unit_number] then
       touch(ctx, e)
@@ -823,17 +873,44 @@ local function drain_group(st, gid, ctx)
       table.remove(rec.draining, 1)
     elseif status == "stuck" then
       -- the new buffer is full (builder.max_buffer_slots): the rest waits, safe, in the sealed
-      -- old network until the group's next refresh resumes the drain
+      -- old network; retried every STUCK_RETRY ticks and at the group's next refresh. Shown once
+      -- to the player whose action started it.
       st.drains[gid] = nil
-      log("modular-balancer: group " .. gid .. ": old network not emptied, the buffer is full")
-      rec.refused[#rec.refused + 1] = { reason = "too-many-items", position = rec.anchor and rec.anchor.position or { x = 0, y = 0 } }
+      st.stuck[gid] = true
+      arm_stuck()
+      if not rec.stuck_shown then
+        rec.stuck_shown = true
+        log("modular-balancer: group " .. gid .. ": old network not emptied, the buffer is full")
+        local r = { reason = "too-many-items", position = rec.anchor and rec.anchor.position or { x = 0, y = 0 } }
+        if rec.anchor then
+          balancer.notify(rec.player_index, { r }, rec.anchor.surface_index)
+        end
+      end
       return
     else
       return
     end
   end
   st.drains[gid] = nil
+  rec.stuck_shown = nil
   builder.settle(rec.placed)
+end
+
+-- Where the networks of a removed record go: its anchor's surface and position. A missing anchor
+-- (not expected: retire gives a fresh record the retired one's) is never taken for a lost
+-- surface: the items go to the origin of surface 1 (always there), logged. Nil only when the
+-- anchor's surface itself is gone (its blocks and belts with it).
+---@return LuaSurface?, MapPosition?
+local function spill_place(a)
+  if not a then
+    log("modular-balancer: a removed network has no place recorded; its items go to the origin of surface 1")
+    return game.get_surface(1), { x = 0, y = 0 }
+  end
+  local s = game.get_surface(a.surface_index)
+  if s and s.valid then
+    return s, a.position
+  end
+  return nil, nil
 end
 
 -- Takes the networks of removed groups (st.spill_queue, from retire: no group took them) out
@@ -841,12 +918,11 @@ end
 local function spill_some(st, ctx)
   while ctx.units > 0 and #st.spill_queue > 0 do
     local sp = st.spill_queue[1]
-    local a = sp.anchor
-    local s = a and game.get_surface(a.surface_index)
+    local s, position = spill_place(sp.anchor)
     local p = sp.nets[1]
     if not p then
       table.remove(st.spill_queue, 1)
-    elseif not (s and s.valid) then
+    elseif not s then
       builder.destroy(p) -- the surface is gone, and its blocks and belts with it
       table.remove(sp.nets, 1)
     else
@@ -857,7 +933,7 @@ local function spill_some(st, ctx)
       sp.cursor = sp.cursor or {}
       for _, inv in ipairs(invs) do
         ctx.units = ctx.units - SPILL_COST * (#inv - inv.count_empty_stacks())
-        balancer.give(inv, sp.sink, s, a.position, sp.tiles, sp.force_index and game.forces[sp.force_index], sp.cursor)
+        balancer.give(inv, sp.sink, s, position --[[@as MapPosition]], sp.tiles, sp.force_index and game.forces[sp.force_index], sp.cursor)
       end
       if gone ~= false then
         table.remove(sp.nets, 1)
@@ -866,10 +942,20 @@ local function spill_some(st, ctx)
   end
 end
 
--- The staged work of a tick, within ctx.units: rebuild jobs, then drains, then spills, each in
--- group id order.
+-- Rebuild jobs in the order they were started (fair: a group with a low id does not overtake).
+---@return integer[]
+local function jobs_in_order(st)
+  local ids = sorted_keys(st.jobs)
+  table.sort(ids, function(a, b)
+    return (st.jobs[a].seq or 0) < (st.jobs[b].seq or 0) or ((st.jobs[a].seq or 0) == (st.jobs[b].seq or 0) and a < b)
+  end)
+  return ids
+end
+
+-- The staged work of a tick, within ctx.units: rebuild jobs (in the order they started), then
+-- drains, then spills (group id order).
 local function work(st, ctx)
-  for _, gid in ipairs(sorted_keys(st.jobs)) do
+  for _, gid in ipairs(jobs_in_order(st)) do
     if ctx.units <= 0 then
       return
     end
@@ -877,6 +963,9 @@ local function work(st, ctx)
     local rec = st.recs[gid]
     if not (rec and groups.get(gid)) then
       abort_job(st, gid)
+    elseif ctx.deferred and ctx.deferred[gid] then
+      -- its refresh waits for a later tick (budget) and may change its shape: no work on a
+      -- placement that may be dropped (review m3)
     else
       local status, err = run_job(st, gid, job, ctx)
       if status == "done" then
@@ -929,6 +1018,18 @@ function balancer.flush(budget)
   local ids = sorted_keys(dirty)
   local ctx = { pool = {}, claimed = {}, spills = {}, refreshed = {}, leftovers = {}, touched = {},
     units = budget or math.huge, budget = budget or math.huge, retry = retry, deferred = {} }
+  -- a large network waiting to be generated goes first, before any refresh, every other tick, so
+  -- a steady stream of small refreshes (robots building near balancers) cannot starve it
+  -- (review m1). Its group is not dirty now (a refresh may change its shape).
+  if budget and st.last_generated ~= game.tick - 1 then
+    for _, gid in ipairs(jobs_in_order(st)) do
+      local job = st.jobs[gid] --[[@as table]]
+      if not (job.b or job.net) and math.max(job.n, job.m) > SMALL and not dirty[gid] and st.recs[gid] and groups.get(gid) then
+        run_job(st, gid, job, ctx)
+        break
+      end
+    end
+  end
   local live = { set = {} } -- array of group ids, and their set
   for _, id in ipairs(ids) do
     if groups.get(id) then
@@ -1042,7 +1143,8 @@ function balancer.spill_clear(inv, s, position, tiles, force, cursor)
         k = 1
       end
       local t = ring[k] --[[@as {[1]: integer, [2]: integer}]]
-      if not taken[t[1] .. "," .. t[2]] then
+      -- never a tile that destroys what is dropped on it (a space platform's empty space)
+      if not taken[t[1] .. "," .. t[2]] and not s.get_tile(t[1], t[2]).prototype.destroys_dropped_items then
         return t
       end
     end
@@ -1063,8 +1165,11 @@ function balancer.spill_clear(inv, s, position, tiles, force, cursor)
       end
     end
     if st.valid_for_read and not placed then
-      -- no free tile within the rings: never drop the stack
-      s.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true, force = force })
+      -- no free tile within the rings: never drop the stack (on a platform next to its hub, the
+      -- middle of its foundation, rather than at a spot that may be over empty space)
+      local hub = s.platform and s.platform.hub
+      s.spill_item_stack({ position = hub and hub.valid and hub.position or position, stack = st, enable_looted = true, allow_belts = false,
+        drop_full_stack = true, force = force })
     end
     st.clear()
   end
@@ -1099,6 +1204,11 @@ function balancer.give(inv, sink, s, position, tiles, force, cursor)
     -- platform can land in space, where no robot fetches them)
     platform = s.platform
   end
+  -- on a platform, what the sink does not take goes to the hub before anything is spilled
+  local overflow = s.platform and s.platform.hub
+  if overflow and not overflow.valid then
+    overflow = nil
+  end
   ---@type LuaLogisticNetwork?
   local net
   ---@type LuaEntity?
@@ -1125,6 +1235,14 @@ function balancer.give(inv, sink, s, position, tiles, force, cursor)
         st.clear()
       elseif n > 0 then
         st.count = st.count - n
+      end
+      if st.valid_for_read and overflow and overflow ~= hub then
+        local m = overflow.insert(st)
+        if m >= st.count then
+          st.clear()
+        elseif m > 0 then
+          st.count = st.count - m
+        end
       end
     end
   end
@@ -1198,6 +1316,8 @@ end
 -- The hidden surface is about to go (deleted or cleared by another mod or a command): every
 -- network's items are spilled at its group, the networks are dropped, and every group is marked,
 -- so the next flush places new networks on a new surface. Nothing is deleted.
+-- Unbounded on purpose (review m7): it runs in the event before the hidden surface goes, so every
+-- network must be out before the event returns. A rare admin or mod action.
 function balancer.drop_networks()
   local st = state()
   local ids = {}
@@ -1214,12 +1334,14 @@ function balancer.drop_networks()
   for _, id in ipairs(ids) do
     local rec = st.recs[id]
     local nets = nets_of(rec)
-    local a = rec.anchor
-    local s = a and game.get_surface(a.surface_index)
+    local s, position
+    if #nets > 0 then
+      s, position = spill_place(rec.anchor)
+    end
     for _, p in ipairs(nets) do
-      if s and s.valid then
+      if s then
         for _, inv in ipairs((builder.take(p))) do
-          balancer.spill_clear(inv, s, a.position, rec.tiles, rec.force_index and game.forces[rec.force_index])
+          balancer.spill_clear(inv, s, position --[[@as MapPosition]], rec.tiles, rec.force_index and game.forces[rec.force_index])
         end
       else
         builder.destroy(p)

@@ -8,7 +8,7 @@ A Factorio 2.1 mod that provides a modular N:M belt balancer. Place 1x1 blocks i
 - A belt pointing straight into a block is an input; a belt leaving a block straight is an output. Belts running alongside a block are neither. The last tile of each attached belt is replaced by a linked belt of the same belt (an "edge") that is joined to a hidden splitter network; removing the block puts the belt back with its items.
 - Every output gets an equal share of the input, inputs are drawn equally when the outputs back up, and the share an output does not take is spread equally over the others.
 - Inserters taking from a block count as one more output of that block (several inserters on one block split that block's share); inserters putting into a block count as one input.
-- Removing the last block of a balancer hands everything inside its network to whoever removed it (a player's inventory, a robot's storage chests, a space platform's hub). A large, full balancer can hold thousands of items. When it is destroyed (nobody mines it) they are spilled next to it, never on its tiles, marked for construction robots to collect; on a space platform they go to the platform's hub instead.
+- Removing the last block of a balancer hands everything inside its network to whoever removed it (a player's inventory, a robot's storage chests, a space platform's hub). A large, full balancer can hold thousands of items. When it is destroyed (nobody mines it) they are spilled next to it, never on its tiles, marked for construction robots to collect; on a space platform they go to the platform's hub instead (as does whatever a player's inventory cannot take), and only what the hub refuses is spilled, never onto empty space.
 
 ## Settings
 

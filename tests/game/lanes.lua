@@ -613,9 +613,10 @@ describe("lanes", function()
     end)
   end)
 
-  -- Task 3 review M6: a rebuild for a setting that is refused (too many items) keeps the old
+  -- Task 3 review M6: a rebuild for a setting that is refused (it cannot be placed) keeps the old
   -- network, and the group's settings go back to that network's, so the GUI shows what the
-  -- balancer does. The refusal is forced by a stand-in builder.start.
+  -- balancer does. The refusal is forced by the placement test hook (builder.fail_after); a staged
+  -- rebuild can no longer be refused for too many items (a full buffer only pauses its drain).
   test("refused_rebuild_sets_the_settings_back", function()
     async(700)
     local o, box = area(12, 8)
@@ -629,13 +630,10 @@ describe("lanes", function()
       local placed = rec.placed
       local total = H.count_box(box, ITEM)
       assert(gui.set(gid, { recirc = false }), "the setting did not change")
-      -- the staged rebuild starts its placement with builder.start (scripts/balancer.lua)
-      local real = builder.start
-      builder.start = function()
-        return nil, "too-many-items"
-      end
+      -- the placement fails (test hook): the real refusal a settings rebuild can still get
+      builder.fail_after = 1
       local ok, err = pcall(balancer.flush)
-      builder.start = real
+      builder.fail_after = nil
       assert(ok, err)
       local r2 = rec_of(a)
       assert(r2.placed == placed and r2.recirc ~= false, "the old network was not kept")
@@ -643,7 +641,7 @@ describe("lanes", function()
       for _, r in ipairs(r2.refused) do
         reasons[#reasons + 1] = r.reason
       end
-      assert(table.concat(reasons, ","):find("too-many-items", 1, true), "no refusal: " .. serpent.line(reasons))
+      assert(table.concat(reasons, ","):find("rebuild-failed", 1, true), "no refusal: " .. serpent.line(reasons))
       same(groups.settings(gid), false, true, "settings after the refused rebuild")
       assert(H.count_box(box, ITEM) == total, "items: " .. H.count_box(box, ITEM) .. " of " .. total)
       -- the next change rebuilds normally

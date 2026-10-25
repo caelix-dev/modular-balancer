@@ -49,20 +49,47 @@ local GFX = "__modular-balancer__/graphics/"
 local gfx = require("prototypes.gfx")
 local FRAMES = #look.masks()
 
-local function pictures(colour)
-  local function layer(file, shadow)
-    return {
-      filename = gfx.dir .. file,
-      priority = "high",
-      width = gfx.frame,
-      height = gfx.frame,
-      variation_count = FRAMES,
-      line_length = 8,
-      scale = gfx.scale,
-      draw_as_shadow = shadow or nil,
+-- One Animation per neighbourhood: that frame of the static sheet (held for the whole loop with
+-- repeat_count), the machinery loop in the top opening (the same 16 frames for every
+-- neighbourhood) and the shadow. A prototype animation: no script runs for it.
+local ANIM_FRAMES = 16
+local function animations(colour)
+  local list = {}
+  for i = 1, FRAMES do
+    local x = ((i - 1) % 8) * gfx.frame
+    local y = math.floor((i - 1) / 8) * gfx.frame
+    local function still(file, shadow)
+      return {
+        filename = gfx.dir .. file,
+        priority = "high",
+        width = gfx.frame,
+        height = gfx.frame,
+        x = x,
+        y = y,
+        frame_count = 1,
+        repeat_count = ANIM_FRAMES,
+        scale = gfx.scale,
+        draw_as_shadow = shadow or nil,
+      }
+    end
+    list[i] = {
+      layers = {
+        still("balancer-" .. colour .. ".png"),
+        {
+          filename = gfx.dir .. "machinery-" .. colour .. ".png",
+          priority = "high",
+          width = gfx.frame,
+          height = gfx.frame,
+          frame_count = ANIM_FRAMES,
+          line_length = 8,
+          animation_speed = 0.4,
+          scale = gfx.scale,
+        },
+        still("balancer-shadow.png", true),
+      },
     }
   end
-  return { sheet = { layers = { layer("balancer-" .. colour .. ".png"), layer("balancer-shadow.png", true) } } }
+  return list
 end
 
 -- The effects list of the technology that unlocks `recipe`, or nil.
@@ -130,7 +157,7 @@ for i, tier in ipairs(TIERS) do
     fast_replaceable_group = "mb-balancer",
     next_upgrade = next_tier and ("mb-balancer-" .. next_tier.name) or nil,
     render_layer = "object",
-    pictures = pictures(colour),
+    animations = animations(colour),
     random_variation_on_create = false,
     hidden = tier.orphan or nil,
     hidden_in_factoriopedia = tier.orphan or nil,

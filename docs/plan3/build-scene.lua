@@ -5,7 +5,8 @@
 -- peaceful mode, enemies removed, the character (when one exists) invulnerable.
 -- Paste as the body of an fdev `exec_lua` call (Space Age preset for the turbo tier), run a few
 -- thousand ticks (the hidden networks fill first), run tidy-scene.lua after `gui_connect` (the
--- freeplay crash site lands when the player joins).
+-- freeplay crash site lands when the player joins). Per tier: the L-shape and the 1x8 row, a
+-- vanilla splitter, two blocks, an underground belt pair and an assembler side by side.
 local s = game.surfaces.nauvis
 local D = defines.direction
 s.peaceful_mode = true
@@ -96,6 +97,19 @@ for i, tier in ipairs(TIERS) do
   source(tier, ox + 13, -1, D.south, 3)
   sink(tier, ox + 12, 1, D.south, 3)
   sink(tier, ox + 13, 1, D.south, 3)
+  -- two blocks on two belts (the same feed as the splitter), for the colour check
+  for _, x in ipairs({ 15, 16 }) do
+    ce({ name = block, position = { ox + x + 0.5, 0.5 } })
+    source(tier, ox + x, -1, D.south, 3)
+    sink(tier, ox + x, 1, D.south, 3)
+  end
+  -- a vanilla underground belt pair and an assembler, for the colour and the wear level
+  local ug = tier[2]:gsub("transport%-belt", "underground-belt")
+  ce({ name = ug, position = { ox + 19.5, 0.5 }, direction = D.south, type = "input" })
+  ce({ name = ug, position = { ox + 19.5, 3.5 }, direction = D.south, type = "output" })
+  source(tier, ox + 19, -1, D.south, 3)
+  sink(tier, ox + 19, 4, D.south, 2)
+  ce({ name = "assembling-machine-2", position = { ox + 23.5, 1.5 } })
 end
 -- built without events: raise them for the blocks now, so the balancers pick their belts up
 for _, e in pairs(s.find_entities_filtered({ area = area, type = "simple-entity-with-owner" })) do

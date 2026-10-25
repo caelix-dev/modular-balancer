@@ -5,10 +5,11 @@ Run from the repo root:  python tools/render/pack.py [raw_dir]
 For each block render it cuts away everything outside the block's tile on joined sides (the
 neighbours' housing, modelled only so the outline bevels right), then downsamples the 3x
 supersampled render to two sets:
-  graphics/entity/balancer/hr/  64 px per tile (frames 112 px, used at scale 0.5)
-  graphics/entity/balancer/lr/  32 px per tile (frames 56 px, used at scale 1)
+  graphics/entity/balancer/hr/  64 px per tile (frames 128 px, used at scale 0.5)
+  graphics/entity/balancer/lr/  32 px per tile (frames 64 px, used at scale 1)
 with a slight blur, like the soft look of vanilla sprites. Sheets: balancer-<tier>.png (47 frames,
-8 per line, in the order of scripts/look.lua), balancer-shadow.png, hood-<tier>.png and
+8 per line, in the order of scripts/look.lua), machinery-<tier>.png (16 animation frames, 8 per
+line), balancer-shadow.png, hood-<tier>.png and
 hood-shadow.png (6 frames: hood on the N, E, S, W, N, E side), and icons balancer-<tier>.png.
 """
 
@@ -23,12 +24,13 @@ RAW = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "tools", "render"
 OUT = os.path.join(ROOT, "graphics", "entity", "balancer")
 ICONS = os.path.join(ROOT, "graphics", "icons")
 
-RES = 336  # raw frame (1.75 tiles, 192 px per tile)
+RES = 384  # raw frame (2 tiles, 192 px per tile)
 PX = 192
 TILE0, TILE1 = (RES - PX) // 2, (RES + PX) // 2  # the tile's footprint, columns and rows
-LIFT = 48  # the housing top shows 48 raw px above its footprint
+LIFT = 75  # the housing top (0.55 high) shows 0.707 * 0.55 * 192 raw px above its footprint
+FRAMES = 16  # machinery animation frames
 TIERS = ["basic", "fast", "express", "turbo"]
-SETS = {"hr": (112, 0.45), "lr": (56, 0.35)}  # frame px, blur radius
+SETS = {"hr": (128, 0.45), "lr": (64, 0.35)}  # frame px, blur radius
 
 N, E, S, W, NE, SE, SW, NW = 1, 2, 4, 8, 16, 32, 64, 128
 
@@ -93,6 +95,7 @@ def main():
     hood_shadow = {s: shadow(load("hood-shadow-%s.png" % s)) for s in "nesw"}
     raw_blocks = {(t, m): clip(load("block-%s-%03d.png" % (t, m)), m) for t in TIERS for m in ms}
     raw_hoods = {(t, s): load("hood-%s-%s.png" % (t, s)) for t in TIERS for s in "nesw"}
+    raw_anim = {(t, f): load("anim-%s-%02d.png" % (t, f)) for t in TIERS for f in range(FRAMES)}
     for key, (size, blur) in SETS.items():
         d = os.path.join(OUT, key)
         os.makedirs(d, exist_ok=True)
@@ -103,6 +106,8 @@ def main():
         for t in TIERS:
             sheet([shrink(raw_blocks[(t, m)], size, blur) for m in ms], 8, size).save(
                 os.path.join(d, "balancer-%s.png" % t), optimize=True)
+            sheet([shrink(raw_anim[(t, f)], size, blur) for f in range(FRAMES)], 8, size).save(
+                os.path.join(d, "machinery-%s.png" % t), optimize=True)
             h = {s: shrink(raw_hoods[(t, s)], size, blur) for s in "nesw"}
             sheet([h[s] for s in order], 6, size).save(os.path.join(d, "hood-%s.png" % t), optimize=True)
     # icons: a lone block with an input hood above and an output hood below
@@ -111,6 +116,7 @@ def main():
         scene = Image.new("RGBA", (RES, RES + 2 * PX), (0, 0, 0, 0))
         scene.alpha_composite(raw_hoods[(t, "s")], (0, 0))
         scene.alpha_composite(raw_blocks[(t, 0)], (0, PX))
+        scene.alpha_composite(raw_anim[(t, 0)], (0, PX))
         scene.alpha_composite(raw_hoods[(t, "n")], (0, 2 * PX))
         icon = scene.crop(scene.getbbox())
         k = 62 / max(icon.size)

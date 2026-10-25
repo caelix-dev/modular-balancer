@@ -56,7 +56,7 @@ def main():
     for ratio, copies in RATIOS:
         n, m = ratio.split("x")
         print(f"### {copies} x {n}:{m}\n")
-        print("| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? "
+        print("| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | below 2 SE? "
               "| splitters / linked belts per network |")
         print("| --- | --- | --- | --- | --- | --- | --- |")
         for mode in ("free", "thr"):
@@ -85,7 +85,7 @@ def main():
         print()
     for kind, label in VARIANTS:
         f = fails[kind]
-        print(f"- {label}: " + ("no worse than BBB within the noise at every ratio" if not f else "worse than BBB at " + ", ".join(f)))
+        print(f"- {label}: " + ("below 2 SE of BBB at every ratio" if not f else "more than 2 SE above BBB at " + ", ".join(f)))
 
 
 if __name__ == "__main__":

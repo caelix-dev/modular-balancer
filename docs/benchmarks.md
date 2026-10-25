@@ -11,11 +11,15 @@ The user then decided to shrink the hidden network and measure again (follow-up 
 that second round. Per the stop rule nothing else was changed and no toggle was added.
 
 - **Script time: met.** There is still no per-tick script.
-- **Total update time: not met.** The optimisation made the hidden networks 5-24 % smaller. The
+- **Total update time: not met.** The optimisation made the hidden networks 6-25 % fewer
+  splitters (17:2 recirculating 119 to 112, 2:3 plain 8 to 6; 9:1 is unchanged). The
   recirculating network now costs 1.27x-2.14x BBB's total update time with all outputs free and
   1.29x-2.11x with one throttled. It was 1.31x-2.93x before, in the same session.
-- **Without recirculation ("how far from BBB?"):** the optimised plain network is within the noise
-  of BBB at 2:3 (1.01x, 1.02x), 8:3 free (1.07x), 9:1 and 64:64 free (0.99x). It is worse at:
+- **Without recirculation ("how far from BBB?"):** the optimised plain network is close to BBB
+  at 2:3 (1.01x free, 1.02x throttled) and 9:1 (1.05x, 0.98x), and with all outputs free only at
+  8:3 (1.07x) and 64:64 (0.99x). Given the run-to-run spread of round 2 (below), these cells
+  could go either way on an idle machine: they show parity within a few percent, not a firm tie
+  or win. It is worse at:
   - 3:5 (1.08x, 1.17x);
   - 8:3 throttled (1.09x);
   - 17:2 (1.15x, 1.42x);
@@ -36,7 +40,13 @@ that second round. Per the stop rule nothing else was changed and no toggle was 
 | 33:5 | free / throttled | 1.59x / 1.81x | 1.37x / 1.91x | 1.29x / 1.72x | 1.16x / 1.54x |
 | 64:64 | free / throttled | 2.93x / 2.69x | 2.14x / 2.11x | **1.12x** / 1.32x | **0.99x** / 1.11x |
 
-Bold: within the noise of BBB. Noise is 2 SE of the difference of the run-median means.
+Bold: the difference to BBB is below 2 SE of the run-median means. That bound (about 4-5 % of
+BBB) is the statistical noise of the 10 runs of one block only. The run-to-run spread in round 2
+was larger: A/A deltas between two identical instances reached 15-35 % on some saves, and some
+"after" cells came out slower than "before" although their networks are strictly smaller (2:3
+throttled 1.40x to 1.44x, 17:2 throttled 1.44x to 1.52x, 33:5 throttled 1.81x to 1.91x, plain
+8:3 throttled 1.06x to 1.09x). Read differences under about 10 % as unresolved, and the bold
+cells as "close to BBB", not as a pass.
 
 **Caveat: the machine was busy during round 2.** The user's desktop applications kept CPU load at
 50-80 %, against an idle machine in round 1, so absolute times are about 20-35 % higher than in
@@ -57,10 +67,17 @@ comparable; absolute numbers across blocks and rounds are not.
   next stage pairs too, and fold() removes it.
 - **Every guarantee is unchanged.** The offline suite checks exact N:M, equal input draw under
   backpressure, throughput-unlimited for any subset (max flow and the splitter model), outputs equal
-  for any input mix, and recirculation with slow outputs. It is exhaustive up to 8:8 plus 16:16,
-  3:16 and 16:3, sampled up to 64, and passes 43/43, including two new tests:
+  for any input mix and keep-lanes / balance-lanes, exhaustive up to 8:8 plus 16:16, 3:16 and 16:3
+  and sampled up to 64 (plus 100:3, 1:40). Since the review fix round these checks run in both
+  modes, recirculating (the default) and plain (`recirc = false`). Recirculation with slow outputs
+  is checked for the recirculating mode. It passes 43/43, including two new tests:
   - `benes_core_sizes`;
   - `no_redundant_splitter_pairs`.
+- **Existing groups keep their networks.** A group is rebuilt only when its number of inputs or
+  outputs changes, so groups from older saves keep the larger pre-optimisation networks (same
+  guarantees, same storage format, no migration). The sizes and numbers here, and the README
+  sizes, apply to groups built or resized after this change. A forced rebuild on load is not done
+  because of the rebuild hitch (below).
 - **In-game suites:** 181/181 (vanilla) and 183/183 (space-age).
 
 Splitters / linked belts per network (counted in the saves; the buffer's merge splitter is
@@ -95,8 +112,9 @@ Two structural limits remain:
 - **The input balancer F is costly at awkward sizes.** At 33:5 it is a butterfly over 64 wires,
   already as large as BBB's whole network.
 - **Throughput-unlimited costs more than one butterfly.** BBB's 64:64 is one butterfly (192
-  splitters), which is not throughput-unlimited. The cheapest throughput-unlimited 64:64 is a Benes
-  network of 352 splitters.
+  splitters), which is not throughput-unlimited. The smallest throughput-unlimited 64:64 this
+  generator builds is a Benes network of 352 splitters (whether a smaller one exists was not
+  studied).
 
 ### Review Focus 1: `load_time_with_200_balancers`
 
@@ -112,8 +130,8 @@ map, and "Loading script.dat" to "Hosting game" for the script part (raw/load-ti
 
 - Loading costs about 1 ms per balancer, of which 0.3 ms is the storage. This is a deserialisation
   cost, not a rebuild: on_load only re-registers the flush handler when work is pending.
-- Load time grows with the save's size and no network is rebuilt on load. BBB's script part is 3.5x
-  longer (its wasm runtime).
+- Load time grows with the save's size and no network is rebuilt on load. BBB's script part is
+  3.5x longer (the cause was not investigated).
 
 ### Rebuild hitch
 
@@ -130,7 +148,8 @@ network. `bench_add_output` adds one output to some groups and times `balancer.f
   for 6 s.
 - This is Review Focus 5 (Task 5 `rebuild_cost_is_bounded`: bound the work per flush and spread it
   over ticks). The README's size note now gives these numbers.
-- Measured on the busy machine, so the times are upper bounds.
+- Measured on the busy machine, so the times are likely somewhat high; they are not strict
+  bounds.
 
 ### Round 2 tables
 
@@ -140,7 +159,7 @@ optimisation.
 
 #### 50 x 2:3
 
-| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | below 2 SE? | splitters / linked belts per network |
 | --- | --- | --- | --- | --- | --- | --- |
 | Better Belt Balancer | all free | 0.295 [0.265..0.349] (20 runs) | | | | 4 + 3 lane / 16 (+4 belts) |
 | recirculating, before | all free | 0.483 [0.450..0.530] | 1.64x (+0.188) | 0.020 | **no** | 32 / 125 |
@@ -155,7 +174,7 @@ optimisation.
 
 #### 50 x 3:5
 
-| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | below 2 SE? | splitters / linked belts per network |
 | --- | --- | --- | --- | --- | --- | --- |
 | Better Belt Balancer | all free | 0.378 [0.334..0.426] (20 runs) | | | | 12 + 6 lane / 38 (+16 belts) |
 | recirculating, before | all free | 0.496 [0.445..0.570] | 1.31x (+0.118) | 0.024 | **no** | 44 / 170 |
@@ -170,7 +189,7 @@ optimisation.
 
 #### 50 x 8:3
 
-| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | below 2 SE? | splitters / linked belts per network |
 | --- | --- | --- | --- | --- | --- | --- |
 | Better Belt Balancer | all free | 0.437 [0.386..0.531] (20 runs) | | | | 12 + 8 lane / 38 (+16 belts) |
 | recirculating, before | all free | 0.595 [0.535..0.658] | 1.36x (+0.159) | 0.031 | **no** | 46 / 175 |
@@ -185,7 +204,7 @@ optimisation.
 
 #### 50 x 9:1
 
-| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | below 2 SE? | splitters / linked belts per network |
 | --- | --- | --- | --- | --- | --- | --- |
 | Better Belt Balancer | all free | 0.340 [0.296..0.410] (20 runs) | | | | 32 + 16 lane / 82 (+48 belts) |
 | recirculating, before | all free | 0.307 [0.288..0.330] | 0.90x (-0.033) | 0.017 | yes | 21 / 66 |
@@ -200,7 +219,7 @@ optimisation.
 
 #### 50 x 17:2
 
-| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | below 2 SE? | splitters / linked belts per network |
 | --- | --- | --- | --- | --- | --- | --- |
 | Better Belt Balancer | all free | 0.356 [0.321..0.412] (20 runs) | | | | 80 + 32 lane / 196 (+128 belts) |
 | recirculating, before | all free | 0.506 [0.450..0.596] | 1.42x (+0.150) | 0.031 | **no** | 119 / 459 |
@@ -215,7 +234,7 @@ optimisation.
 
 #### 50 x 33:5
 
-| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | below 2 SE? | splitters / linked belts per network |
 | --- | --- | --- | --- | --- | --- | --- |
 | Better Belt Balancer | all free | 0.960 [0.820..1.379] (20 runs) | | | | 192 + 64 lane / 458 (+320 belts) |
 | recirculating, before | all free | 1.529 [1.303..2.034] | 1.59x (+0.569) | 0.161 | **no** | 298 / 1156 |
@@ -230,7 +249,7 @@ optimisation.
 
 #### 4 x 64:64
 
-| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | within noise? | splitters / linked belts per network |
+| variant | outputs | wholeUpdate ms/tick median [min..max] | vs BBB | noise | below 2 SE? | splitters / linked belts per network |
 | --- | --- | --- | --- | --- | --- | --- |
 | Better Belt Balancer | all free | 0.423 [0.349..0.710] (20 runs) | | | | 192 + 64 lane / 576 (+320 belts) |
 | recirculating, before | all free | 1.238 [0.959..1.369] | 2.93x (+0.815) | 0.096 | **no** | 960 / 3714 |
@@ -243,10 +262,10 @@ optimisation.
 | plain (recirc off), before | one throttled | 0.615 [0.495..0.710] | 1.32x (+0.148) | 0.049 | **no** | 384 / 1538 |
 | plain (recirc off), after | one throttled | 0.517 [0.470..0.649] | 1.11x (+0.050) | 0.041 | **no** | 352 / 1410 |
 
-- recirculating, before: worse than BBB at 2:3 all free (1.64x), 2:3 one throttled (1.40x), 3:5 all free (1.31x), 3:5 one throttled (1.42x), 8:3 all free (1.36x), 8:3 one throttled (1.41x), 17:2 all free (1.42x), 17:2 one throttled (1.44x), 33:5 all free (1.59x), 33:5 one throttled (1.81x), 64:64 all free (2.93x), 64:64 one throttled (2.69x)
-- recirculating, after: worse than BBB at 2:3 all free (1.35x), 2:3 one throttled (1.44x), 3:5 all free (1.27x), 3:5 one throttled (1.42x), 8:3 all free (1.27x), 8:3 one throttled (1.29x), 17:2 all free (1.29x), 17:2 one throttled (1.52x), 33:5 all free (1.37x), 33:5 one throttled (1.91x), 64:64 all free (2.14x), 64:64 one throttled (2.11x)
-- plain (recirc off), before: worse than BBB at 2:3 all free (1.19x), 2:3 one throttled (1.09x), 3:5 all free (1.33x), 3:5 one throttled (1.33x), 8:3 all free (1.18x), 8:3 one throttled (1.06x), 17:2 all free (1.28x), 17:2 one throttled (1.49x), 33:5 all free (1.29x), 33:5 one throttled (1.72x), 64:64 one throttled (1.32x)
-- plain (recirc off), after: worse than BBB at 3:5 all free (1.08x), 3:5 one throttled (1.17x), 8:3 one throttled (1.09x), 17:2 all free (1.15x), 17:2 one throttled (1.42x), 33:5 all free (1.16x), 33:5 one throttled (1.54x), 64:64 one throttled (1.11x)
+- recirculating, before: more than 2 SE above BBB at 2:3 all free (1.64x), 2:3 one throttled (1.40x), 3:5 all free (1.31x), 3:5 one throttled (1.42x), 8:3 all free (1.36x), 8:3 one throttled (1.41x), 17:2 all free (1.42x), 17:2 one throttled (1.44x), 33:5 all free (1.59x), 33:5 one throttled (1.81x), 64:64 all free (2.93x), 64:64 one throttled (2.69x)
+- recirculating, after: more than 2 SE above BBB at 2:3 all free (1.35x), 2:3 one throttled (1.44x), 3:5 all free (1.27x), 3:5 one throttled (1.42x), 8:3 all free (1.27x), 8:3 one throttled (1.29x), 17:2 all free (1.29x), 17:2 one throttled (1.52x), 33:5 all free (1.37x), 33:5 one throttled (1.91x), 64:64 all free (2.14x), 64:64 one throttled (2.11x)
+- plain (recirc off), before: more than 2 SE above BBB at 2:3 all free (1.19x), 2:3 one throttled (1.09x), 3:5 all free (1.33x), 3:5 one throttled (1.33x), 8:3 all free (1.18x), 8:3 one throttled (1.06x), 17:2 all free (1.28x), 17:2 one throttled (1.49x), 33:5 all free (1.29x), 33:5 one throttled (1.72x), 64:64 one throttled (1.32x)
+- plain (recirc off), after: more than 2 SE above BBB at 3:5 all free (1.08x), 3:5 one throttled (1.17x), 8:3 one throttled (1.09x), 17:2 all free (1.15x), 17:2 one throttled (1.42x), 33:5 all free (1.16x), 33:5 one throttled (1.54x), 64:64 one throttled (1.11x)
 
 The rest of this document is round 1, before the optimisation, on an idle machine.
 

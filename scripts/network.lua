@@ -338,6 +338,7 @@ end
 -- does not do anyway (that node splits and draws equally on its own): its inputs go straight
 -- to that node. Returns true if it removed any.
 local function fold(b)
+  ---@type table<integer, table<integer, mb.Edge>>
   local out_of = {}
   for _, ed in ipairs(b.edges) do
     local f = ed.from
@@ -348,13 +349,21 @@ local function fold(b)
   end
   local drop, target = {}, {}
   for _, n in ipairs(b.nodes) do
-    local o = n.kind == "splitter" and out_of[n.id]
-    local o1, o2 = o and o[1], o and o[2]
-    if o1 and o2 and INTERNAL[o1.to.kind] and o1.to.kind == o2.to.kind and o1.to.id == o2.to.id
-      and not target[n.id] and not (o1.to.kind == "splitter" and drop[o1.to.id]) then
-      drop[n.id] = { [1] = o1.to, [2] = o2.to }
-      if o1.to.kind == "splitter" then
-        target[o1.to.id] = true
+    ---@type table<integer, mb.Edge>?
+    local o = nil
+    if n.kind == "splitter" then
+      o = out_of[n.id]
+    end
+    ---@type mb.Port?, mb.Port?
+    local t1, t2 = nil, nil
+    if o and o[1] and o[2] then
+      t1, t2 = o[1].to, o[2].to
+    end
+    if t1 and t2 and INTERNAL[t1.kind] and t1.kind == t2.kind and t1.id == t2.id
+      and not target[n.id] and not (t1.kind == "splitter" and drop[t1.id]) then
+      drop[n.id] = { [1] = t1, [2] = t2 }
+      if t1.kind == "splitter" then
+        target[t1.id] = true
       end
     end
   end

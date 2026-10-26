@@ -9,7 +9,7 @@ supersampled render to two sets:
   graphics/entity/balancer/lr/  32 px per tile (frames 64 px, used at scale 1)
 with no extra blur (Lanczos only, as crisp as vanilla's HR sprites; shadows slightly blurred). Sheets: balancer-<tier>.png (47 frames,
 8 per line, in the order of scripts/look.lua), machinery-<tier>.png (16 animation frames, 8 per
-line), balancer-shadow.png, hood-<tier>.png and
+line), balancer-shadow.png, hood-<tier>-in.png / hood-<tier>-out.png (roof chevrons toward / away from the block) and
 hood-shadow.png (6 frames: hood on the N, E, S, W, N, E side), and icons balancer-<tier>.png.
 """
 
@@ -27,7 +27,7 @@ ICONS = os.path.join(ROOT, "graphics", "icons")
 RES = 384  # raw frame (2 tiles, 192 px per tile)
 PX = 192
 TILE0, TILE1 = (RES - PX) // 2, (RES + PX) // 2  # the tile's footprint, columns and rows
-LIFT = 75  # the housing top (0.55 high) shows 0.707 * 0.55 * 192 raw px above its footprint
+LIFT = 69  # the housing top (0.51 high) shows 0.707 * 0.51 * 192 raw px above its footprint
 FRAMES = 16  # machinery animation frames
 TIERS = ["basic", "fast", "express", "turbo"]
 SETS = {"hr": (128, 0.0), "lr": (64, 0.0)}  # frame px, blur radius (none: as crisp as vanilla HR)
@@ -53,8 +53,6 @@ def load(name):
 
 
 def clip(img, mask):
-    """Nothing to cut: the block is modelled without its neighbours (round 8)."""
-    return img
     a = np.array(img)
     if mask & W:
         a[:, :TILE0] = 0
@@ -65,19 +63,6 @@ def clip(img, mask):
     if mask & S:
         a[TILE1 - LIFT:, :] = 0
     return Image.fromarray(a, "RGBA")
-
-
-def outline(img, strength=0.55):
-    """Darkens the outermost pixels of the silhouette, like the dark rim vanilla sprites have."""
-    import numpy as np
-    from PIL import ImageFilter as F
-    a = img.getchannel("A")
-    inner = a.filter(F.MinFilter(3))
-    rim = np.clip((np.asarray(a, float) - np.asarray(inner, float)) / 255.0, 0, 1)
-    rgb = np.asarray(img.convert("RGB"), float) * (1 - strength * rim[..., None])
-    out = Image.fromarray(rgb.clip(0, 255).astype("uint8"), "RGB")
-    out.putalpha(a)
-    return out
 
 
 def shrink(img, size, blur):
@@ -110,9 +95,8 @@ def main():
     block_shadow = shadow(load("block-shadow.png"))
     hood_shadow = {s: shadow(load("hood-shadow-%s.png" % s)) for s in "nesw"}
     raw_blocks = {(t, m): clip(load("block-%s-%03d.png" % (t, m)), m) for t in TIERS for m in ms}
-    raw_hoods = {(t, s): load("hood-%s-%s.png" % (t, s)) for t in TIERS for s in "nesw"}
-    raw_anim = {(t, x, f): load("anim-%s%s-%02d.png" % (t, x, f)) for t in TIERS for x in ("", "-s")
-                for f in range(FRAMES)}
+    raw_hoods = {(t, s, f): load("hood-%s-%s-%s.png" % (t, s, f)) for t in TIERS for s in "nesw" for f in ("in", "out")}
+    raw_anim = {(t, f): load("anim-%s-%02d.png" % (t, f)) for t in TIERS for f in range(FRAMES)}
     for key, (size, blur) in SETS.items():
         d = os.path.join(OUT, key)
         os.makedirs(d, exist_ok=True)
@@ -121,21 +105,21 @@ def main():
         hs = {s: shrink(hood_shadow[s], size, SHADOW_BLUR[key]) for s in "nesw"}
         sheet([hs[s] for s in order], 6, size).save(os.path.join(d, "hood-shadow.png"), optimize=True)
         for t in TIERS:
-            sheet([outline(shrink(raw_blocks[(t, m)], size, blur)) for m in ms], 8, size).save(
+            sheet([shrink(raw_blocks[(t, m)], size, blur) for m in ms], 8, size).save(
                 os.path.join(d, "balancer-%s.png" % t), optimize=True)
-            for x in ("", "-s"):
-                sheet([shrink(raw_anim[(t, x, f)], size, blur) for f in range(FRAMES)], 8, size).save(
-                    os.path.join(d, "machinery-%s%s.png" % (t, x)), optimize=True)
-            h = {s: outline(shrink(raw_hoods[(t, s)], size, blur)) for s in "nesw"}
-            sheet([h[s] for s in order], 6, size).save(os.path.join(d, "hood-%s.png" % t), optimize=True)
+            sheet([shrink(raw_anim[(t, f)], size, blur) for f in range(FRAMES)], 8, size).save(
+                os.path.join(d, "machinery-%s.png" % t), optimize=True)
+            for f in ("in", "out"):
+                h = {s: shrink(raw_hoods[(t, s, f)], size, blur) for s in "nesw"}
+                sheet([h[s] for s in order], 6, size).save(os.path.join(d, "hood-%s-%s.png" % (t, f)), optimize=True)
     # icons: a lone block with an input hood above and an output hood below
     os.makedirs(ICONS, exist_ok=True)
     for t in TIERS:
         scene = Image.new("RGBA", (RES, RES + 2 * PX), (0, 0, 0, 0))
-        scene.alpha_composite(raw_hoods[(t, "s")], (0, 0))
+        scene.alpha_composite(raw_hoods[(t, "s", "in")], (0, 0))
         scene.alpha_composite(raw_blocks[(t, 0)], (0, PX))
-        scene.alpha_composite(raw_anim[(t, "", 0)], (0, PX))
-        scene.alpha_composite(raw_hoods[(t, "n")], (0, 2 * PX))
+        scene.alpha_composite(raw_anim[(t, 0)], (0, PX))
+        scene.alpha_composite(raw_hoods[(t, "n", "out")], (0, 2 * PX))
         icon = scene.crop(scene.getbbox())
         k = 62 / max(icon.size)
         icon = icon.convert("RGBa").resize((max(1, round(icon.size[0] * k)), max(1, round(icon.size[1] * k))),

@@ -135,7 +135,8 @@ protos[#protos + 1] = never
 -- The port hood an edge draws (tools/render/, sprite set from prototypes/gfx.lua): sheets of 6 frames, the hood on the N, E,
 -- S, W, N, E side of the tile. An input edge points at its block (hood on the side it faces:
 -- frames 1-4 for north, east, south, west), an output edge away from it (frames 3-6). Belts other
--- than the four vanilla tiers get the basic colours.
+-- than the four vanilla tiers get the basic colours. The roof chevrons point the way the items go:
+-- hood-<colour>-in.png toward the block, hood-<colour>-out.png away from it.
 local HOOD_COLOURS = {
   ["transport-belt"] = "basic",
   ["fast-transport-belt"] = "fast",
@@ -158,7 +159,7 @@ local function edge_hood(belt_name, role)
         draw_as_shadow = shadow or nil,
       }
     end
-    return { sheets = { sheet("hood-" .. colour .. ".png"), sheet("hood-shadow.png", true) } }
+    return { sheets = { sheet("hood-" .. colour .. "-" .. role .. ".png"), sheet("hood-shadow.png", true) } }
   end
   local hood = way(role == "in" and 1 or 3)
   return {

@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "title": "Modular Balancer",
   "author": "caelix",
+  "description": "A modular N:M belt balancer: place 1x1 blocks in any connected shape and attach belts. Every belt feeding the group is an input, every belt it feeds is an output, and the outputs share exactly equally.",
   "factorio_version": "2.1",
-  "dependencies": ["base >= 2.1", "? space-age"]
+  "dependencies": [
+    "base >= 2.1",
+    "? space-age"
+  ]
 }

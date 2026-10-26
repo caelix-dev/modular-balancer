@@ -662,6 +662,37 @@ function belt_io.foreign_belt_on(s, x, y)
   return nil
 end
 
+-- Removes a belt marked for deconstruction from the tile a block was just built on (the block
+-- replaces it). The belt is mined with its contents (raising the destroy event, so balancers next
+-- to it update); a player who built the block gets it, otherwise it is spilled where it stood,
+-- marked for deconstruction by `force` so robots collect it. No item is lost.
+---@param belt LuaEntity
+---@param event table the build event (player_index)
+---@param force LuaForce
+function belt_io.clear_for_block(belt, event, force)
+  local s, pos = belt.surface, belt.position
+  local inv = game.create_inventory(64)
+  belt.mine({ inventory = inv, force = true, ignore_minable = true, raise_destroyed = true })
+  local player = event.player_index and game.get_player(event.player_index)
+  for i = 1, #inv do
+    local st = inv[i]
+    if st.valid_for_read then
+      if player and player.valid then
+        local n = player.insert(st)
+        if n >= st.count then
+          st.clear()
+        else
+          st.count = st.count - n
+        end
+      end
+      if st.valid_for_read then
+        s.spill_item_stack({ position = pos, stack = st, enable_looted = true, force = force, allow_belts = false, drop_full_stack = true })
+      end
+    end
+  end
+  inv.destroy()
+end
+
 -- Ruling 6: undoes a build that put a belt-connectable on a block tile (or a block on a belt).
 -- The entity is mined with its contents and handed back to the player or robot that built it;
 -- what does not fit (or with no builder) is spilled where it stood. Shows `reason` as flying

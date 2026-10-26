@@ -637,6 +637,66 @@ describe("lifecycle", function()
     end)
   end)
 
+  -- A block ghost placed on a belt (a forced ghost build: the block does not collide with belts,
+  -- so the game marks nothing): the belt is marked for deconstruction, the robots replace it with
+  -- the block (no refusal, the block is not carried back), and the belts on both sides become
+  -- its ports.
+  test("ghost_block_on_belt_replaces_the_belt", function()
+    async(3000)
+    local o, box = area(14, 10)
+    local s = game.surfaces.nauvis
+    H.feed(o, 4, 4, D.west, 3, { stock = 2000 })
+    local out = H.sink(o, 4, 4, D.east, 3)
+    local belt = H.put(o, 4, 4, H.BELT, D.east)
+    local _, chest = robots(o, 4, 8)
+    chest.insert({ name = "mb-balancer-" .. H.TIER, count = 2 })
+    H.ce(s, { name = "entity-ghost", inner_name = "mb-balancer-" .. H.TIER, position = { o.x + 4, o.y + 4 }, raise_built = true })
+    assert(belt.valid and belt.to_be_deconstructed(), "the belt under the block ghost is not marked for deconstruction")
+    ---@type LuaEntity?
+    local found
+    wait_for("robots replacing the belt with the block", 80, function()
+      found = s.find_entities_filtered({ area = box, name = "mb-balancer-" .. H.TIER })[1]
+      return found ~= nil and not belt.valid, found and "belt still there" or "no block yet"
+    end, function()
+      local b = assert(found, "no block")
+      assert(groups.of(b.unit_number), "the robot-built block has no group")
+      assert(not belt_io.foreign_belt_on(s, math.floor(b.position.x --[[@as number]]), math.floor(b.position.y --[[@as number]])), "a belt is left on the block tile")
+      balancer.flush()
+      assert(nm(rec_of(b)) == "1:1", "network " .. nm(rec_of(b)))
+      after_ticks(600, function()
+        assert(delivered({ out }) > 200, "only " .. delivered({ out }) .. " delivered")
+        done()
+      end)
+    end)
+  end)
+
+  -- The same when the block is built before the marked belt is gone (a robot can reach the ghost
+  -- first): the block replaces the belt at once; the belt and the items on it are spilled,
+  -- marked for deconstruction, none lost.
+  test("block_built_on_a_marked_belt_replaces_it", function()
+    local o, box = area(10, 9)
+    local s = game.surfaces.nauvis
+    local belt = H.put(o, 4, 4, H.BELT, D.east)
+    belt.get_transport_line(1).insert_at_back({ name = ITEM, count = 1 })
+    belt.get_transport_line(2).insert_at_back({ name = ITEM, count = 1 })
+    local before = H.count_box(box, ITEM)
+    local g = H.ce(s, { name = "entity-ghost", inner_name = "mb-balancer-" .. H.TIER, position = { o.x + 4, o.y + 4 }, raise_built = true })
+    assert(belt.to_be_deconstructed(), "the belt under the block ghost is not marked for deconstruction")
+    local _, b = g.revive({ raise_revive = true })
+    assert(b and b.valid, "the block was refused (given back) instead of replacing the marked belt")
+    assert(not belt.valid, "the marked belt is still there")
+    assert(groups.of(b.unit_number), "the block has no group")
+    local spilled_belt = 0
+    for _, e in ipairs(s.find_entities_filtered({ area = box, name = "item-on-ground" })) do
+      assert(e.to_be_deconstructed(), "a spilled item is not marked for deconstruction")
+      if e.stack.name == H.BELT then
+        spilled_belt = spilled_belt + e.stack.count
+      end
+    end
+    assert(spilled_belt == 1, "the replaced belt was not spilled (" .. spilled_belt .. ")")
+    assert(H.count_box(box, ITEM) == before, "items lost: " .. H.count_box(box, ITEM) .. " of " .. before)
+  end)
+
   -- The upgrade planner on a block: a backed-up basic block marked for fast and upgraded (as a
   -- robot would: apply_upgrade raises destroy and built). The fast block joins a group (no overlap
   -- refusal), the network is rebuilt at the fast tier with every item, and it runs. The same

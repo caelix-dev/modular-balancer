@@ -2,10 +2,11 @@
 -- Tiers: basic, fast, express, and turbo (hidden, without a recipe, when Space Age is absent).
 --
 -- The block is a `simple-entity-with-owner`, not a belt-connectable entity, with the collision
--- layers item, player and is_object only (docs/feasibility.md F1 "Chosen design"): its tile can
--- then also hold one hidden linked belt (the F1 block-tile interface or the F3 belt port), which
--- every belt-connectable must collide with. It still collides with buildings, inserters, the
--- character and water.
+-- layer item only (docs/feasibility.md F1 "Chosen design", later without player and is_object):
+-- its tile can then also hold one hidden linked belt (the F1 block-tile interface or the F3 belt
+-- port), which every belt-connectable must collide with. It still collides with buildings,
+-- inserters, rails, trees, cliffs, water and other blocks; like a belt it has neither the player
+-- nor the is_object layer, so characters and vehicles move over it.
 --
 -- Recipe: the tier's splitter plus 5 of the tier's belts, unlocked by the technology that
 -- unlocks the tier's splitter. Graphics and icon: original sprites, coloured per tier like the
@@ -153,7 +154,7 @@ for i, tier in ipairs(TIERS) do
     resistances = table.deepcopy(splitter.resistances),
     collision_box = { { -0.4, -0.4 }, { 0.4, 0.4 } },
     selection_box = { { -0.5, -0.5 }, { 0.5, 0.5 } },
-    collision_mask = { layers = { item = true, player = true, is_object = true } },
+    collision_mask = { layers = { item = true } },
     fast_replaceable_group = "mb-balancer",
     next_upgrade = next_tier and ("mb-balancer-" .. next_tier.name) or nil,
     render_layer = "object",

@@ -70,7 +70,7 @@ describe("groups", function()
         assert(e and e.type == "simple-entity-with-owner", name .. ": entity missing or wrong type")
         assert(e.tile_width == 1 and e.tile_height == 1, name .. ": not 1x1")
         local layers = e.collision_mask.layers
-        assert(layers.item and layers.player and layers.is_object and not layers.transport_belt and not layers.object,
+        assert(layers.item and not layers.is_object and not layers.player and not layers.transport_belt and not layers.object,
           name .. ": collision mask " .. serpent.line(layers))
         assert(prototypes.item[name] and prototypes.item[name].place_result == e, name .. ": item missing")
         local next_tier = tiers[i + 1]

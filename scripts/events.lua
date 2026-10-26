@@ -7,13 +7,21 @@
 --            on_entity_died, script_raised_destroy
 --   moved:   script_raised_teleported
 --   changed: on_player_rotated_entity, on_player_flipped_entity, on_entity_settings_pasted
---            (the inserter positions or a belt direction change)
+--            (the inserter positions or a belt direction change; between two blocks, the
+--            balancer settings, scripts/gui.lua)
+--   settings (scripts/gui.lua): on_gui_checked_state_changed, on_gui_closed, on_gui_click (the
+--            close button), on_player_left_game / on_player_removed (GUI state cleanup),
+--            on_player_changed_position / on_player_controller_changed (a frame whose block is
+--            out of reach closes; work only while that player has a frame open), and the linked
+--            custom inputs mb-open-gui, mb-copy-settings, mb-paste-settings
 --   forces:  on_forces_merged (the blocks of the source force now belong to the destination)
 --   lifecycle (scripts/lifecycle.lua):
 --            on_player_setup_blueprint, on_player_configured_blueprint (edges become belts),
 --            on_undo_applied, on_redo_applied, on_marked_for_upgrade and on_cancelled_upgrade
---            of transport belts, on_pre_surface_deleted / on_pre_surface_cleared and
---            on_surface_deleted / on_surface_cleared (the hidden surface)
+--            of transport belts, underground belts, splitters and edges, on_pre_build (edges
+--            under a belt a player builds are swapped back first), on_pre_surface_deleted /
+--            on_pre_surface_cleared and on_surface_deleted / on_surface_cleared (the hidden
+--            surface)
 --   anything else (LuaEntity::destroy without raise_destroy, a deleted surface):
 --            on_object_destroyed, for every block registered with register_on_object_destroyed
 --            when it was built
@@ -31,6 +39,7 @@ local groups = require("scripts.groups")
 local balancer = require("scripts.balancer")
 local belt_io = require("scripts.io")
 local lifecycle = require("scripts.lifecycle")
+local gui = require("scripts.gui")
 
 local events = {}
 
@@ -85,7 +94,13 @@ local function built(entity, event)
       return
     end
     script.register_on_object_destroyed(entity)
-    local ids, gone = groups.on_block_built(entity)
+    -- a block from a blueprint carries its balancer's settings (a new group takes them); a clone
+    -- takes its source's group's
+    local settings = gui.settings_from_tags(event.tags)
+    if not settings and event.source and event.source.valid and groups.of(event.source.unit_number) then
+      settings = groups.settings(groups.of(event.source.unit_number))
+    end
+    local ids, gone = groups.on_block_built(entity, settings)
     balancer.mark(ids, gone, player)
     balancer.mark_block(entity, player)
   elseif relevant(entity) then
@@ -123,6 +138,17 @@ function events.on_rotated(event)
   changed(event.entity, event)
 end
 events.on_flipped = events.on_rotated
+
+-- on_entity_settings_pasted: between two blocks, the destination's balancer takes the source's
+-- settings (scripts/gui.lua); otherwise the inserter or belt changed. A field for tests.
+function events.on_settings_pasted(event)
+  local src, dst = event.source, event.destination
+  if src and src.valid and dst and dst.valid and groups.tier_of(src.name) and groups.tier_of(dst.name) then
+    gui.paste(src, dst, event.player_index)
+  else
+    changed(dst, event)
+  end
+end
 
 function events.register()
   local f = filters()
@@ -171,9 +197,17 @@ function events.register()
   end, f)
   script.on_event(E.on_player_rotated_entity, events.on_rotated)
   script.on_event(E.on_player_flipped_entity, events.on_flipped)
-  script.on_event(E.on_entity_settings_pasted, function(event)
-    changed(event.destination, event)
-  end)
+  script.on_event(E.on_entity_settings_pasted, events.on_settings_pasted)
+  script.on_event(E.on_gui_checked_state_changed, gui.on_checked)
+  script.on_event(E.on_gui_closed, gui.on_closed)
+  script.on_event(E.on_gui_click, gui.on_click)
+  script.on_event(E.on_player_left_game, gui.on_left)
+  script.on_event(E.on_player_removed, gui.on_removed)
+  script.on_event(E.on_player_changed_position, gui.on_moved)
+  script.on_event(E.on_player_controller_changed, gui.on_moved)
+  script.on_event("mb-open-gui", gui.on_open_input)
+  script.on_event("mb-copy-settings", gui.on_copy_input)
+  script.on_event("mb-paste-settings", gui.on_paste_input)
   script.on_event(E.on_forces_merged, function(event)
     local ids, gone = groups.on_forces_merged(event.source_index, event.destination)
     balancer.mark(ids, gone)
@@ -186,8 +220,12 @@ function events.register()
   script.on_event(E.on_redo_applied, function(event)
     lifecycle.on_undo_redo(event, false)
   end)
-  local belts = { { filter = "type", type = "transport-belt" } }
+  local belts = {
+    { filter = "type", type = "transport-belt" }, { filter = "type", type = "underground-belt" },
+    { filter = "type", type = "splitter" }, { filter = "type", type = "linked-belt" },
+  }
   script.on_event(E.on_marked_for_upgrade, lifecycle.on_marked_for_upgrade, belts)
+  script.on_event(E.on_pre_build, lifecycle.on_pre_build)
   script.on_event(E.on_cancelled_upgrade, lifecycle.on_cancelled_upgrade, belts)
   script.on_event(E.on_pre_surface_deleted, lifecycle.on_pre_surface_gone)
   script.on_event(E.on_pre_surface_cleared, lifecycle.on_pre_surface_gone)

@@ -23,6 +23,7 @@ local groups = require("scripts.groups")
 local events = require("scripts.events")
 local lifecycle = require("scripts.lifecycle")
 local builder = require("scripts.builder")
+local belt_io = require("scripts.io")
 
 local D = defines.direction
 local WARMUP, WINDOW = 3000, 3600
@@ -740,6 +741,358 @@ describe("lifecycle", function()
         done()
       end)
     end)
+  end)
+
+  -- Plan 3 Task 2 (Plan 2 final review Minor 7): belts dragged and fast-replaced over edges
+  -- behave like vanilla belts. A player build calls on_pre_build first, which swaps the edges
+  -- under the new entity back to belts (lifecycle.clear_edges_for_build, called here the way
+  -- on_pre_build calls it), then the game fast-replaces a plain belt (create_entity fast_replace,
+  -- raise_built). With the output blocked the edges carry items; none is lost.
+  --   1. an express belt line dragged east over the input belts and the input edge: the edge is
+  --      an edge again after the flush, linked, and the network is not rebuilt;
+  --   2. the output edge fast-replaced by a fast belt: a fast output edge, linked;
+  --   3. a belt dragged south across the output edge (re-drag to rotate): the tile is a plain
+  --      belt and no port; dragged east again, it is an output edge again;
+  --   4. an underground belt placed on the input edge tile: the block-tile interface serves it;
+  --      a belt dragged back over it is an input edge again.
+  test("drag_and_fast_replace_over_edge", function()
+    async(1500)
+    local o, box = area(12, 9)
+    local s = game.surfaces.nauvis
+    local stock = 300
+    local b = H.block(o, 6, 4, H.TIER)
+    H.feed(o, 6, 4, D.west, 4, { stock = stock })
+    local out = H.sink(o, 6, 4, D.east, 3)
+    block(out)
+    balancer.flush()
+    local function build(dx, dy, name, dir, t)
+      local pos = { o.x + dx, o.y + dy }
+      lifecycle.clear_edges_for_build(s, pos, dir, prototypes.entity[name], game.forces.player, nil)
+      t = t or {}
+      t.name, t.position, t.direction, t.force, t.fast_replace, t.raise_built = name, pos, dir, "player", true, true
+      if t.spill == nil then
+        t.spill = false
+      end
+      return s.create_entity(t)
+    end
+    local function linked_edge(dx, dy, name, what)
+      local e = H.at(o, dx, dy, "linked-belt")
+      assert(e and e.name == name, what .. ": tile is " .. tostring(e and e.name) .. ", expected " .. name)
+      assert(e.linked_belt_neighbour, what .. ": the edge is not linked")
+      return e
+    end
+    after_ticks(400, function()
+      linked_edge(5, 4, "mb-edge-in-" .. H.BELT, "setup")
+      local oe = linked_edge(7, 4, "mb-edge-out-" .. H.BELT, "setup")
+      assert(H.items_on(oe) > 0, "test setup: the output edge is empty")
+      assert(H.count_box(box, ITEM) == stock, "before: " .. H.count_box(box, ITEM))
+      local rec = rec_of(b)
+      local placed = rec.placed
+      -- 1. drag over the input belts and the input edge
+      for dx = 2, 5 do
+        build(dx, 4, H.BELT, D.east)
+      end
+      balancer.flush()
+      linked_edge(5, 4, "mb-edge-in-" .. H.BELT, "after the drag")
+      assert(rec_of(b).placed == placed, "the drag rebuilt the network")
+      assert(H.count_box(box, ITEM) == stock, "after the drag: " .. H.count_box(box, ITEM))
+      -- 2. a faster belt over the output edge
+      local fast = build(7, 4, "fast-transport-belt", D.east)
+      assert(fast and fast.valid, "the fast belt was not built over the output edge")
+      balancer.flush()
+      linked_edge(7, 4, "mb-edge-out-fast-transport-belt", "after the fast replace")
+      assert(nm(rec_of(b)) == "1:1", "after the fast replace: " .. nm(rec_of(b)))
+      assert(rec_of(b).placed == placed, "the fast replace rebuilt the network")
+      assert(H.count_box(box, ITEM) == stock, "after the fast replace: " .. H.count_box(box, ITEM))
+      -- 3. re-drag across the output edge to rotate it, then back
+      assert(build(7, 4, H.BELT, D.south), "the rotated belt was not built")
+      balancer.flush()
+      local plain = H.at(o, 7, 4, "transport-belt")
+      assert(plain and plain.direction == D.south, "the rotated tile is not a plain belt facing south")
+      assert(#rec_of(b).outputs == 0, "a belt alongside the block is an output")
+      assert(H.count_box(box, ITEM) == stock, "after the rotation: " .. H.count_box(box, ITEM))
+      assert(build(7, 4, "fast-transport-belt", D.east), "the belt was not rotated back")
+      balancer.flush()
+      linked_edge(7, 4, "mb-edge-out-fast-transport-belt", "after rotating back")
+      assert(H.count_box(box, ITEM) == stock, "after rotating back: " .. H.count_box(box, ITEM))
+      -- 4. an underground belt (same fast-replace group) placed on the input edge tile; its
+      --    shorter line cannot hold every item of the belt it replaces, and the game hands the
+      --    rest to the builder like vanilla (spilled here, with no player)
+      assert(build(5, 4, "underground-belt", D.east, { type = "output", spill = true }), "the underground belt was not built over the edge")
+      balancer.flush()
+      assert(H.at(o, 5, 4, "underground-belt"), "the underground belt is gone")
+      local port = belt_io.block_tile_belt(s, math.floor(o.x + 6), math.floor(o.y + 4))
+      assert(port and port.linked_belt_neighbour, "the underground belt is not served by the block-tile interface")
+      assert(H.count_box(box, ITEM) == stock, "after the underground: " .. H.count_box(box, ITEM))
+      -- the belt dragged back over it (the underground cut the feed): an input edge again
+      assert(build(5, 4, H.BELT, D.east, { spill = true }), "the belt was not built back over the underground")
+      balancer.flush()
+      linked_edge(5, 4, "mb-edge-in-" .. H.BELT, "after the belt replaced the underground")
+      assert(H.count_box(box, ITEM) == stock, "after the belt replaced the underground: " .. H.count_box(box, ITEM))
+      release(out)
+      after_ticks(600, function()
+        assert(delivered({ out }) > 100, "does not run after the replacements: " .. delivered({ out }))
+        done()
+      end)
+    end)
+  end)
+
+  -- Plan 3 Task 2: one pass of the upgrade planner upgrades an edge with its line.
+  --   a configured planner (fast belt -> express belt, fast underground -> express underground)
+  --   dragged over a line whose last tile before the edge is an underground belt: the edge's
+  --   tile gets the express order through the underground (Plan 2 left it at the old tier);
+  --   an unconfigured planner (next_upgrade): over the edge tile alone it selects nothing (edges
+  --   are hidden, a documented limit), and the edge stays a linked port; over the edge and the
+  --   belt behind it, the belt is marked and the edge's tile follows.
+  -- Robots (LuaEntity::apply_upgrade) upgrade every marked entity once; after the flush both
+  -- edges are express edges, linked, and no item is lost.
+  test("upgrade_edge_with_planner_in_one_pass", function()
+    async(1500)
+    local o, box = area(12, 9)
+    local s = game.surfaces.nauvis
+    local stock = 300
+    local b = H.block(o, 8, 4, H.TIER)
+    -- west input: chest, loader, fast belt, fast underground pair, fast belt (the edge tile)
+    local chest = H.put(o, 1, 4, "mb-test-chest")
+    chest.insert({ name = ITEM, count = stock })
+    H.put(o, 2, 4, "mb-test-loader-" .. H.TIER, D.east, { type = "output" })
+    H.put(o, 3, 4, "fast-transport-belt", D.east)
+    H.put(o, 4, 4, "fast-underground-belt", D.east, { type = "input" })
+    H.put(o, 6, 4, "fast-underground-belt", D.east, { type = "output" })
+    H.put(o, 7, 4, "fast-transport-belt", D.east)
+    -- north input: plain fast belts
+    H.feed(o, 8, 4, D.north, 3, { stock = stock, belt = "fast-transport-belt" })
+    local out = H.sink(o, 8, 4, D.east, 3)
+    block(out)
+    balancer.flush()
+    after_ticks(400, function()
+      local west = H.at(o, 7, 4, "linked-belt")
+      local north = H.at(o, 8, 3, "linked-belt")
+      assert(west and west.name == "mb-edge-in-fast-transport-belt", "no fast west edge")
+      assert(north and north.name == "mb-edge-in-fast-transport-belt", "no fast north edge")
+      assert(nm(rec_of(b)) == "2:1", "network " .. nm(rec_of(b)))
+      local total = 2 * stock
+      assert(H.count_box(box, ITEM) == total, "before: " .. H.count_box(box, ITEM))
+      local inv = game.create_inventory(2)
+      inv.insert({ name = "upgrade-planner" })
+      inv.insert({ name = "upgrade-planner" })
+      local configured, plain = inv[1], inv[2]
+      configured.set_mapper(1, "from", { type = "entity", name = "fast-transport-belt" })
+      configured.set_mapper(1, "to", { type = "entity", name = "express-transport-belt" })
+      configured.set_mapper(2, "from", { type = "entity", name = "fast-underground-belt" })
+      configured.set_mapper(2, "to", { type = "entity", name = "express-underground-belt" })
+      -- the west line up to the edge tile (a configured planner matches by name: not the edge)
+      s.upgrade_area({ area = { { o.x + 2.5, o.y + 3.5 }, { o.x + 7.5, o.y + 4.5 } }, force = "player", item = configured })
+      local wt = H.at(o, 7, 4, "transport-belt")
+      local target = wt and wt.get_upgrade_target()
+      assert(target and target.name == "express-transport-belt", "the west edge tile did not get the express order through the underground")
+      -- the north edge tile alone, unconfigured planner: nothing is selected
+      s.upgrade_area({ area = { { o.x + 7.6, o.y + 2.6 }, { o.x + 8.4, o.y + 3.4 } }, force = "player", item = plain })
+      local ne = H.at(o, 8, 3, "linked-belt")
+      assert(ne and ne.linked_belt_neighbour and not ne.to_be_upgraded(), "an unconfigured planner over the edge alone changed it")
+      -- the edge and the belt behind it
+      s.upgrade_area({ area = { { o.x + 7.6, o.y + 1.6 }, { o.x + 8.4, o.y + 3.4 } }, force = "player", item = plain })
+      local nt = H.at(o, 8, 3, "transport-belt")
+      target = nt and nt.get_upgrade_target()
+      assert(target and target.name == "express-transport-belt", "the north edge tile did not follow the belt behind it")
+      inv.destroy()
+      balancer.flush()
+      assert(H.count_box(box, ITEM) == total, "after marking: " .. H.count_box(box, ITEM))
+      -- robots: every marked entity upgraded once
+      for _, e in ipairs(s.find_entities_filtered({ area = box, to_be_upgraded = true })) do
+        if e.valid then
+          e.apply_upgrade()
+        end
+      end
+      balancer.flush()
+      for _, t in ipairs({ { 7, 4, "west" }, { 8, 3, "north" } }) do
+        local e = H.at(o, t[1], t[2], "linked-belt")
+        assert(e and e.name == "mb-edge-in-express-transport-belt", t[3] .. " edge after the upgrade: " .. tostring(e and e.name))
+        assert(e.linked_belt_neighbour, t[3] .. " edge not linked after the upgrade")
+      end
+      local ug = H.at(o, 6, 4, "underground-belt")
+      assert(ug and ug.name == "express-underground-belt", "the underground was not upgraded")
+      assert(#s.find_entities_filtered({ area = box, to_be_upgraded = true }) == 0, "orders left after one pass")
+      assert(nm(rec_of(b)) == "2:1", "after the upgrade: " .. nm(rec_of(b)))
+      assert(H.count_box(box, ITEM) == total, "after the upgrade: " .. H.count_box(box, ITEM))
+      release(out)
+      after_ticks(600, function()
+        assert(delivered({ out }) > 100, "does not run after the upgrade")
+        done()
+      end)
+    end)
+  end)
+
+  -- Review I1, I2: an upgrade order never turns a belt into an edge, nor an edge into a plain belt
+  -- for nothing.
+  --   an edge cannot be marked (hidden): an order to its own belt or to a faster one is refused,
+  --   and the edge stays a linked port;
+  --   a planner set up by script (edges are in no planner list) that maps belts to an edge: each
+  --   order is redirected to the edge's belt at the next flush, or cancelled when that is the
+  --   belt itself; so is an order by script straight to an edge.
+  --   Completed by LuaEntity::apply_upgrade (which drops the items of a belt that becomes an
+  --   edge, measured), every item is kept.
+  test("upgrade_order_targeting_edge_never_loses_items", function()
+    local o, box = area(12, 10)
+    local s = game.surfaces.nauvis
+    local b = H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 2, { stock = 0 })
+    H.sink(o, 4, 4, D.east, 2)
+    balancer.flush()
+    local edge = H.at(o, 3, 4, "linked-belt")
+    assert(edge, "no input edge")
+    edge.order_upgrade({ target = H.BELT, force = "player" })
+    edge.order_upgrade({ target = "fast-transport-belt", force = "player" })
+    assert(not edge.to_be_upgraded(), "an edge took an upgrade order")
+    balancer.flush()
+    assert(edge.valid and edge.linked_belt_neighbour and nm(rec_of(b)) == "1:1", "the edge did not stay a linked port")
+    -- a lone line of basic belts with items
+    local belts = {}
+    for dx = 1, 4 do
+      belts[dx] = H.put(o, dx, 8, "transport-belt", D.east)
+      belts[dx].get_transport_line(1).insert_at(0.25, { name = ITEM, count = 1 })
+    end
+    local before = H.count_box(box, ITEM)
+    assert(before >= 4, "test setup: items " .. before)
+    local inv = game.create_inventory(2)
+    inv.insert({ name = "upgrade-planner" })
+    inv.insert({ name = "upgrade-planner" })
+    local to_faster, to_self = inv[1], inv[2]
+    to_faster.set_mapper(1, "from", { type = "entity", name = "transport-belt" })
+    to_faster.set_mapper(1, "to", { type = "entity", name = "mb-edge-in-fast-transport-belt" })
+    to_self.set_mapper(1, "from", { type = "entity", name = "transport-belt" })
+    to_self.set_mapper(1, "to", { type = "entity", name = "mb-edge-out-transport-belt" })
+    s.upgrade_area({ area = { { o.x + 0.6, o.y + 7.6 }, { o.x + 2.4, o.y + 8.4 } }, force = "player", item = to_self })
+    for dx = 1, 2 do
+      assert(not belts[dx].to_be_upgraded(), "an order to the belt's own edge was not cancelled")
+    end
+    s.upgrade_area({ area = { { o.x + 0.6, o.y + 7.6 }, { o.x + 3.4, o.y + 8.4 } }, force = "player", item = to_faster })
+    inv.destroy()
+    -- an order by script straight to an edge
+    belts[4].order_upgrade({ target = "mb-edge-out-fast-transport-belt", force = "player" })
+    balancer.flush() -- the redirects are placed by the next flush
+    for dx = 1, 4 do
+      local t = belts[dx].get_upgrade_target()
+      assert(t and t.name == "fast-transport-belt", "belt " .. dx .. " target " .. tostring(t and t.name))
+    end
+    for dx = 1, 4 do
+      belts[dx].apply_upgrade()
+    end
+    balancer.flush()
+    for dx = 1, 4 do
+      local e = H.at(o, dx, 8, "transport-belt")
+      assert(e and e.name == "fast-transport-belt", "tile " .. dx .. " is not a fast belt")
+    end
+    assert(H.count_box(box, ITEM) == before, "items: " .. H.count_box(box, ITEM) .. " of " .. before)
+  end)
+
+  -- Review I3: the guards of on_pre_build (lifecycle.pre_build), driven with stand-in players (a
+  -- headless test has no LuaPlayer, and built-in events cannot be raised). A build from a
+  -- belt-connectable item in the cursor, in any build mode (normal, forced, super-forced) and in
+  -- remote view, by a valid player who is not in a cutscene, swaps back the edges of the
+  -- player's force under the footprint (there is no reach check: the game checks reach before
+  -- it builds); anything else is left alone. The edge holds items: every swap back and every
+  -- re-swap by the next flush keeps them on the tile (final review m3), and a deconstruction
+  -- mark placed on the swapped-back belt (a forced build's ghost) is kept on the new edge. The
+  -- engine side (a real drag keeps the items) is the real-player check F11.
+  test("pre_build_guards", function()
+    local o = area(10, 9)
+    local s = game.surfaces.nauvis
+    local other = game.forces["mb-test-other"] or game.create_force("mb-test-other")
+    H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 2, { stock = 0 })
+    H.sink(o, 4, 4, D.east, 2)
+    balancer.flush()
+    local inv = game.create_inventory(4)
+    inv[1].set_stack({ name = H.BELT, count = 10 })
+    inv[2].set_stack({ name = "iron-chest", count = 1 })
+    inv[3].set_stack({ name = "blueprint", count = 1 })
+    local belt_stack, chest_stack, bp_stack, empty = inv[1], inv[2], inv[3], inv[4]
+    local C = defines.controllers
+    local function player(t)
+      local p = {
+        valid = true, surface = s, force = game.forces.player, controller_type = C.character, character = true,
+        cursor_stack = belt_stack,
+        can_reach_entity = function()
+          return true
+        end,
+      }
+      for k, v in pairs(t or {}) do
+        p[k] = v
+      end
+      return p
+    end
+    local function ev(position, mode)
+      return { position = position or { o.x + 3, o.y + 4 }, direction = D.east, build_mode = mode or defines.build_mode.normal, player_index = 1 }
+    end
+    local function edge_there()
+      local e = H.at(o, 3, 4, "linked-belt")
+      return e ~= nil and belt_io.edge_belt(e.name) ~= nil
+    end
+    assert(edge_there(), "test setup: no edge")
+    -- items on the edge (both lanes); nothing moves them, no tick passes in this test
+    local function on_tile()
+      local e = H.at(o, 3, 4, "linked-belt") or H.at(o, 3, 4, "transport-belt")
+      return e and H.items_on(e) or 0
+    end
+    local edge0 = assert(H.at(o, 3, 4, "linked-belt"))
+    for _, li in ipairs(H.LINES) do
+      assert(edge0.get_transport_line(li).insert_at(0.2, { name = ITEM, count = 1 }), "test setup: no item on the edge")
+    end
+    local held = on_tile()
+    assert(held == 2, "test setup: " .. held .. " items on the edge")
+    local function kept(what)
+      assert(on_tile() == held, what .. ": " .. on_tile() .. " of " .. held .. " items on the tile")
+    end
+    local cases = {
+      { "invalid player", player({ valid = false }), ev() },
+      { "cutscene", player({ controller_type = C.cutscene }), ev() },
+      { "empty cursor", player({ cursor_stack = empty }), ev() },
+      { "blueprint", player({ cursor_stack = bp_stack }), ev() },
+      { "not a belt", player({ cursor_stack = chest_stack }), ev() },
+      { "other force", player({ force = other }), ev() },
+      { "elsewhere", player(), ev({ o.x + 1, o.y + 1 }) },
+    }
+    for _, c in ipairs(cases) do
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(lifecycle.pre_build(c[2], c[3]) == 0 and edge_there(), c[1] .. ": the edge was swapped back")
+    end
+    kept("after the refused cases")
+    ---@diagnostic disable-next-line: param-type-mismatch
+    assert(lifecycle.pre_build(player(), ev()) == 1, "a belt build over the edge did not swap it back")
+    local belt = H.at(o, 3, 4, "transport-belt")
+    assert(belt and belt.name == H.BELT, "the edge is not a plain belt before the build")
+    kept("swapped back")
+    balancer.flush()
+    assert(edge_there(), "the tile was not swapped again after a build that did not happen")
+    kept("swapped again")
+    -- remote view builds for real too, and a forced or super-forced build over an edge would
+    -- place a ghost and mark the edge for deconstruction (F11): their edges are swapped back too
+    for _, c in ipairs({
+      { "remote view", player({ controller_type = C.remote }), ev() },
+      { "forced build", player(), ev(nil, defines.build_mode.forced) },
+      { "super-forced build", player(), ev(nil, defines.build_mode.superforced) },
+    }) do
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(lifecycle.pre_build(c[2], c[3]) == 1, c[1] .. ": the edge was not swapped back")
+      kept(c[1] .. ", swapped back")
+      balancer.flush()
+      assert(edge_there(), c[1] .. ": the tile was not swapped again")
+      kept(c[1] .. ", swapped again")
+    end
+    -- a forced build that does happen marks the belt for deconstruction (and places a ghost);
+    -- when it does not, the next flush swaps the marked belt into an edge that keeps the mark
+    ---@diagnostic disable-next-line: param-type-mismatch
+    assert(lifecycle.pre_build(player(), ev(nil, defines.build_mode.forced)) == 1, "forced build: not swapped back")
+    local marked = assert(H.at(o, 3, 4, "transport-belt"), "forced build: no belt on the tile")
+    assert(marked.order_deconstruction(game.forces.player), "test setup: the belt was not marked")
+    balancer.flush()
+    local edge = H.at(o, 3, 4, "linked-belt")
+    assert(edge and belt_io.edge_belt(edge.name), "marked belt: the tile was not swapped again")
+    assert(edge.to_be_deconstructed(), "the re-swapped edge lost the deconstruction mark")
+    kept("marked belt, swapped again")
+    edge.cancel_deconstruction(game.forces.player)
+    inv.destroy()
   end)
 
   -- Mining an edge gives its belt item and the items on it; the balancer drops that port. A

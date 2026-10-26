@@ -1,6 +1,7 @@
--- builder.rebuild: a network replaced by another keeps every item (carried onto the new
--- network's belts, the rest into its buffer chest, which drains into input 1). Express tier.
--- Plain assert, not luassert.
+-- A network replaced by another keeps every item: H.rebuild_net places the new network, seals
+-- the old one and drains it into the new one item by item (onto its belts, the rest into its
+-- buffer chest, which drains into input 1), the steps the live balancer spreads over ticks
+-- (scripts/balancer.lua, tests/game/staged.lua). Express tier. Plain assert, not luassert.
 local network = require("scripts.network")
 local builder = require("scripts.builder")
 local H = require("tests.game.harness")
@@ -137,7 +138,7 @@ describe("rebuild", function()
   -- Items of every quality survive a rebuild, on belts and in the buffer: a 3:5 with normal and
   -- (Space Age) uncommon plates on its belts rebuilt as a 1:1, which holds only a few on belts.
   test("quality_kept_on_rebuild", function()
-    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local old = assert(H.place(assert(network.build(3, 5)), "express"))
     ---@type string[]
     local qualities = { "normal" }
     ---@diagnostic disable-next-line: unnecessary-if
@@ -158,7 +159,7 @@ describe("rebuild", function()
       end
     end
     local before = builder.contents(old)
-    local new = assert(builder.rebuild(old, assert(network.build(1, 1)), "express"))
+    local new = assert(H.rebuild_net(old, assert(network.build(1, 1)), "express"))
     local after = builder.contents(new)
     assert(#before == #qualities, "the test put " .. #before .. " qualities, expected " .. #qualities)
     H.report("quality_kept_on_rebuild: %d plates, before %s, after %s, %d in the buffer", put, serpent.line(before),
@@ -171,10 +172,10 @@ describe("rebuild", function()
 
   -- A rebuild that cannot be placed leaves the old network as it was.
   test("failed_rebuild_keeps_the_old_network", function()
-    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local old = assert(H.place(assert(network.build(3, 5)), "express"))
     old.entities[#old.entities].get_transport_line(1).insert_at(0, { name = "iron-plate", count = 1 })
     builder.fail_after = 10
-    local new, err = builder.rebuild(old, assert(network.build(3, 1)), "express")
+    local new, err = H.rebuild_net(old, assert(network.build(3, 1)), "express")
     builder.fail_after = nil
     assert(new == nil and err, "rebuild did not fail")
     assert(#old.entities > 0 and old.entities[1].valid, "the old network was touched")
@@ -203,7 +204,7 @@ describe("rebuild", function()
   -- armor with equipment in its grid, on the belts of a 3:5 rebuilt as a 1:1 (so most of them go
   -- through the buffer). Every stack is found again, on the new belts or in the buffer.
   test("item_data_kept_on_rebuild", function()
-    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local old = assert(H.place(assert(network.build(3, 5)), "express"))
     local inv = game.create_inventory(40)
     local want = {}
     for i = 1, 20 do
@@ -227,7 +228,7 @@ describe("rebuild", function()
       assert(lines[i].insert_at(0.1, inv[i]), "could not put stack " .. i .. " (" .. inv[i].name .. ") on an old belt")
     end
     inv.destroy()
-    local new = assert(builder.rebuild(old, assert(network.build(1, 1)), "express"))
+    local new = assert(H.rebuild_net(old, assert(network.build(1, 1)), "express"))
     local found, on_belts, in_buffer = {}, 0, 0
     local armor = nil ---@type table?
     local function look(st, where)
@@ -280,7 +281,7 @@ describe("rebuild", function()
       H.report("spoilage_kept_on_rebuild: skipped (no Space Age)")
       return
     end
-    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local old = assert(H.place(assert(network.build(3, 5)), "express"))
     local put, sum_before = 0, 0.0
     for _, e in ipairs(old.entities) do
       if e.type == "linked-belt" then
@@ -293,7 +294,7 @@ describe("rebuild", function()
         end
       end
     end
-    local new = assert(builder.rebuild(old, assert(network.build(1, 1)), "express"))
+    local new = assert(H.rebuild_net(old, assert(network.build(1, 1)), "express"))
     local count, sum_after, freshest = 0, 0.0, 1.0
     local function look(st)
       count = count + st.count
@@ -325,10 +326,11 @@ describe("rebuild", function()
     builder.destroy(new)
   end)
 
-  -- Review M2: a rebuild that needs more buffer slots than allowed is refused and leaves the old
-  -- network (and the region count) as it was.
-  test("too_many_items_keeps_the_old_network", function()
-    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+  -- Review M2, staged: a new network whose buffer may not grow (max_buffer_slots 1) cannot take
+  -- every item of a 3:5 holding two kinds. The drain stops ("drain-stuck"): the rest stays in the
+  -- sealed old network, every item is in one of the two, and the old network's region is kept.
+  test("stuck_drain_keeps_the_rest_in_the_old_network", function()
+    local old = assert(H.place(assert(network.build(3, 5)), "express"))
     local put = 0
     for _, e in ipairs(old.entities) do
       if e.type == "linked-belt" then
@@ -339,29 +341,33 @@ describe("rebuild", function()
         end
       end
     end
-    local before = serpent.line(builder.contents(old))
-    local regions = 0
-    for _ in pairs(storage.regions.used) do
-      regions = regions + 1
+    local function totals(nets)
+      local t = {}
+      for _, p in ipairs(nets) do
+        for _, it in ipairs(builder.contents(p)) do
+          t[it.name] = (t[it.name] or 0) + it.count
+        end
+      end
+      return t
     end
+    local before = serpent.line(totals({ old }))
     builder.max_buffer_slots = 1
-    local new, err = builder.rebuild(old, assert(network.build(1, 1)), "express")
+    local new, err, left = H.rebuild_net(old, assert(network.build(1, 1)), "express")
     builder.max_buffer_slots = 65535
-    local after_regions = 0
-    for _ in pairs(storage.regions.used) do
-      after_regions = after_regions + 1
-    end
-    H.report("too_many_items: %d items, rebuild returned %s, %s", put, tostring(new), tostring(err))
-    assert(new == nil and err == "too-many-items", "rebuild was not refused: " .. tostring(err))
-    assert(serpent.line(builder.contents(old)) == before, "the old network changed: " .. serpent.line(builder.contents(old)))
-    assert(after_regions == regions, "region count changed: " .. regions .. " -> " .. after_regions)
+    assert(new, "the new network was not placed: " .. tostring(err))
+    H.report("stuck drain: %d items, rebuild returned %s, %d old networks left", put, tostring(err), #(left or {}))
+    assert(err == "drain-stuck" and left and #left == 1 and left[1] == old, "the drain did not get stuck: " .. tostring(err))
+    assert(old.origin ~= nil and #builder.contents(old) > 0, "the old network kept nothing")
+    local after = serpent.line(totals({ new, old }))
+    assert(after == before, "items changed: " .. before .. " -> " .. after)
     builder.destroy(old)
+    builder.destroy(new)
   end)
 
   -- Review M3: mb-hidden-never can only appear by cheating. contents leaves it out and a rebuild
   -- drops it (so a jam it causes clears), while every other item is kept.
   test("never_item_is_dropped_on_rebuild", function()
-    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local old = assert(H.place(assert(network.build(3, 5)), "express"))
     local lines = {}
     for _, e in ipairs(old.entities) do
       if e.type == "linked-belt" then
@@ -371,7 +377,7 @@ describe("rebuild", function()
     assert(lines[1].insert_at(0.1, { name = "mb-hidden-never", count = 1 }), "could not put the never item on a belt")
     assert(lines[2].insert_at(0.1, { name = "iron-plate", count = 1 }), "could not put a plate on a belt")
     local before = builder.contents(old)
-    local new = assert(builder.rebuild(old, assert(network.build(3, 5)), "express"))
+    local new = assert(H.rebuild_net(old, assert(network.build(3, 5)), "express"))
     local after = builder.contents(new)
     assert(#before == 1 and before[1].name == "iron-plate", "contents listed: " .. serpent.line(before))
     assert(serpent.line(after) == serpent.line(before), "after the rebuild: " .. serpent.line(after))
@@ -382,7 +388,7 @@ describe("rebuild", function()
   -- position of every hidden linked belt holding a plate, rebuilt as a 64:64.
   test("rebuild_cost_at_64_64", function()
     local net = assert(network.build(64, 64))
-    local old = assert(builder.place(net, "express"))
+    local old = assert(H.place(net, "express"))
     local put = 0
     for _, e in ipairs(old.entities) do
       if e.type == "linked-belt" then
@@ -398,11 +404,11 @@ describe("rebuild", function()
     -- an empty place of the same network, for comparison: the rest of the rebuild is carrying the
     -- items and destroying the old network
     local place_only = helpers.create_profiler()
-    local empty = assert(builder.place(net, "express"))
+    local empty = assert(H.place(net, "express"))
     place_only.stop()
     builder.destroy(empty)
     local profiler = helpers.create_profiler()
-    local new = assert(builder.rebuild(old, net, "express"))
+    local new = assert(H.rebuild_net(old, net, "express"))
     profiler.stop()
     log({ "", "MB-TEST rebuild_cost_at_64_64: an empty place of the same network took ", place_only })
     local after = 0
@@ -446,7 +452,7 @@ describe("rebuild", function()
     probe[2].set_stack({ name = "repair-pack" })
     local mag, dur = probe[1].ammo, probe[2].durability
     probe.destroy()
-    local old = assert(builder.place(assert(network.build(3, 5)), "express"))
+    local old = assert(H.place(assert(network.build(3, 5)), "express"))
     old.buffer.set_inventory_size_override(defines.inventory.chest, 3)
     local binv = old.buffer.get_inventory(defines.inventory.chest)
     assert(binv.insert({ name = "firearm-magazine", count = 10, ammo = 3 }) == 10, "magazines")
@@ -485,7 +491,7 @@ describe("rebuild", function()
       return t
     end
     local before = totals(old)
-    local new = assert(builder.rebuild(old, assert(network.build(3, 5)), "express"))
+    local new = assert(H.rebuild_net(old, assert(network.build(3, 5)), "express"))
     local after = totals(new)
     H.report("partial_stacks: before %s, after %s (%d left in the buffer)", serpent.line(before), serpent.line(after),
       new.buffer.get_item_count())

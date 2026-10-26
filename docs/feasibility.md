@@ -952,11 +952,82 @@ configuration change refreshes every group without rebuilding an unchanged one.
 network yet) builds the balancer on the first tick after loading (on_load re-arms the flush),
 items kept (64 of 64).
 
+## F11: real-player checks (Plan 3 Task 5)
+
+MCP instance `mb3-t5a` (vanilla, `dev_mods` = this worktree, `portal_mods` = factorio-test so the
+`mb-test` interface exists), a GUI client joined with `gui_connect` (player 1, a character made
+indestructible on a refined-concrete test field). The player was driven from `exec_lua`:
+`build_from_cursor` with the item in `cursor_stack`, `mine_entity`, `update_selected_entity`,
+`set_controller`, `player.opened`, `add_to_clipboard` + `activate_paste`. Keys and clicks cannot
+be sent to the client, so the linked custom inputs and the GUI clicks were raised through the new
+`mb-test` functions `input`, `click` and `setup_blueprint`, which call the mod's handlers with the
+event a key press, click or Ctrl+C raises for the real player (its real selection, cursor, reach,
+controller and permission group). Rig: an express 2:3 (3 blocks, two inputs fed by loaders from
+2 000-plate chests, three outputs into chests), all blocks and belts built by the player.
+Invariant checked after every step: iron plates on nauvis (belts, edges, loaders, chests, ground,
+the player's inventory) plus the hidden surface.
+
+Harness notes:
+- `build_from_cursor` and `can_build_from_cursor` refuse everything (even an iron chest on empty
+  concrete) while the server is tick-paused, which is how fdev holds it between calls. Each build
+  call unpauses (`game.tick_paused = false`) and pauses again in the same command.
+- Lua globals defined from the console are not in the level state of a client that joins later:
+  the first call of such a helper after a reconnect ran on the server only and desynced the client
+  (client log: heuristic CRC failure at the first `mbbuild` call after the rejoin; a call with
+  locals only, just before it, did not). With the helpers defined again after the rejoin, the same
+  steps ran without a desync. A harness artefact, not the mod's.
+- `set_controller` raises neither `on_player_controller_changed` nor `on_player_changed_position`
+  (watched from a level-script handler), so leaving remote view by script is not the same as a
+  real player leaving it.
+
+| check | result |
+| --- | --- |
+| drag over an edge, same belt and direction (the real `on_pre_build`) | pass: swapped back in the build call, an edge again after the next flush; total kept |
+| belt of another direction over an input edge | pass: the game rotates the plain belt, the balancer becomes 1:3; turned back, 2:3 |
+| belt of another tier (fast over express) | pass: a fast edge, 2:3, total kept |
+| underground belt on an output edge, splitter over two output edges | pass: both become block-tile ports (F3), 2:3, total kept (`f11-splitter-underground-on-edges.jpg`) |
+| build beyond the build distance | `build_from_cursor` builds at 19.5 tiles (reach 10); swapped back, total kept |
+| **remote view build (old code)** | **fail: a real fast belt replaced the edge (not a ghost, even with the character 50 tiles away); 2 plates lost** |
+| remote view build (fixed) | pass: 4 plates on the edge, all kept |
+| **forced / super-forced build over an edge (old code)** | **fail (no loss): a belt ghost, and the edge marked for deconstruction** |
+| forced / super-forced build (fixed) | pass: as on a plain belt, another tier gets an upgrade order, another direction rotates in place |
+| blueprint of a different belt over an edge (forced) | limit, documented: ghost and deconstruction mark on the edge (robots replace it, items kept); a blueprint of the balancer over itself changes nothing |
+| copy (Ctrl+C) and paste, real cursor | pass: `on_player_setup_blueprint` on the cursor blueprint gives 3 tagged blocks and 7 plain belts; pasted ghosts carry the tags; the player building the blocks over the ghosts gets a group with the blueprint's settings |
+| clipboard paste (`add_to_clipboard`, `activate_paste`) | pass: ghosts with the tags |
+| blueprint book | not drivable: `can_build_from_cursor` is false for a book in the cursor at every position tried (the book's active blueprint is cleaned, F10 tests) |
+| blueprint library, cut | not drivable: no API adds a library record; cut is copy plus deconstruction marks |
+| undo/redo after swaps | not drivable: `LuaUndoRedoStack` has no apply method. The stack after mining shows one `removed-entity` action per block and no tags, so undoing the removal of a whole balancer gives the default settings (README) |
+| mining the last block of a full balancer, inventory nearly full | pass: 100 plates to the 1 free slot, 160 spilled in 2 stacks off the block tiles, marked for deconstruction; total 3 993 of 3 993 (`f11-mined-full-balancer-spill.jpg`) |
+| flying-text refusals | pass: "the last belt tile into a block must be straight" for the player who built it (`f11-flying-text-refusal.jpg`); a belt on a block tile is handed back |
+| settings window | pass: opens on the selected block in reach with an empty cursor, title bar with close button (`f11-settings-window.jpg`); `player.opened` is the frame |
+| checkbox | pass: lanes on, next flush rebuilt with lane splitters, total kept |
+| close button, Esc (`player.opened = nil`) | pass: frame gone, state cleared |
+| walk out of reach (teleport) | pass: `on_player_changed_position` closed it at once |
+| block mined while open | pass: closed at the next flush |
+| remote view | pass: opens from remote view with the character 45 tiles away (`f11-settings-remote-view.jpg`) |
+| leaving remote view by script, out of reach | the frame stays (no event, above) and `player.opened` was nil; fixed: the next check (move, flush) opens it again as `player.opened` so E/Esc work; a real exit raises `on_player_controller_changed`, which closes it (not verifiable here) |
+| permission group without open-gui | pass: refused; back in Default, opens |
+| copy, change the source, paste (M4) | pass: the destination gets the source's settings as they are at paste time |
+| `LuaEntity::copy_settings(source, player)` between blocks | raises `on_entity_settings_pasted` (the destination took the settings); a block is accepted as `player.entity_copy_source`, so vanilla Shift-click paste most likely reaches the mod too (both paths give the same result) |
+| player leaves (client closed) | pass: frame destroyed, state cleared |
+
+Fixes from these checks: `lifecycle.pre_build` now swaps edges back for every build from an item
+cursor, in any build mode and in remote view (test `pre_build_guards` updated), and an open frame
+that lost `player.opened` gets it back.
+
 ## Concerns for Plan 2 from Task 5 (parked review minors)
 
-Status after Plan 2 Task 2: the first item is fixed (`builder.place` is all or nothing), and
-`Placed` now records origin, size, tier and force. The allocator and cross-force items are still
-open.
+Status: all three are fixed.
+- Plan 2 Task 2: placement is all or nothing, and `Placed` records origin, size, tier and force.
+- Plan 3 Task 5: the allocator is best fit, splits regions and joins freed ones
+  (`scripts/surface.lua`, offline tests in `tests/unit/allocator_test.lua`), and two forces'
+  balancers side by side are tested (`tests/game/staged.lua` `two_forces_side_by_side`).
+- Since the Plan 3 final review, `builder.place` and `builder.rebuild` are gone from product code:
+  networks are placed and rebuilt only in budgeted steps (`builder.start`/`advance`,
+  `seal`/`drain`); tests use `H.place` and `H.rebuild_net` (`tests/game/harness.lua`). Mentions of
+  `builder.place` and `builder.rebuild` elsewhere in this file are historical.
+
+The original notes follow.
 
 - **A failed `builder.place` leaves a half-built network.** If a `create_entity` fails, the
   builder asserts after earlier entities already exist, and they are never destroyed. Review

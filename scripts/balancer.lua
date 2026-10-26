@@ -9,7 +9,32 @@
 --   sinks = { [group id] = { player_index?, robot? } },   who removed the last block of a group
 --   loose = { [unit number] = LuaEntity },                 edges built by the game, not by this
 --                                                           mod (an upgrade, a ghost, a clone)
+--   loose_retired = { [unit number] = true },              loose edges of removed groups whose
+--                                                           swap back waits for budget
+--   redirects = { { entity, target?, player_index? } },    upgrade orders on edges, moved to
+--                                                           their belts by the next flush
+--   jobs  = { [group id] = job },                          staged rebuilds ("Staged rebuilds")
+--   job_seq = integer,                                     order in which jobs were started
+--   last_generated = tick,                                 last tick that generated a large
+--                                                           network (one per tick at most)
+--   drains = { [group id] = true },                        groups whose old networks drain
+--   stuck = { [group id] = true },                         drains paused by a full buffer,
+--                                                           retried every STUCK_RETRY ticks
+--   spill_queue = { { nets, anchor, sink, tiles, force_index, cursor } },  removed networks
+--                                                           being taken out and given away
+--   retry = { [group id] = true },                         marked by an event since the last
+--                                                           flush (a failed staged rebuild is
+--                                                           tried again)
 -- }
+--
+-- Bounded work (Plan 3 Task 5): the handler spends balancer.tick_budget work units per tick on
+-- scans, rebuilds, drains and spills; what does not fit waits for the next tick.
+--
+-- Conditional handlers, both re-set in on_load from storage alone (MODDING-RULES §2):
+--   on_nth_tick(1)    the flush handler, registered exactly while balancer.pending(st);
+--   on_nth_tick(300)  the stuck-drain retry, registered exactly while st.stuck is non-empty.
+-- Every registration goes through set_flush_handler / set_stuck_handler, which also keep
+-- balancer.registered (a per-peer mirror for tests, never read by product code).
 --
 -- Coalescing. Events only mark groups dirty (balancer.mark, mark_near, mark_block). The next
 -- tick flushes them all at once (an on_nth_tick(1) handler that exists only while something is
@@ -27,7 +52,9 @@
 --      robots (balancer.spill_clear);
 --   2. refreshes each live dirty group: scan; if it has at least one input and one output, its
 --      edges and block-tile linked belts are put in place (claimed), the network is rebuilt
---      only when N or M changed (or networks were merged in), and every port is linked. A group
+--      only when N or M changed, networks were merged in, or the group's settings (balance
+--      lanes, redistribute unused shares; scripts/groups.lua, scripts/gui.lua) differ from those
+--      the network was built with, and every port is linked. A group
 --      without inputs or without outputs keeps its network, dormant, with its items, and has no
 --      visible ports;
 --   3. links shared tiles: the output network linked belt of one group straight to the input
@@ -49,14 +76,27 @@ local groups = require("scripts.groups")
 local network = require("scripts.network")
 local builder = require("scripts.builder")
 local belt_io = require("scripts.io")
+local look = require("scripts.look")
 
 local balancer = {}
+
+-- Called at the end of every flush with the ids of the refreshed groups (set by scripts/gui.lua).
+---@param _ integer[]
+function balancer.after_flush(_) end
 
 ---@class mb.Balancer
 ---@field placed table? the network (builder Placed), or nil
 ---@field extra table[] networks merged into this group that are not carried in yet
+---@field draining table[]? old networks, sealed, whose items are moving into `placed` (staged)
+---@field failed string? the shape (job_key) whose staged placement failed, not retried until the
+---  group changes shape or is marked by an event
+---@field failed_err string?
+---@field player_index integer? the last player whose action refreshed the group
+---@field stuck_shown boolean? a stuck drain's refusal was shown
 ---@field n integer network inputs of `placed`
 ---@field m integer network outputs of `placed`
+---@field lanes boolean? `placed` has lane splitters (nil: no, a network from an older save)
+---@field recirc boolean? `placed` recirculates (nil: yes, a network from an older save)
 ---@field inputs mb.IoPort[] linked to placed.inputs[i]
 ---@field outputs mb.IoPort[] linked to placed.outputs[j]
 ---@field units (integer|uint64)[] blocks at the last refresh
@@ -65,18 +105,80 @@ local balancer = {}
 ---@field anchor { surface_index: integer, position: MapPosition }?
 ---@field refused { reason: string, position: MapPosition }[]
 
+-- Work units (builder.COST) the flush handler spends per tick on rebuilds, drains and spills.
+-- About 30 ms on a desktop. Generating a network cannot be split, so a tick that generates one
+-- can take longer (64:65: about 90 ms). A module constant, the same on every peer; tests lower it.
+balancer.tick_budget = 30000
+
+-- Work units the last budgeted flush charged (budget minus what was left; a single operation can
+-- take it a little over the budget, and generating a large network much more). Per peer, for
+-- tests (tests/game/staged.lua rebuild_cost_is_bounded); never read by product code.
+---@type number?
+balancer.spent = nil
+
 local function state()
   storage.balancer = storage.balancer or { recs = {}, dirty = {} }
   local st = storage.balancer
   st.sinks = st.sinks or {}
   st.loose = st.loose or {}
+  st.redirects = st.redirects or {}
+  st.jobs = st.jobs or {}
+  st.drains = st.drains or {}
+  st.spill_queue = st.spill_queue or {}
+  st.retry = st.retry or {}
+  st.stuck = st.stuck or {}
+  st.loose_retired = st.loose_retired or {}
   return st
 end
 
+-- The conditional handlers as registered in this Lua state (tests compare it with storage:
+-- tests/game/staged.lua handlers_match). Written next to every on_nth_tick call, never read by
+-- product code, so it cannot make peers differ.
+balancer.registered = { flush = false, stuck = false }
+
+local function set_flush_handler(on)
+  balancer.registered.flush = on
+  if on then
+    script.on_nth_tick(1, function()
+      balancer.flush(balancer.tick_budget)
+    end)
+  else
+    script.on_nth_tick(1, nil)
+  end
+end
+
 local function arm()
-  script.on_nth_tick(1, function()
-    balancer.flush()
-  end)
+  set_flush_handler(true)
+end
+
+-- Drains that got stuck (the new buffer full) are retried every STUCK_RETRY ticks while any is
+-- stuck: their new network may have emptied its buffer by itself. Registered exactly while
+-- st.stuck is non-empty: st.stuck gains entries only next to arm_stuck() and is emptied only by
+-- the handler, which unregisters itself, and by balancer.drop_networks, which unregisters it too;
+-- on_load re-sets it from st.stuck (multiplayer: a client that joins registers the same). Ids of
+-- groups gone or resumed meanwhile are harmless (the drain step drops them). A drain whose new
+-- buffer stays full (outputs blocked for good) is retried every STUCK_RETRY ticks for as long as
+-- that lasts; each retry merges the buffer once.
+local STUCK_RETRY = 300
+local function set_stuck_handler(on)
+  balancer.registered.stuck = on
+  if on then
+    script.on_nth_tick(STUCK_RETRY, function()
+      local st = storage.balancer
+      set_stuck_handler(false)
+      for gid in pairs(st.stuck or {}) do
+        st.drains[gid] = true
+      end
+      st.stuck = {}
+      arm()
+    end)
+  else
+    script.on_nth_tick(STUCK_RETRY, nil)
+  end
+end
+
+local function arm_stuck()
+  set_stuck_handler(true)
 end
 
 -- True while a flush has work to do: dirty groups, or loose edges to claim or swap back. The one
@@ -87,7 +189,18 @@ end
 ---@param st table?
 ---@return boolean
 function balancer.pending(st)
-  return st ~= nil and (next(st.dirty) ~= nil or (st.loose ~= nil and next(st.loose) ~= nil))
+  return st ~= nil and (next(st.dirty) ~= nil or (st.loose ~= nil and next(st.loose) ~= nil)
+    or (st.redirects ~= nil and next(st.redirects) ~= nil) or balancer.working(st))
+end
+
+-- True while staged work remains: a network being placed (st.jobs), old networks draining into
+-- a group's new one (st.drains), removed networks being taken out and given or spilled
+-- (st.spill_queue). Reads storage only.
+---@param st table?
+---@return boolean
+function balancer.working(st)
+  return st ~= nil and ((st.jobs ~= nil and next(st.jobs) ~= nil) or (st.drains ~= nil and next(st.drains) ~= nil)
+    or (st.spill_queue ~= nil and next(st.spill_queue) ~= nil))
 end
 
 -- on_load: re-sets the flush handler when a save was made with work pending.
@@ -95,18 +208,24 @@ function balancer.on_load()
   if balancer.pending(storage.balancer) then
     arm()
   end
+  if storage.balancer and storage.balancer.stuck and next(storage.balancer.stuck) then
+    arm_stuck()
+  end
 end
 
 -- Marks groups for the next flush. `player_index` is the player whose action changed them.
 ---@param ids integer[]
 ---@param gone integer[]?
 ---@param player_index integer?
-function balancer.mark(ids, gone, player_index)
+function balancer.mark(ids, gone, player_index, internal)
   local st = state()
   local any = false
   for _, list in ipairs({ ids, gone or {} }) do
     for _, id in ipairs(list) do
       st.dirty[id] = player_index or st.dirty[id] or 0
+      if not internal then
+        st.retry[id] = true
+      end
       any = true
     end
   end
@@ -116,7 +235,7 @@ function balancer.mark(ids, gone, player_index)
 end
 
 -- Marks the groups of the blocks on tiles x1..x2, y1..y2 of surface `si`.
-local function mark_tiles(si, x1, y1, x2, y2, player_index)
+local function mark_tiles(si, x1, y1, x2, y2, player_index, internal)
   local ids = {}
   for x = x1, x2 do
     for y = y1, y2 do
@@ -126,7 +245,7 @@ local function mark_tiles(si, x1, y1, x2, y2, player_index)
       end
     end
   end
-  balancer.mark(ids, nil, player_index)
+  balancer.mark(ids, nil, player_index, internal)
 end
 
 -- A block was built or removed at `entity`'s tile: the groups two tiles away in a straight line
@@ -187,7 +306,7 @@ function balancer.notify(player_index, refused, surface_index)
 end
 
 local function link(a, b)
-  if a.valid and b and b.valid and a.linked_belt_neighbour ~= b then
+  if a and a.valid and b and b.valid and a.linked_belt_neighbour ~= b then
     a.connect_linked_belts(b)
   end
 end
@@ -278,6 +397,41 @@ local function unclaim(ctx, ports)
   end
 end
 
+---@return mb.Balancer
+local function new_rec()
+  return { extra = {}, n = 0, m = 0, inputs = {}, outputs = {}, units = {}, tiles = {}, refused = {} } --[[@as mb.Balancer]]
+end
+
+-- Stops the staged placement of group `gid`'s new network, if any: what it created is removed
+-- (it holds no items: a network is linked only once complete).
+local function abort_job(st, gid)
+  local job = st.jobs[gid]
+  if job then
+    if job.b then
+      builder.abort(job.b)
+    end
+    st.jobs[gid] = nil
+  end
+end
+
+-- Every network of a record: the working one, those merged in and not carried in yet, and the
+-- old ones still draining into the working one.
+---@param rec mb.Balancer
+---@return table[]
+local function nets_of(rec)
+  local nets = {}
+  if rec.placed then
+    nets[1] = rec.placed
+  end
+  for _, list in ipairs({ rec.extra, rec.draining or {} }) do
+    for _, p in ipairs(list) do
+      nets[#nets + 1] = p
+    end
+  end
+  return nets
+end
+balancer.nets_of = nets_of
+
 -- A group that no longer exists: see the header, step 1.
 local function retire(st, id, ctx, live)
   local rec = st.recs[id]
@@ -285,6 +439,8 @@ local function retire(st, id, ctx, live)
     return
   end
   st.recs[id] = nil
+  abort_job(st, id)
+  st.drains[id] = nil
   ---@type integer?
   local target
   for _, u in ipairs(rec.units) do
@@ -307,24 +463,34 @@ local function retire(st, id, ctx, live)
   for _, list in ipairs({ rec.inputs, rec.outputs }) do
     for _, p in ipairs(list) do
       if p.visible and p.visible.valid then
-        ctx.pool[#ctx.pool + 1] = { entity = p.visible, gid = target, tiles = rec.tiles, sink = st.sinks[id], force_index = rec.force_index }
+        ctx.pool[#ctx.pool + 1] = { entity = p.visible, gid = target, tiles = rec.tiles, sink = st.sinks[id], force_index = rec.force_index,
+          retired = true }
       end
     end
   end
-  local nets = {}
-  if rec.placed then
-    nets[1] = rec.placed
-  end
-  for _, p in ipairs(rec.extra) do
-    nets[#nets + 1] = p
-  end
+  local nets = nets_of(rec)
   if #nets == 0 then
     return
   end
+  -- nothing flows in or out of them any more (a shared tile could still link one to a live
+  -- group): they are carried into the target, or taken out and given away, over several ticks
+  for _, p in ipairs(nets) do
+    builder.seal(p)
+  end
   if target then
-    ctx.donors[target] = ctx.donors[target] or {}
+    -- straight into the target's record: its refresh may wait for a later tick (budget)
+    local trec = st.recs[target]
+    if not trec then
+      trec = new_rec()
+      st.recs[target] = trec
+    end
+    if not trec.anchor then
+      -- a record not refreshed yet (its refresh deferred): until it is, the retired group's place
+      -- stands for it, so if it goes too its networks are found again or spilled there
+      trec.anchor, trec.tiles, trec.force_index = rec.anchor, rec.tiles, rec.force_index
+    end
     for _, p in ipairs(nets) do
-      table.insert(ctx.donors[target], p)
+      trec.extra[#trec.extra + 1] = p
     end
     if not live.set[target] then
       live.set[target] = true
@@ -335,16 +501,127 @@ local function retire(st, id, ctx, live)
   end
 end
 
+-- Staged rebuilds (Plan 3 Task 5, Review Focus 5: rebuild cost is bounded). A rebuild is a job
+-- in st.jobs[gid] = { key, n, m, lanes, recirc, tier, force, player_index, b }:
+--   1. generate and plan the network (network.build, builder.start): one tick, it cannot be
+--      split; it starts only in a tick with budget left;
+--   2. place it, a budget's worth of entities per tick (builder.advance). The old network keeps
+--      running meanwhile with as many ports as it has; the new one holds no items and is not
+--      linked, so aborting it (the group changed shape or is gone) loses nothing;
+--   3. once complete it becomes the working network at once (finish_job): every port is linked
+--      to it, and the old network and those merged in are sealed (builder.seal) and drain into
+--      it, a budget's worth of items per tick (st.drains, builder.drain). Each item moves exactly
+--      once, from a sealed network to the working one, so nothing is lost or duplicated whatever
+--      the tick or save it is interrupted at.
+-- A small rebuild fits in one tick and completes inside the flush that asked for it, as before.
+-- Everything is in storage, and the budget is counted in work units, not time, so a save
+-- made mid-rebuild loads and finishes it, and every peer of a multiplayer game does the same work
+-- in the same tick.
+
+-- Networks up to this many inputs and outputs are generated in any tick (a few milliseconds).
+local SMALL = 16
+-- Work units charged for scanning a group in a flush, per port found (64:65: about 11 ms).
+local SCAN_COST = 80
+-- Work units charged per edge swapped back to its belt by a flush.
+local UNSWAP_COST = 150
+-- Work units charged per stack given away or spilled when a removed network is taken out.
+local SPILL_COST = 25
+
+-- The shape a rebuild targets.
+local function job_key(n, m, want)
+  return n .. ":" .. m .. ":" .. tostring(want.lanes) .. ":" .. tostring(want.recirc)
+end
+
+-- The new network of group `gid` is complete: it becomes the working network, and the old one
+-- and those merged in are sealed and drain into it.
+local function finish_job(st, gid, job)
+  local rec = st.recs[gid]
+  st.jobs[gid] = nil
+  rec.draining = rec.draining or {}
+  local olds = {}
+  if rec.placed then
+    olds[1] = rec.placed
+  end
+  for _, p in ipairs(rec.extra) do
+    olds[#olds + 1] = p
+  end
+  for _, p in ipairs(olds) do
+    builder.seal(p)
+    rec.draining[#rec.draining + 1] = p
+  end
+  rec.placed, rec.extra = job.b.placed, {}
+  rec.n, rec.m, rec.lanes, rec.recirc = job.n, job.m, job.lanes, job.recirc
+  rec.failed, rec.failed_err = nil, nil
+  if #rec.draining > 0 then
+    st.drains[gid] = true
+  end
+end
+
+-- Runs group `gid`'s rebuild job within ctx.units. Returns "done" (the new network is working),
+-- "pending" (more next tick) or "failed" and the error (nothing was kept of the new network).
+local function run_job(st, gid, job, ctx)
+  if ctx.units <= 0 then
+    return "pending"
+  end
+  -- the group's force as it is now (forces merged since the job started: the old LuaForce is
+  -- invalid, and the entities already placed have moved to the new force)
+  local g = groups.get(gid)
+  if g then
+    job.force = g.force
+    if job.b then
+      job.b.placed.force = g.force
+    end
+  end
+  if not (job.b or job.net) then
+    -- generating cannot be split: a large network is generated only at the start of a tick's
+    -- budget, so nothing else shares its tick
+    if ctx.units < ctx.budget and math.max(job.n, job.m) > SMALL then
+      return "pending"
+    end
+    if math.max(job.n, job.m) > SMALL then
+      st.last_generated = game.tick
+    end
+    local net = assert(network.build(job.n, job.m, { balance_lanes = job.lanes, recirc = job.recirc }))
+    job.net = net -- plain tables, kept until the next step plans it
+    ctx.units = ctx.units - builder.COST.generate
+      * (#net.splitters + #(net.priority or {}) + #(net.lane_splitters or {}) + 2 * #net.edges)
+    if ctx.units <= 0 then
+      return "pending"
+    end
+  end
+  if not job.b then
+    local b, err = builder.start(job.net, job.tier, job.force)
+    job.net = nil
+    if not b then
+      st.jobs[gid] = nil
+      return "failed", err
+    end
+    job.b = b
+    ctx.units = ctx.units - builder.COST.plan * #b.ops
+    if ctx.units <= 0 then
+      return "pending"
+    end
+  end
+  local done, used, err = builder.advance(job.b, ctx.units)
+  ctx.units = ctx.units - used
+  if done == nil then
+    st.jobs[gid] = nil
+    return "failed", err
+  end
+  if not done then
+    return "pending"
+  end
+  finish_job(st, gid, job)
+  return "done"
+end
+
 -- A live group: see the header, step 2.
 local function refresh_group(st, gid, ctx, player_index)
   local g = groups.get(gid) --[[@as mb.Group]]
   local rec = st.recs[gid]
   if not rec then
-    rec = { extra = {}, n = 0, m = 0, inputs = {}, outputs = {}, units = {}, refused = {} }
+    rec = new_rec()
     st.recs[gid] = rec
-  end
-  for _, p in ipairs(ctx.donors[gid] or {}) do
-    rec.extra[#rec.extra + 1] = p
   end
   for _, list in ipairs({ rec.inputs, rec.outputs }) do
     for _, p in ipairs(list) do
@@ -356,6 +633,7 @@ local function refresh_group(st, gid, ctx, player_index)
 
   local s = game.get_surface(g.surface_index) --[[@as LuaSurface]]
   local scan = belt_io.scan(g)
+  ctx.units = ctx.units - SCAN_COST * (#scan.inputs + #scan.outputs)
   local refused = scan.refused
   local inputs, outputs = {}, {}
   if #scan.inputs > 0 and #scan.outputs > 0 then
@@ -405,27 +683,54 @@ local function refresh_group(st, gid, ctx, player_index)
     rec.force_index = g.force_index
   end
 
+  if player_index and player_index > 0 then
+    rec.player_index = player_index -- shown a stuck drain's refusal later
+  end
   local n, m = #inputs, #outputs
+  local want = groups.settings(gid)
+  local key = job_key(n, m, want)
+  if rec.failed and (rec.failed ~= key or ctx.retry[gid]) then
+    rec.failed, rec.failed_err = nil, nil
+  end
+  local job = st.jobs[gid]
+  if job and (job.key ~= key or n == 0 or m == 0) then
+    abort_job(st, gid) -- the group changed while its new network was being placed
+    job = nil
+  end
+  if rec.draining and #rec.draining > 0 then
+    st.drains[gid] = true -- also resumes a drain that got stuck (the new buffer was full)
+    -- (st.stuck is cleared only by its handler or by drop_networks, each unregistering the handler at
+    -- the same time, so the handler is registered exactly while st.stuck is non-empty, as on_load sets it)
+  end
   if n > 0 and m > 0 then
-    if not rec.placed or rec.n ~= n or rec.m ~= m or #rec.extra > 0 then
-      local net = assert(network.build(n, m))
-      local placed, err
-      if rec.placed then
-        placed, err = builder.rebuild(rec.placed, net, g.tier, g.force, rec.extra)
-      elseif #rec.extra > 0 then
-        local rest = {}
-        for i = 2, #rec.extra do
-          rest[#rest + 1] = rec.extra[i]
+    local stale = rec.placed and ((rec.lanes == true) ~= want.lanes or (rec.recirc ~= false) ~= want.recirc)
+    if rec.placed and rec.n == n and rec.m == m and not stale then
+      -- the network fits: networks merged in drain into it as it is
+      if #rec.extra > 0 then
+        rec.draining = rec.draining or {}
+        for _, p in ipairs(rec.extra) do
+          builder.seal(p)
+          rec.draining[#rec.draining + 1] = p
         end
-        placed, err = builder.rebuild(rec.extra[1], net, g.tier, g.force, rest)
-      else
-        placed, err = builder.place(net, g.tier, g.force)
+        rec.extra = {}
+        st.drains[gid] = true
       end
-      if placed then
-        rec.placed, rec.extra, rec.n, rec.m = placed, {}, n, m
+    else
+      local status, err
+      if rec.failed == key then
+        status, err = "failed", rec.failed_err -- a staged placement of this shape failed
       else
+        if not job then
+          st.job_seq = (st.job_seq or 0) + 1
+          job = { key = key, n = n, m = m, lanes = want.lanes, recirc = want.recirc, tier = g.tier, force = g.force,
+            player_index = player_index, seq = st.job_seq }
+          st.jobs[gid] = job
+        end
+        status, err = run_job(st, gid, job, ctx)
+      end
+      if status == "failed" then
         log("modular-balancer: group " .. gid .. " " .. n .. ":" .. m .. " not rebuilt: " .. tostring(err))
-        refused[#refused + 1] = { reason = err == "too-many-items" and "too-many-items" or "rebuild-failed",
+        refused[#refused + 1] = { reason = "rebuild-failed",
           position = rec.anchor and rec.anchor.position or { x = 0, y = 0 } }
         if rec.placed then
           -- keep the old network: link only as many ports as it has
@@ -441,6 +746,8 @@ local function refresh_group(st, gid, ctx, player_index)
           inputs, outputs = {}, {}
         end
       end
+      -- "pending": every port stays claimed; the old network (if any) keeps running with as many
+      -- of them as it has, linked below, and the rest are linked when the new one is complete
     end
     if rec.placed then
       for i, p in ipairs(inputs) do
@@ -495,8 +802,11 @@ local function link_shared(st, ctx)
             local other = st.recs[groups.of(p.far) or 0]
             if other and other.placed then
               for i, q in ipairs(other[side.theirs]) do
-                if q.kind == "shared" and q.tx == p.tx and q.ty == p.ty then
-                  link(rec.placed[side.own][k], other.placed[side.theirs][i])
+                -- while a rebuild is pending, a port beyond the old network's count has no
+                -- network side yet: it is linked when the new network is complete (relink)
+                local mine = rec.placed[side.own][k]
+                if mine and q.kind == "shared" and q.tx == p.tx and q.ty == p.ty then
+                  link(mine, other.placed[side.theirs][i])
                 end
               end
             end
@@ -538,15 +848,28 @@ local function cleanup(st, ctx)
     local x, y = belt_io.tiles_of(e)
     local unit = groups.block_at(e.surface_index, x, y)
     local gid = unit and groups.of(unit)
-    ctx.pool[#ctx.pool + 1] = { entity = e, gid = gid, tiles = { { x, y } } }
+    -- a removed group's edge deferred by an earlier flush stays deferrable (bounded work)
+    ctx.pool[#ctx.pool + 1] = { entity = e, gid = gid, tiles = { { x, y } }, retired = st.loose_retired[l.unit] }
   end
   st.loose = {}
+  st.loose_retired = {}
   for _, entry in ipairs(ctx.pool) do
     local e = entry.entity
-    if e.valid and not ctx.claimed[e.unit_number] then
+    if e.valid and not ctx.claimed[e.unit_number] and entry.gid and ctx.deferred[entry.gid] then
+      -- a port of a group whose refresh was deferred: left as it is, claimed or swapped back by
+      -- a later flush
+      st.loose[e.unit_number] = e
+    elseif e.valid and not ctx.claimed[e.unit_number] and ctx.units <= 0 and entry.retired and belt_io.edge_belt(e.name) then
+      -- out of budget (the ports of many removed groups): swapped back by a later flush. Only
+      -- removed groups' edges: a live group's dropped port (a failed rebuild) is swapped back
+      -- now, so its tile ends the flush as it began and nothing re-marks the group
+      st.loose[e.unit_number] = e
+      st.loose_retired[e.unit_number] = true
+    elseif e.valid and not ctx.claimed[e.unit_number] then
       touch(ctx, e)
       if belt_io.edge_belt(e.name) then
         belt_io.unswap(e)
+        ctx.units = ctx.units - UNSWAP_COST
       else
         local s, pos = e.surface, e.position
         local inv = belt_io.take_items(e)
@@ -560,19 +883,216 @@ local function cleanup(st, ctx)
   end
 end
 
--- Refreshes every dirty group now (see the header). Called by the on_nth_tick(1) handler, and by
--- tests that do not want to wait a tick.
-function balancer.flush()
+---@param t table
+---@return integer[]
+local function sorted_keys(t)
+  local keys = {}
+  for k in pairs(t) do
+    keys[#keys + 1] = k
+  end
+  table.sort(keys)
+  return keys
+end
+
+-- A staged rebuild of group `gid` completed after the flush that scanned its ports: links them,
+-- and its shared tiles, to the new network.
+local function relink(st, gid)
+  local rec = st.recs[gid]
+  for i, p in ipairs(rec.inputs) do
+    if p.visible then
+      link(p.visible, rec.placed.inputs[i])
+    end
+  end
+  for j, p in ipairs(rec.outputs) do
+    if p.visible then
+      link(p.visible, rec.placed.outputs[j])
+    end
+  end
+  link_shared(st, { refreshed = { gid } })
+end
+
+-- Drains group `gid`'s old networks into its working network within ctx.units.
+local function drain_group(st, gid, ctx)
+  local rec = st.recs[gid]
+  if not (rec and rec.placed and rec.draining and #rec.draining > 0) then
+    st.drains[gid] = nil
+    return
+  end
+  while #rec.draining > 0 do
+    if ctx.units <= 0 then
+      return
+    end
+    local status, used = builder.drain(rec.placed, rec.draining[1], ctx.units)
+    ctx.units = ctx.units - used
+    if status == "done" then
+      table.remove(rec.draining, 1)
+    elseif status == "stuck" then
+      -- the new buffer is full (builder.max_buffer_slots): the rest waits, safe, in the sealed
+      -- old network; retried every STUCK_RETRY ticks and at the group's next refresh. Shown once
+      -- to the player whose action started it.
+      st.drains[gid] = nil
+      st.stuck[gid] = true
+      arm_stuck()
+      if not rec.stuck_shown then
+        rec.stuck_shown = true
+        log("modular-balancer: group " .. gid .. ": old network not emptied, the buffer is full")
+        local r = { reason = "drain-stuck", position = rec.anchor and rec.anchor.position or { x = 0, y = 0 } }
+        if rec.anchor then
+          balancer.notify(rec.player_index, { r }, rec.anchor.surface_index)
+        end
+      end
+      return
+    else
+      return
+    end
+  end
+  st.drains[gid] = nil
+  rec.stuck_shown = nil
+  builder.settle(rec.placed)
+end
+
+-- Where the networks of a removed record go: its anchor's surface and position. A missing anchor
+-- (not expected: retire gives a fresh record the retired one's) is never taken for a lost
+-- surface: the items go to the origin of surface 1 (always there), logged. Nil only when the
+-- anchor's surface itself is gone (its blocks and belts with it).
+---@return LuaSurface?, MapPosition?
+local function spill_place(a)
+  if not a then
+    log("modular-balancer: a removed network has no place recorded; its items go to the origin of surface 1")
+    return game.get_surface(1), { x = 0, y = 0 }
+  end
+  local s = game.get_surface(a.surface_index)
+  if s and s.valid then
+    return s, a.position
+  end
+  return nil, nil
+end
+
+-- Takes the networks of removed groups (st.spill_queue, from retire: no group took them) out
+-- within ctx.units, and gives their items to whoever removed the last block, or spills them.
+local function spill_some(st, ctx)
+  while ctx.units > 0 and #st.spill_queue > 0 do
+    local sp = st.spill_queue[1]
+    local s, position = spill_place(sp.anchor)
+    local p = sp.nets[1]
+    if not p then
+      table.remove(st.spill_queue, 1)
+    elseif not s then
+      builder.destroy(p) -- the surface is gone, and its blocks and belts with it
+      table.remove(sp.nets, 1)
+    else
+      -- the take's share of the budget: every stack taken is given or spilled in this tick too
+      local item = builder.COST.item
+      local invs, _, gone, used = builder.take(p, ctx.units * item / (item + SPILL_COST))
+      ctx.units = ctx.units - (used or 0)
+      sp.cursor = sp.cursor or {}
+      for _, inv in ipairs(invs) do
+        ctx.units = ctx.units - SPILL_COST * (#inv - inv.count_empty_stacks())
+        balancer.give(inv, sp.sink, s, position --[[@as MapPosition]], sp.tiles, sp.force_index and game.forces[sp.force_index], sp.cursor)
+      end
+      if gone ~= false then
+        table.remove(sp.nets, 1)
+      end
+    end
+  end
+end
+
+-- Runs group `gid`'s rebuild job outside its refresh (the staged work, or the fairness step at the
+-- start of a flush) and handles every outcome: the one place a job that completes or fails after
+-- its refresh is finished off.
+local function step_job(st, gid, job, rec, ctx)
+  local status, err = run_job(st, gid, job, ctx)
+  if status == "done" then
+    -- its ports and shared tiles were scanned at its last refresh: link them to the new network
+    relink(st, gid)
+    ctx.refreshed[#ctx.refreshed + 1] = gid
+  elseif status == "failed" then
+    -- the next flush keeps the old network, drops the ports it cannot take and shows the
+    -- refusal; this shape is not tried again until the group changes or a player marks it
+    log("modular-balancer: group " .. gid .. " " .. job.n .. ":" .. job.m .. " not rebuilt: " .. tostring(err))
+    rec.failed, rec.failed_err = job.key, err
+    balancer.mark({ gid }, nil, job.player_index, true)
+  end
+end
+
+-- Rebuild jobs in the order they were started (fair: a group with a low id does not overtake).
+---@return integer[]
+local function jobs_in_order(st)
+  local ids = sorted_keys(st.jobs)
+  table.sort(ids, function(a, b)
+    return (st.jobs[a].seq or 0) < (st.jobs[b].seq or 0) or ((st.jobs[a].seq or 0) == (st.jobs[b].seq or 0) and a < b)
+  end)
+  return ids
+end
+
+-- The staged work of a tick, within ctx.units: rebuild jobs (in the order they started), then
+-- drains, then spills (group id order).
+local function work(st, ctx)
+  for _, gid in ipairs(jobs_in_order(st)) do
+    if ctx.units <= 0 then
+      return
+    end
+    local job = st.jobs[gid]
+    local rec = st.recs[gid]
+    if not (rec and groups.get(gid)) then
+      abort_job(st, gid)
+    elseif ctx.deferred and ctx.deferred[gid] then
+      -- its refresh waits for a later tick (budget) and may change its shape: no work on a
+      -- placement that may be dropped (review m3)
+    else
+      step_job(st, gid, job, rec, ctx)
+    end
+  end
+  for _, gid in ipairs(sorted_keys(st.drains)) do
+    if ctx.units <= 0 then
+      return
+    end
+    drain_group(st, gid, ctx)
+  end
+  spill_some(st, ctx)
+end
+
+-- Refreshes every dirty group (see the header), then does staged work: rebuilds, drains and
+-- spills (see "Staged rebuilds"). The on_nth_tick(1) handler calls it with balancer.tick_budget
+-- work units; without a budget (tests, balancer.refresh) it finishes all staged work at once.
+-- The handler stays registered while dirty groups, loose edges or staged work remain.
+---@param budget number?
+function balancer.flush(budget)
   local st = state()
+  -- upgrade orders whose target was an edge (scripts/lifecycle.lua): an order placed inside
+  -- on_marked_for_upgrade does not hold (measured), so it is placed here, a tick later; their
+  -- upgrade events mark groups dirty, flushed below in this same call
+  local redirects = st.redirects
+  st.redirects = {}
+  for _, r in ipairs(redirects) do
+    local e = r.entity
+    if e.valid then
+      e.cancel_upgrade(e.force)
+      if r.target then
+        local player = r.player_index and game.get_player(r.player_index) or nil
+        e.order_upgrade({ target = r.target, force = e.force, player = player })
+      end
+    end
+  end
   local dirty = st.dirty
   st.dirty = {}
-  script.on_nth_tick(1, nil)
-  local ids = {}
-  for id in pairs(dirty) do
-    ids[#ids + 1] = id
+  local retry = st.retry
+  st.retry = {}
+  local ids = sorted_keys(dirty)
+  local ctx = { pool = {}, claimed = {}, spills = {}, refreshed = {}, leftovers = {}, touched = {},
+    units = budget or math.huge, budget = budget or math.huge, retry = retry, deferred = {} }
+  -- a large network waiting to be generated goes first, before any refresh, every other tick, so
+  -- a steady stream of small refreshes (robots building near balancers) cannot starve it
+  -- (review m1). Its group is not dirty now (a refresh may change its shape).
+  if budget and st.last_generated ~= game.tick - 1 then
+    for _, gid in ipairs(jobs_in_order(st)) do
+      local job = st.jobs[gid] --[[@as table]]
+      if not (job.b or job.net) and math.max(job.n, job.m) > SMALL and not dirty[gid] and st.recs[gid] and groups.get(gid) then
+        step_job(st, gid, job, st.recs[gid], ctx)
+        break
+      end
+    end
   end
-  table.sort(ids)
-  local ctx = { pool = {}, claimed = {}, donors = {}, spills = {}, refreshed = {}, leftovers = {}, touched = {} }
   local live = { set = {} } -- array of group ids, and their set
   for _, id in ipairs(ids) do
     if groups.get(id) then
@@ -586,7 +1106,14 @@ function balancer.flush()
     end
   end
   for _, id in ipairs(live) do
-    refresh_group(st, id, ctx, dirty[id])
+    if ctx.units > 0 then
+      refresh_group(st, id, ctx, dirty[id])
+    else
+      -- out of budget: refreshed on a later tick (still dirty)
+      ctx.deferred[id] = true
+      st.dirty[id] = dirty[id] or 0
+      st.retry[id] = retry[id]
+    end
   end
   link_shared(st, ctx)
   cleanup(st, ctx)
@@ -594,32 +1121,44 @@ function balancer.flush()
   -- change the ports next to it (a port facing a tile that is a plain belt again, a belt whose
   -- shape changed). Their groups are flushed again on the next tick, but only for tiles that
   -- really differ now: a flush that put everything back as it was marks nothing.
-  local keys = {}
-  for key in pairs(ctx.touched) do
-    keys[#keys + 1] = key
-  end
-  table.sort(keys)
+  local keys = sorted_keys(ctx.touched)
   for _, key in ipairs(keys) do
     local t = ctx.touched[key] --[[@as { s: LuaSurface, x: integer, y: integer, before: string }]]
     if t.s.valid and belt_io.tile_signature(t.s, t.x, t.y) ~= t.before then
-      mark_tiles(t.s.index, t.x - 1, t.y - 1, t.x + 1, t.y + 1)
+      mark_tiles(t.s.index, t.x - 1, t.y - 1, t.x + 1, t.y + 1, nil, true)
     end
   end
   for _, sp in ipairs(ctx.spills) do
-    local a = sp.anchor
-    local s = a and game.get_surface(a.surface_index)
-    for _, p in ipairs(sp.nets) do
-      if s then
-        local invs = builder.take(p)
-        for _, inv in ipairs(invs) do
-          balancer.give(inv, sp.sink, s, a.position, sp.tiles, sp.force_index and game.forces[sp.force_index])
-        end
-      else
-        builder.destroy(p) -- the surface is gone, and its blocks and belts with it
-      end
-    end
+    st.spill_queue[#st.spill_queue + 1] = sp
   end
   st.sinks = {}
+  work(st, ctx)
+  if not budget then
+    -- everything at once (one pass does it all; a stuck drain or a failed job leaves the set)
+    for _ = 1, 3 do
+      if not balancer.working(st) then
+        break
+      end
+      work(st, { units = math.huge, refreshed = ctx.refreshed })
+    end
+  end
+  -- the connected look (scripts/look.lua): each refreshed block's graphics variation from its
+  -- group's tiles, next to the GUI hook so a staged rebuild that completes here is covered too
+  local dressed = {}
+  for _, gid in ipairs(ctx.refreshed) do
+    local g = groups.get(gid)
+    if g and not dressed[gid] then
+      dressed[gid] = true
+      look.dress(g.blocks, groups.where)
+    end
+  end
+  -- scripts/gui.lua: settings of refused rebuilds, open GUIs; with the groups refreshed here and
+  -- those whose staged rebuild completed in this call
+  balancer.after_flush(ctx.refreshed)
+  if budget then
+    balancer.spent = budget - ctx.units
+  end
+  set_flush_handler(balancer.pending(st))
 end
 
 -- Spills every stack of `inv` (a script inventory, destroyed) on the ground near `position` of
@@ -633,34 +1172,51 @@ end
 ---@param position MapPosition
 ---@param tiles {[1]: integer, [2]: integer}[]?
 ---@param force LuaForce?
-function balancer.spill_clear(inv, s, position, tiles, force)
+---@param cursor { r: number?, k: number? }?
+function balancer.spill_clear(inv, s, position, tiles, force, cursor)
   local taken = {}
   for _, t in ipairs(tiles or {}) do
     taken[t[1] .. "," .. t[2]] = true
   end
   local cx = math.floor((position.x or position[1]) --[[@as number]])
   local cy = math.floor((position.y or position[2]) --[[@as number]])
-  -- candidate tiles, nearest first, outside the group (up to 32 rings)
+  -- candidate tiles, nearest first, outside the group (up to 32 rings); with a `cursor` (kept by
+  -- the caller across calls: a removed network spilled over several ticks), the search goes on
+  -- from where the last call stopped instead of trying the full tiles near the centre again
+  ---@type number, number, {[1]: integer, [2]: integer}[]
   local r, k, ring = 0, 0, {}
+  local function make_ring()
+    ring = {}
+    for dx = -r, r do
+      for dy = -r, r do
+        if math.max(math.abs(dx), math.abs(dy)) == r then
+          ring[#ring + 1] = { cx + dx, cy + dy }
+        end
+      end
+    end
+  end
+  if cursor and cursor.r then
+    r, k = cursor.r, (cursor.k or 1) - 1
+    make_ring()
+  end
+  -- a removed network spilled over several ticks may hold tens of thousands of stacks that do
+  -- not merge: it gets more rings than one inventory (piling the rest on one spot costs more and
+  -- more per stack)
+  local rings = cursor and 256 or 32
   local function next_tile()
     while true do
       k = k + 1
       if k > #ring then
         r = r + 1
-        if r > 32 then
+        if r > rings then
           return nil
         end
-        ring, k = {}, 1
-        for dx = -r, r do
-          for dy = -r, r do
-            if math.max(math.abs(dx), math.abs(dy)) == r then
-              ring[#ring + 1] = { cx + dx, cy + dy }
-            end
-          end
-        end
+        make_ring()
+        k = 1
       end
       local t = ring[k] --[[@as {[1]: integer, [2]: integer}]]
-      if not taken[t[1] .. "," .. t[2]] then
+      -- never a tile that destroys what is dropped on it (a space platform's empty space)
+      if not taken[t[1] .. "," .. t[2]] and not s.get_tile(t[1], t[2]).prototype.destroys_dropped_items then
         return t
       end
     end
@@ -681,10 +1237,16 @@ function balancer.spill_clear(inv, s, position, tiles, force)
       end
     end
     if st.valid_for_read and not placed then
-      -- no free tile within 32 rings: never drop the stack
-      s.spill_item_stack({ position = position, stack = st, enable_looted = true, allow_belts = false, drop_full_stack = true, force = force })
+      -- no free tile within the rings: never drop the stack (on a platform next to its hub, the
+      -- middle of its foundation, rather than at a spot that may be over empty space)
+      local hub = s.platform and s.platform.hub
+      s.spill_item_stack({ position = hub and hub.valid and hub.position or position, stack = st, enable_looted = true, allow_belts = false,
+        drop_full_stack = true, force = force })
     end
     st.clear()
+  end
+  if cursor then
+    cursor.r, cursor.k = tile and r or rings + 1, tile and k or 1
   end
   inv.destroy()
 end
@@ -693,7 +1255,7 @@ end
 --   player     its main inventory (a player without one, dead or a spectator by the flush, is
 --              skipped);
 --   robot      the storage chests of its logistic network;
---   platform   its hub.
+--   platform   its hub (also with no sink when `s` is a space platform's surface).
 -- What does not fit, or everything with no sink, is spilled by balancer.spill_clear outside the
 -- group's `tiles`, marked for deconstruction by the robot's or platform's force, or else by
 -- `force` (the group's).
@@ -703,11 +1265,22 @@ end
 ---@param position MapPosition
 ---@param tiles {[1]: integer, [2]: integer}[]?
 ---@param force LuaForce?
-function balancer.give(inv, sink, s, position, tiles, force)
+---@param cursor table? see balancer.spill_clear
+function balancer.give(inv, sink, s, position, tiles, force, cursor)
   local player = sink and sink.player_index and game.get_player(sink.player_index) or nil
   local main = player and player.valid and player.get_main_inventory() or nil
   local robot = sink and sink.robot
   local platform = sink and sink.platform
+  if not (main or (robot and robot.valid) or (platform and platform.valid)) and s.platform then
+    -- a group on a space platform with nobody to take its items: its hub (items spilled on a
+    -- platform can land in space, where no robot fetches them)
+    platform = s.platform
+  end
+  -- on a platform, what the sink does not take goes to the hub before anything is spilled
+  local overflow = s.platform and s.platform.hub
+  if overflow and not overflow.valid then
+    overflow = nil
+  end
   ---@type LuaLogisticNetwork?
   local net
   ---@type LuaEntity?
@@ -735,9 +1308,17 @@ function balancer.give(inv, sink, s, position, tiles, force)
       elseif n > 0 then
         st.count = st.count - n
       end
+      if st.valid_for_read and overflow and overflow ~= hub then
+        local m = overflow.insert(st)
+        if m >= st.count then
+          st.clear()
+        elseif m > 0 then
+          st.count = st.count - m
+        end
+      end
     end
   end
-  balancer.spill_clear(inv, s, position, tiles, force)
+  balancer.spill_clear(inv, s, position, tiles, force, cursor)
 end
 
 -- Remembers who removed the last block of the `gone` groups (scripts/events.lua, a mined block):
@@ -762,8 +1343,36 @@ end
 ---@param player_index integer?
 function balancer.add_loose(e, player_index)
   state().loose[e.unit_number] = e
+  if belt_io.edge_belt(e.name) then
+    belt_io.dress(e) -- the game built it without the drawn half; it goes with the edge if unclaimed
+  end
   balancer.mark_near(e, player_index)
   arm()
+end
+
+-- An upgrade order on `e` that targets an edge (scripts/lifecycle.lua): the next flush cancels it
+-- and, when `target` ({ name, quality }) is given, orders `target` instead.
+---@param e LuaEntity
+---@param target { name: string, quality: string }?
+---@param player_index integer?
+function balancer.redirect_upgrade(e, target, player_index)
+  local st = state()
+  st.redirects[#st.redirects + 1] = { entity = e, target = target, player_index = player_index }
+  arm()
+end
+
+-- Configuration change: networks placed by an older version can be damaged (Plan 3 Task 5 sets
+-- every hidden entity indestructible when it is created). Makes them indestructible too.
+function balancer.harden()
+  for _, rec in pairs(storage.balancer and storage.balancer.recs or {}) do
+    for _, p in ipairs(nets_of(rec)) do
+      for _, e in ipairs(p.entities) do
+        if e.valid and e.destructible then
+          e.destructible = false
+        end
+      end
+    end
+  end
 end
 
 -- Marks every group (configuration change, a lost hidden surface).
@@ -779,6 +1388,8 @@ end
 -- The hidden surface is about to go (deleted or cleared by another mod or a command): every
 -- network's items are spilled at its group, the networks are dropped, and every group is marked,
 -- so the next flush places new networks on a new surface. Nothing is deleted.
+-- Unbounded on purpose (review m7): it runs in the event before the hidden surface goes, so every
+-- network must be out before the event returns. A rare admin or mod action.
 function balancer.drop_networks()
   local st = state()
   local ids = {}
@@ -786,26 +1397,39 @@ function balancer.drop_networks()
     ids[#ids + 1] = id
   end
   table.sort(ids)
+  -- removed groups' networks waiting to be given away, and new networks being placed, first
+  spill_some(st, { units = math.huge })
+  for _, id in ipairs(sorted_keys(st.jobs)) do
+    abort_job(st, id)
+  end
+  st.drains = {}
   for _, id in ipairs(ids) do
     local rec = st.recs[id]
-    local nets = { table.unpack(rec.extra) }
-    if rec.placed then
-      table.insert(nets, 1, rec.placed)
+    local nets = nets_of(rec)
+    local s, position
+    if #nets > 0 then
+      s, position = spill_place(rec.anchor)
     end
-    local a = rec.anchor
-    local s = a and game.get_surface(a.surface_index)
     for _, p in ipairs(nets) do
-      if s and s.valid then
+      if s then
         for _, inv in ipairs((builder.take(p))) do
-          balancer.spill_clear(inv, s, a.position, rec.tiles, rec.force_index and game.forces[rec.force_index])
+          balancer.spill_clear(inv, s, position --[[@as MapPosition]], rec.tiles, rec.force_index and game.forces[rec.force_index])
         end
       else
         builder.destroy(p)
       end
     end
-    rec.placed, rec.extra, rec.n, rec.m = nil, {}, 0, 0
+    rec.placed, rec.extra, rec.draining, rec.n, rec.m = nil, {}, nil, 0, 0
+    rec.stuck_shown = nil
   end
+  -- no drain is left to retry
+  st.stuck = {}
+  set_stuck_handler(false)
   balancer.mark_all()
+  -- mark_all arms only when a live group is left: with none (the last balancer was just mined
+  -- and its network was being spilled), nothing is pending any more and the handler goes, so the
+  -- registration matches storage as on_load would set it (review m1)
+  set_flush_handler(balancer.pending(st))
 end
 
 -- Marks group `id` and flushes at once (the interface of the plan; events mark and let the next

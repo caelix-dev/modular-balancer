@@ -1,0 +1,129 @@
+{
+ "counts": {
+  "mb-hidden": {
+   "by_name": {
+    "mb-hidden-buffer": 50,
+    "mb-hidden-linked-belt-express": 7500,
+    "mb-hidden-loader-express": 50,
+    "mb-hidden-splitter-express": 2000
+   },
+   "total": 9600
+  },
+  "nauvis": {
+   "by_name": {
+    "express-transport-belt": 400,
+    "infinity-chest": 400,
+    "mb-balancer-express": 500,
+    "mb-edge-in-express-transport-belt": 150,
+    "mb-edge-out-express-transport-belt": 250,
+    "mb-test-loader-express": 400
+   },
+   "total": 2100
+  }
+ },
+ "metrics": {
+  "entityUpdate": {
+   "aa_delta_pct": -8.861578266494172,
+   "max_ms": 0.1832,
+   "median_ms": 0.143075,
+   "min_ms": 0.13305,
+   "run_medians_ms": [
+    0.16895,
+    0.16125,
+    0.1832,
+    0.1389,
+    0.13835,
+    0.14445,
+    0.1417,
+    0.13305,
+    0.1377,
+    0.1466
+   ],
+   "stdev_ms": 0.016306986403243108
+  },
+  "gameUpdate": {
+   "aa_delta_pct": -9.204401184934413,
+   "max_ms": 0.5397000000000001,
+   "median_ms": 0.436175,
+   "min_ms": 0.41154999999999997,
+   "run_medians_ms": [
+    0.512,
+    0.49260000000000004,
+    0.5397000000000001,
+    0.42385,
+    0.42145,
+    0.44020000000000004,
+    0.43215,
+    0.41154999999999997,
+    0.41825,
+    0.44355
+   ],
+   "stdev_ms": 0.04474855180772771
+  },
+  "scriptUpdate": {
+   "aa_delta_pct": -13.33333333333333,
+   "max_ms": 0.0106,
+   "median_ms": 0.008050000000000002,
+   "min_ms": 0.0072,
+   "run_medians_ms": [
+    0.0103,
+    0.0096,
+    0.0106,
+    0.007350000000000001,
+    0.0073,
+    0.0084,
+    0.0079,
+    0.0073,
+    0.0072,
+    0.0082
+   ],
+   "stdev_ms": 0.0012970158056091682
+  },
+  "transportLinesUpdate": {
+   "aa_delta_pct": -10.74611662846956,
+   "max_ms": 0.2256,
+   "median_ms": 0.177325,
+   "min_ms": 0.1636,
+   "run_medians_ms": [
+    0.21005000000000001,
+    0.20915,
+    0.2256,
+    0.16825,
+    0.1667,
+    0.1884,
+    0.17375000000000002,
+    0.1636,
+    0.17145,
+    0.1809
+   ],
+   "stdev_ms": 0.021768658025294582
+  },
+  "wholeUpdate": {
+   "aa_delta_pct": -9.910774249256457,
+   "max_ms": 0.5937,
+   "median_ms": 0.4788,
+   "min_ms": 0.44694999999999996,
+   "run_medians_ms": [
+    0.56705,
+    0.54105,
+    0.5937,
+    0.4648,
+    0.46635,
+    0.48165,
+    0.47595,
+    0.44694999999999996,
+    0.4575,
+    0.48855000000000004
+   ],
+   "stdev_ms": 0.0505212576270843
+  }
+ },
+ "mods": [
+  "base",
+  "factorio-test",
+  "modular-balancer"
+ ],
+ "name": "r2-mb1-3x5-free",
+ "runs": 10,
+ "ticks_per_run": 900
+}

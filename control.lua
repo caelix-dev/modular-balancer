@@ -25,6 +25,7 @@ script.on_configuration_changed(function()
   local ids, gone = groups.on_configuration_changed()
   balancer.mark(ids, gone)
   lifecycle.on_configuration_changed()
+  balancer.harden()
   check_speeds()
 end)
 -- Only re-sets the conditional flush handler (MODDING-RULES §2).
@@ -42,7 +43,7 @@ end)
 -- which release zips leave out, so a player with factorio-test enabled gets none of it).
 if settings.startup["mb-dev"].value then
   require("tests.game.remote")
-  local suites = { "tests/game/smoke", "tests/game/placement", "tests/game/exactness", "tests/game/rebuild", "tests/game/groups", "tests/game/io", "tests/game/play", "tests/game/lifecycle" }
+  local suites = { "tests/game/smoke", "tests/game/placement", "tests/game/exactness", "tests/game/rebuild", "tests/game/groups", "tests/game/io", "tests/game/play", "tests/game/lifecycle", "tests/game/lanes", "tests/game/staged", "tests/game/look" }
   if settings.startup["mb-spikes"].value then
     suites[#suites + 1] = "spikes/multi_belt/test"
     suites[#suites + 1] = "spikes/hidden_surface/test"

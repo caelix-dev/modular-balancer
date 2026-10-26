@@ -1,0 +1,148 @@
+{
+ "counts": {
+  "mb-hidden": {
+   "by_name": {
+    "mb-hidden-buffer": 50,
+    "mb-hidden-linked-belt-express": 57800,
+    "mb-hidden-loader-express": 50,
+    "mb-hidden-splitter-express": 14950
+   },
+   "total": 72850
+  },
+  "nauvis": {
+   "by_name": {
+    "express-transport-belt": 1850,
+    "infinity-chest": 1900,
+    "mb-balancer-express": 3300,
+    "mb-edge-in-express-transport-belt": 1650,
+    "mb-edge-out-express-transport-belt": 250,
+    "mb-test-loader-express": 1900,
+    "transport-belt": 50
+   },
+   "total": 10900
+  }
+ },
+ "metrics": {
+  "entityUpdate": {
+   "aa_delta_pct": -3.2122169562927976,
+   "max_ms": 0.42,
+   "median_ms": 0.3679,
+   "min_ms": 0.35395,
+   "run_medians_ms": [
+    0.36365000000000003,
+    0.3679,
+    0.42,
+    0.4064,
+    0.35395,
+    0.37285,
+    0.36285,
+    0.36405,
+    0.3679,
+    0.37155000000000005
+   ],
+   "stdev_ms": 0.020996385932398505
+  },
+  "gameUpdate": {
+   "aa_delta_pct": -2.616319204749416,
+   "max_ms": 1.54735,
+   "median_ms": 1.411775,
+   "min_ms": 1.3722500000000002,
+   "run_medians_ms": [
+    1.4015,
+    1.42095,
+    1.5273,
+    1.54735,
+    1.3722500000000002,
+    1.4219499999999998,
+    1.40435,
+    1.41465,
+    1.4069,
+    1.4089
+   ],
+   "stdev_ms": 0.05709307605422337
+  },
+  "scriptUpdate": {
+   "aa_delta_pct": -1.7241379310344724,
+   "max_ms": 0.0125,
+   "median_ms": 0.0114,
+   "min_ms": 0.0107,
+   "run_medians_ms": [
+    0.011,
+    0.0115,
+    0.0125,
+    0.0124,
+    0.0107,
+    0.0116,
+    0.0114,
+    0.0113,
+    0.0114,
+    0.0112
+   ],
+   "stdev_ms": 0.0005637178175095923
+  },
+  "transportLinesUpdate": {
+   "aa_delta_pct": -1.6904854584885716,
+   "max_ms": 0.96455,
+   "median_ms": 0.883425,
+   "min_ms": 0.856,
+   "run_medians_ms": [
+    0.8672,
+    0.8871,
+    0.938,
+    0.96455,
+    0.856,
+    0.8889,
+    0.87975,
+    0.8901,
+    0.87965,
+    0.8786
+   ],
+   "stdev_ms": 0.03299867884560767
+  },
+  "wholeUpdate": {
+   "aa_delta_pct": -2.5735171400914494,
+   "max_ms": 1.5991,
+   "median_ms": 1.460525,
+   "min_ms": 1.4122,
+   "run_medians_ms": [
+    1.44745,
+    1.47475,
+    1.5991,
+    1.5985,
+    1.4122,
+    1.46625,
+    1.4502,
+    1.4575,
+    1.4549500000000002,
+    1.4635500000000001
+   ],
+   "stdev_ms": 0.06353707775779431
+  }
+ },
+ "mods": [
+  "base",
+  "factorio-test",
+  "modular-balancer"
+ ],
+ "name": "mb-33x5-thr",
+ "runs": 10,
+ "ticklens": {
+  "elapsed_s": 30.0010485,
+  "engine_mod_max_ms": {
+   "factorio-test": 0.1548
+  },
+  "engine_mod_mean_ms": {
+   "factorio-test": 0.010705
+  },
+  "idle": 29967,
+  "sampled_mod_self_ms": {
+   "[level]": 2.000136571219041,
+   "factorio-test": 0.0
+  },
+  "samples": 29999,
+  "scriptUpdate_mean_ms": 0.012773166666666665,
+  "ticks": 1800,
+  "wholeUpdate_mean_ms": 1.5320860555555555
+ },
+ "ticks_per_run": 900
+}

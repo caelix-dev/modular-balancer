@@ -1,0 +1,8 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.1.0
+Date: 2026-10-27
+  Features:
+    - Modular N:M belt balancer: place 1x1 blocks in any connected shape and attach belts; every belt feeding a block is an input, every belt it feeds is an output.
+    - Exact equal outputs, inputs drawn equally under backpressure, no items lost or duplicated, no per-tick script work in the steady state.
+    - Per-balancer settings: balance lanes, redistribute unused shares. Copy-paste settings and blueprints keep them.
+    - Four tiers matching the vanilla belts (turbo with or without Space Age); blueprints, undo/redo, ghosts and the upgrade planner work.

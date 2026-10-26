@@ -257,7 +257,9 @@ end
 -- equal lanes on every output, totalling min(supply, m), and draw every input's lanes in
 -- full; all left lanes fed draws min(0.5, m / n) per input. Then one slow output: both lanes
 -- of every output water-fill (each lane network gets half of everything).
-local function check_lanes(lnet, rand, mixes, alone)
+-- `plain`: no slow-output cases (a plain network has no recirculation, so a slow output's share
+-- goes to its sibling and the shares are not water-filled).
+local function check_lanes(lnet, rand, mixes, alone, plain)
   local n, m = lnet.n_in, lnet.n_out
   local function check(left, right, label, caps)
     local total = 0
@@ -295,7 +297,7 @@ local function check_lanes(lnet, rand, mixes, alone)
       left[i], right[i] = rand(501) / 1000, rand(501) / 1000
     end
     local caps = nil
-    if k % 2 == 0 and m >= 2 then
+    if k % 2 == 0 and m >= 2 and not plain then
       caps = filled(m, 1)
       caps[1 + rand(m)] = rand(1001) / 1000
     end
@@ -511,17 +513,28 @@ local function for_each(ratios, fn)
   end
 end
 
+-- Both modes: recirculating (the default) and plain (recirc = false, a per-balancer setting).
+-- Every guarantee except recirculation itself holds in both.
+local MODES = { {}, { recirc = false } }
+local function for_each_mode(ratios, fn)
+  for _, opts in ipairs(MODES) do
+    for _, r in ipairs(ratios) do
+      fn(build(r[1], r[2], opts), r[1], r[2])
+    end
+  end
+end
+
 ---------------------------------------------------------------------------------------------
 
 return {
   outputs_are_equal = function()
-    for_each(exhaustive_ratios(), check_outputs_equal)
-    for_each(sampled_ratios(), check_outputs_equal)
+    for_each_mode(exhaustive_ratios(), check_outputs_equal)
+    for_each_mode(sampled_ratios(), check_outputs_equal)
   end,
 
   inputs_are_drawn_equally = function()
     for _, ratios in ipairs({ exhaustive_ratios(), sampled_ratios() }) do
-      for_each(ratios, function(net)
+      for_each_mode(ratios, function(net)
         for _, cap in ipairs({ 0.25, 0.5, 0.75, 0.99 }) do
           check_inputs_equal(net, cap)
         end
@@ -530,15 +543,17 @@ return {
   end,
 
   throughput_unlimited = function()
-    for n = 1, 8 do
-      for m = 1, 8 do
-        local net = build(n, m)
-        each_subset_pair(n, m, function(ins, outs)
-          check_throughput(net, ins, outs)
-        end, 6, 200)
+    for _, opts in ipairs(MODES) do
+      for n = 1, 8 do
+        for m = 1, 8 do
+          local net = build(n, m, opts)
+          each_subset_pair(n, m, function(ins, outs)
+            check_throughput(net, ins, outs)
+          end, 6, 200)
+        end
       end
     end
-    for_each(sampled_ratios(), function(net, n, m)
+    for_each_mode(sampled_ratios(), function(net, n, m)
       each_subset_pair(n, m, function(ins, outs)
         check_throughput(net, ins, outs)
       end, 0, 20)
@@ -548,14 +563,14 @@ return {
   -- Max flow ignores how splitters share capacity with loops; this runs subsets through the
   -- splitter model, from the empty and from the loops-full start (exhaustive up to 4:4).
   throughput_unlimited_in_the_splitter_model = function()
-    for_each(exhaustive_ratios(), function(net, n, m)
+    for_each_mode(exhaustive_ratios(), function(net, n, m)
       local full = loops_full(net)
       each_subset_pair(n, m, function(ins, outs)
         check_model_throughput(net, ins, outs)
         check_model_throughput(net, ins, outs, full)
       end, 4, 25)
     end)
-    for_each(sampled_ratios(), function(net, n, m)
+    for_each_mode(sampled_ratios(), function(net, n, m)
       each_subset_pair(n, m, function(ins, outs)
         check_model_throughput(net, ins, outs)
       end, 0, 6)
@@ -564,10 +579,10 @@ return {
 
   outputs_equal_for_any_input_mix = function()
     local rand = lcg(777)
-    for_each(exhaustive_ratios(), function(net)
+    for_each_mode(exhaustive_ratios(), function(net)
       check_any_input_mix(net, rand, 50, math.huge)
     end)
-    for_each(sampled_ratios(), function(net)
+    for_each_mode(sampled_ratios(), function(net)
       check_any_input_mix(net, rand, 8, 2)
     end)
   end,
@@ -575,27 +590,29 @@ return {
   balance_lanes_lane_aware = function()
     local rand = lcg(4242)
     for _, entry in ipairs({ { exhaustive_ratios(), 50, math.huge }, { sampled_ratios(), 3, 2 } }) do
-      for _, r in ipairs(entry[1]) do
-        local n, m = r[1], r[2]
-        local plain = build(n, m)
-        local lnet = build(n, m, { balance_lanes = true })
-        assert(plain.lane_splitters == nil, "no lane splitters without opts")
-        assert(#lnet.lane_splitters == n, string.format("%d:%d has %d lane splitters", n, m, #lnet.lane_splitters))
-        for _, ed in ipairs(lnet.edges) do
-          if ed.to.kind == "lane_splitter" then
-            assert(ed.from.kind == "in", "lane splitter right after an input")
+      for _, recirc in ipairs({ true, false }) do
+        for _, r in ipairs(entry[1]) do
+          local n, m = r[1], r[2]
+          local plain = build(n, m, { recirc = recirc })
+          local lnet = build(n, m, { balance_lanes = true, recirc = recirc })
+          assert(plain.lane_splitters == nil, "no lane splitters without opts")
+          assert(#lnet.lane_splitters == n, string.format("%d:%d has %d lane splitters", n, m, #lnet.lane_splitters))
+          for _, ed in ipairs(lnet.edges) do
+            if ed.to.kind == "lane_splitter" then
+              assert(ed.from.kind == "in", "lane splitter right after an input")
+            end
           end
+          check_outputs_equal(lnet)
+          check_inputs_equal(lnet, 0.5)
+          check_lanes(lnet, rand, entry[2], entry[3], not recirc)
         end
-        check_outputs_equal(lnet)
-        check_inputs_equal(lnet, 0.5)
-        check_lanes(lnet, rand, entry[2], entry[3])
       end
     end
   end,
 
   -- Without balance_lanes the network keeps lanes: one lane in, the same lane out.
   network_keeps_lanes = function()
-    for_each(exhaustive_ratios(), function(net, n, m)
+    for_each_mode(exhaustive_ratios(), function(net, n, m)
       local lanes = flow.solve_lanes(net, filled(n, 0.5), filled(n, 0), 1)
       for j = 1, m do
         local o = assert(lanes.out[j], "missing output")
@@ -606,8 +623,8 @@ return {
   end,
 
   loops_full_start_gives_the_same_flows = function()
-    for_each(exhaustive_ratios(), check_loops_full_start)
-    for_each(sampled_ratios(), check_loops_full_start)
+    for_each_mode(exhaustive_ratios(), check_loops_full_start)
+    for_each_mode(sampled_ratios(), check_loops_full_start)
   end,
 
   loops_drain_after_backpressure = function()
@@ -719,7 +736,10 @@ return {
     local rand = lcg(200)
     for _, r in ipairs({ { 200, 7 }, { 7, 200 } }) do
       local n, m = r[1], r[2]
-      -- Best of three, so a garbage collection cycle does not count.
+      -- Best of three, so a garbage collection cycle does not count. This is the suite's only
+      -- wall-clock assertion. Measured best of five on an idle machine: 200:7 16 ms, 7:200 41 ms,
+      -- so the old 50 ms bound failed whenever the machine was busy (the flaky run of the Task 2
+      -- review). The bound is now loose: it catches a blow-up, not a slowdown.
       local best = math.huge
       local net
       for _ = 1, 3 do
@@ -727,7 +747,7 @@ return {
         net = build(n, m)
         best = math.min(best, os.clock() - t)
       end
-      assert(best < 0.05, string.format("%d:%d builds in %.1f ms", n, m, best * 1000))
+      assert(best < 1.0, string.format("%d:%d builds in %.1f ms", n, m, best * 1000))
       check_structure(net)
       check_any_input_mix(net, rand, 20, 0)
       check_one_slow_output(net, rand, 2)
@@ -746,6 +766,35 @@ return {
       local x, y = a.edges[e], b.edges[e]
       for _, k in ipairs({ "from", "to" }) do
         assert(x[k].kind == y[k].kind and x[k].id == y[k].id and x[k].port == y[k].port, "same edges")
+      end
+    end
+  end,
+
+  -- Two butterflies are a Benes network: (2k - 1) * 2^(k - 1) splitters for a plain 2^k:2^k.
+  benes_core_sizes = function()
+    for k, want in pairs({ [2] = 6, [3] = 20, [4] = 56, [6] = 352, [7] = 832 }) do
+      local net = build(2 ^ k, 2 ^ k, { recirc = false })
+      assert(#net.splitters == want, string.format("%d:%d plain has %d splitters, expected %d", 2 ^ k, 2 ^ k, #net.splitters, want))
+    end
+  end,
+
+  -- fold(): no plain splitter sends both its outputs into the same node.
+  no_redundant_splitter_pairs = function()
+    for _, ratios in ipairs({ exhaustive_ratios(), sampled_ratios() }) do
+      for _, r in ipairs(ratios) do
+        for _, opts in ipairs({ {}, { recirc = false }, { balance_lanes = true } }) do
+          local net = build(r[1], r[2], opts)
+          local target = {}
+          for _, ed in ipairs(net.edges) do
+            if ed.from.kind == "splitter" then
+              local key = ed.to.kind .. ":" .. ed.to.id
+              local prev = target[ed.from.id]
+              assert(not (prev and prev == key and ed.to.kind ~= "out"),
+                string.format("%s: splitter %d feeds both inputs of %s", tag(net), ed.from.id, key))
+              target[ed.from.id] = key
+            end
+          end
+        end
       end
     end
   end,

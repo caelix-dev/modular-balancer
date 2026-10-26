@@ -1,0 +1,128 @@
+{
+ "counts": {
+  "mb-hidden": {
+   "by_name": {
+    "mb-hidden-buffer": 50,
+    "mb-hidden-linked-belt-express": 4650,
+    "mb-hidden-loader-express": 50,
+    "mb-hidden-splitter-express": 1250
+   },
+   "total": 6000
+  },
+  "nauvis": {
+   "by_name": {
+    "express-transport-belt": 500,
+    "infinity-chest": 550,
+    "mb-hidden-linked-belt-express": 550,
+    "mb-test-loader-express": 550,
+    "transport-belt": 50
+   },
+   "total": 2200
+  }
+ },
+ "metrics": {
+  "entityUpdate": {
+   "aa_delta_pct": 2.2066549912434423,
+   "max_ms": 0.16975,
+   "median_ms": 0.14150000000000001,
+   "min_ms": 0.13215,
+   "run_medians_ms": [
+    0.14765,
+    0.13215,
+    0.13490000000000002,
+    0.15205000000000002,
+    0.14635,
+    0.13895000000000002,
+    0.14300000000000002,
+    0.14,
+    0.13655,
+    0.16975
+   ],
+   "stdev_ms": 0.010892225820893239
+  },
+  "gameUpdate": {
+   "aa_delta_pct": 1.3911933631142337,
+   "max_ms": 0.4403,
+   "median_ms": 0.3928,
+   "min_ms": 0.36895,
+   "run_medians_ms": [
+    0.41005,
+    0.37565000000000004,
+    0.37565000000000004,
+    0.41105,
+    0.3987,
+    0.38875000000000004,
+    0.39644999999999997,
+    0.38915,
+    0.36895,
+    0.4403
+   ],
+   "stdev_ms": 0.02121454165844216
+  },
+  "scriptUpdate": {
+   "aa_delta_pct": -1.5384615384615292,
+   "max_ms": 0.0077,
+   "median_ms": 0.00625,
+   "min_ms": 0.0055,
+   "run_medians_ms": [
+    0.0069,
+    0.0055,
+    0.0062,
+    0.0072499999999999995,
+    0.0065,
+    0.006,
+    0.0062,
+    0.0063,
+    0.0058,
+    0.0077
+   ],
+   "stdev_ms": 0.0006733209569819665
+  },
+  "transportLinesUpdate": {
+   "aa_delta_pct": 1.301684532924967,
+   "max_ms": 0.1515,
+   "median_ms": 0.131125,
+   "min_ms": 0.1205,
+   "run_medians_ms": [
+    0.1377,
+    0.1229,
+    0.1256,
+    0.13175,
+    0.13665,
+    0.1303,
+    0.1327,
+    0.1305,
+    0.1205,
+    0.1515
+   ],
+   "stdev_ms": 0.00879440478688328
+  },
+  "wholeUpdate": {
+   "aa_delta_pct": 1.0456164540962882,
+   "max_ms": 0.48829999999999996,
+   "median_ms": 0.43715000000000004,
+   "min_ms": 0.40865,
+   "run_medians_ms": [
+    0.45165,
+    0.41085,
+    0.42005,
+    0.45530000000000004,
+    0.45045,
+    0.4337,
+    0.4388,
+    0.4355,
+    0.40865,
+    0.48829999999999996
+   ],
+   "stdev_ms": 0.02380307228069519
+  }
+ },
+ "mods": [
+  "base",
+  "factorio-test",
+  "modular-balancer"
+ ],
+ "name": "r2-plain0-8x3-thr",
+ "runs": 10,
+ "ticks_per_run": 900
+}

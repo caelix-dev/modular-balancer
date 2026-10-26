@@ -12,7 +12,7 @@
 --                                   hidden and has no recipe; only a cheat (a console insert, an
 --                                   editor filter) can create it. Such an item takes the closed
 --                                   side and jams that splitter lane; builder.contents and
---                                   builder.rebuild drop it, so the next rebuild clears the jam
+--                                   builder.drain drop it, so the next rebuild clears the jam
 --   mb-hidden-buffer                the buffer chest (one per network) that holds what a rebuild
 --                                   could not put back on the belts; its size is set per network
 --                                   at runtime with set_inventory_size_override
@@ -26,9 +26,11 @@
 --                                   that belt. The last tile of a player belt that points into a
 --                                   block (input) or leaves it (output) is swapped for one. Input
 --                                   edges allow side loading like the belt they replace; output
---                                   edges do not. Own fast-replace group, so a belt cannot be
---                                   dragged over an edge. They keep the vanilla linked-belt
---                                   structure (a hatch) for now; Plan 3 gives them a plain belt look
+--                                   edges do not. They look like the belt (no hatch; the half
+--                                   tile a linked belt leaves blank is drawn by scripts/io.lua,
+--                                   see below) and share its fast-replace group, so belts are
+--                                   dragged and fast-replaced over them and the balancer swaps the
+--                                   new belt again. Hidden, so no planner lists them
 -- Tiers: basic, fast, express and turbo (see TIERS).
 --
 -- Required from data-final-fixes.lua, so every speed is read from the final belt prototype: a
@@ -130,6 +132,44 @@ never.subgroup = nil
 never.order = "z"
 protos[#protos + 1] = never
 
+-- The port hood an edge draws (tools/render/, sprite set from prototypes/gfx.lua): sheets of 6 frames, the hood on the N, E,
+-- S, W, N, E side of the tile. An input edge points at its block (hood on the side it faces:
+-- frames 1-4 for north, east, south, west), an output edge away from it (frames 3-6). Belts other
+-- than the four vanilla tiers get the basic colours. The roof chevrons point the way the items go:
+-- hood-<colour>-in.png toward the block, hood-<colour>-out.png away from it.
+local HOOD_COLOURS = {
+  ["transport-belt"] = "basic",
+  ["fast-transport-belt"] = "fast",
+  ["express-transport-belt"] = "express",
+  ["turbo-transport-belt"] = "turbo",
+}
+local gfx = require("prototypes.gfx")
+local function edge_hood(belt_name, role)
+  local colour = HOOD_COLOURS[belt_name] or "basic"
+  local function way(first)
+    local function sheet(file, shadow)
+      return {
+        filename = gfx.dir .. file,
+        priority = "high",
+        width = gfx.frame,
+        height = gfx.frame,
+        x = (first - 1) * gfx.frame,
+        frames = 4,
+        scale = gfx.scale,
+        draw_as_shadow = shadow or nil,
+      }
+    end
+    return { sheets = { sheet("hood-" .. colour .. "-" .. role .. ".png"), sheet("hood-shadow.png", true) } }
+  end
+  local hood = way(role == "in" and 1 or 3)
+  return {
+    direction_in = hood,
+    direction_out = hood,
+    direction_in_side_loading = hood,
+    direction_out_side_loading = hood,
+  }
+end
+
 -- Edges, one input and one output per transport belt (docs/feasibility.md F1).
 local base_edge = raw("linked-belt", "linked-belt")
 for _, belt in pairs(data.raw["transport-belt"]) do
@@ -151,11 +191,85 @@ for _, belt in pairs(data.raw["transport-belt"]) do
     e.placeable_by = item and { item = item, count = 1 } or nil
     e.max_health = belt.max_health
     e.resistances = table.deepcopy(belt.resistances)
+    -- `hidden` (below) keeps edges out of the planners' lists and makes them invalid upgrade
+    -- sources (order_upgrade on an edge is refused); scripts/lifecycle.lua follows the planner
+    -- through the edge's neighbours instead, and redirects any order whose target is an edge
     e.next_upgrade = nil
-    e.fast_replaceable_group = "mb-edge"
+    -- the belt's look (spec Update 2026-10-25): the belt's animation set, sounds, corpse and
+    -- explosion; selected and fast-replaced like the belt. Its structure is the block's port hood
+    -- (Plan 3 Task 4): a cowling over the half tile next to the block, where items go into or
+    -- come out of the link, with the belt's mouth at its far end (graphics/entity/balancer/, rendered by tools/render/).
+    e.structure = edge_hood(belt.name, role)
+    e.structure_render_layer = "object"
+    e.animation_speed_coefficient = belt.animation_speed_coefficient
+    e.corpse = belt.corpse
+    e.dying_explosion = belt.dying_explosion
+    e.working_sound = table.deepcopy(belt.working_sound)
+    e.open_sound = table.deepcopy(belt.open_sound)
+    e.close_sound = table.deepcopy(belt.close_sound)
+    e.collision_box = table.deepcopy(belt.collision_box) or e.collision_box
+    e.selection_box = table.deepcopy(belt.selection_box) or e.selection_box
+    e.collision_mask = table.deepcopy(belt.collision_mask)
+    e.selection_priority = belt.selection_priority
+    e.fast_replaceable_group = belt.fast_replaceable_group
     e.hidden = true
     e.hidden_in_factoriopedia = true
     protos[#protos + 1] = e
+  end
+end
+
+-- The other half of an edge tile. A linked belt draws the belt animation only on the half of its
+-- tile away from its link (like an underground belt; measured: an empty `structure` leaves the
+-- half toward the block blank, and the starting/ending indices change nothing). scripts/io.lua
+-- therefore draws, under each edge (render layer "floor", below the edge's own half belt and its
+-- items), the straight belt animation of the edge's belt and direction: one animation prototype
+-- `mb-edge-belt-<belt>-<direction>` per belt and direction, cut from the belt's animation sheet
+-- (one row per direction, one column per frame). Only single-file sheets (`filename`, no
+-- `layers`, `filenames` or `stripes`) are cut; a belt with another layout gets no animations and
+-- its edges keep the half belt.
+local DEFAULT_INDEX = { east = 1, west = 2, north = 3, south = 4 } -- TransportBeltAnimationSet defaults
+for _, belt in pairs(data.raw["transport-belt"]) do
+  local set = belt.belt_animation_set
+  local a = set and set.animation_set
+  if set and a and a.filename and not (a.layers or a.filenames or a.stripes) then
+    local size = a.size
+    local w = a.width or (type(size) == "table" and size[1]) or size
+    local h = a.height or (type(size) == "table" and size[2]) or size
+    local frames = a.frame_count or 1
+    local ll = a.line_length
+    if type(w) == "number" and type(h) == "number" and (ll == nil or ll == 0 or ll == frames) then
+      for dir, default in pairs(DEFAULT_INDEX) do
+        local row = set[dir .. "_index"] or default --[[@as integer]]
+        local anim = {
+          type = "animation",
+          name = "mb-edge-belt-" .. belt.name .. "-" .. dir,
+          filename = a.filename,
+          priority = a.priority,
+          width = w,
+          height = h,
+          x = a.x or 0,
+          y = (a.y or 0) + (row - 1) * h,
+          scale = a.scale,
+          shift = a.shift and table.deepcopy(a.shift) or nil,
+          frame_count = frames,
+          line_length = frames,
+          tint = a.tint and table.deepcopy(a.tint) or nil,
+          flags = a.flags and table.deepcopy(a.flags) or nil,
+        }
+        protos[#protos + 1] = anim
+        if set.alternate and frames % 2 == 0 then
+          -- an `alternate` belt (turbo) draws every other tile half a cycle later (measured:
+          -- its marks repeat every two tiles); the "-odd" copy is for tiles with x + y odd
+          local odd = table.deepcopy(anim)
+          odd.name = anim.name .. "-odd"
+          odd.frame_sequence = {}
+          for k = 1, frames do
+            odd.frame_sequence[k] = (k - 1 + frames / 2) % frames + 1
+          end
+          protos[#protos + 1] = odd
+        end
+      end
+    end
   end
 end
 

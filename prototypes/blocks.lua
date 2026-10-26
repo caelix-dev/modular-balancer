@@ -8,9 +8,9 @@
 -- character and water.
 --
 -- Recipe: the tier's splitter plus 5 of the tier's belts, unlocked by the technology that
--- unlocks the tier's splitter. Placeholder graphics (final graphics are Plan 3): the tier
--- splitter's icon, and the first frame of the tier splitter's north-facing housing scaled down
--- to one tile (already coloured per tier like the vanilla belts).
+-- unlocks the tier's splitter. Graphics and icon: original sprites, coloured per tier like the
+-- vanilla belts (see below); the port hoods over the edges are drawn by the edges themselves
+-- (prototypes/hidden.lua).
 -- `next_upgrade` chains the tiers for the upgrade planner.
 -- Required from data.lua.
 
@@ -31,8 +31,7 @@ else
   TIERS[#TIERS + 1] = { name = "turbo", belt = "express-transport-belt", splitter = "express-splitter", orphan = true }
 end
 
--- The splitter housing is 2.5 tiles wide at its own scale; this fits it into one tile.
-local SHRINK = 0.4
+local look = require("scripts.look")
 
 local function raw(kind, name)
   local p = data.raw[kind] and data.raw[kind][name]
@@ -42,49 +41,55 @@ local function raw(kind, name)
   return p
 end
 
--- First frame of an Animation (or its layers) as a Sprite scaled by SHRINK, or nil when the
--- animation is not a plain sheet (stripes or several files).
-local function first_frame(anim)
-  if anim.layers then
-    local layers = {}
-    for _, layer in ipairs(anim.layers) do
-      local s = first_frame(layer)
-      if not s then
-        return nil
-      end
-      layers[#layers + 1] = s
+-- Graphics: Blender renders (tools/render/), sprite set chosen in prototypes/gfx.lua. One sheet
+-- per tier with 47 frames, one per connected neighbourhood (scripts/look.lua: a group reads as one
+-- machine, its rounded frame only around the outline), plus a shared shadow sheet. The tile is
+-- centred in each frame; the housing shows above its footprint and the shadow falls to the right.
+local GFX = "__modular-balancer__/graphics/"
+local gfx = require("prototypes.gfx")
+local FRAMES = #look.masks()
+
+-- One Animation per neighbourhood: that frame of the static sheet (held for the whole loop with
+-- repeat_count), the machinery loop in the top opening (the same 16 frames for every
+-- neighbourhood) and the shadow. A prototype animation: no script runs for it.
+local ANIM_FRAMES = 16
+local function animations(colour)
+  local list = {}
+  for i = 1, FRAMES do
+    local x = ((i - 1) % 8) * gfx.frame
+    local y = math.floor((i - 1) / 8) * gfx.frame
+    local function still(file, shadow)
+      return {
+        filename = gfx.dir .. file,
+        priority = "high",
+        width = gfx.frame,
+        height = gfx.frame,
+        x = x,
+        y = y,
+        frame_count = 1,
+        repeat_count = ANIM_FRAMES,
+        scale = gfx.scale,
+        draw_as_shadow = shadow or nil,
+      }
     end
-    return { layers = layers }
+    list[i] = {
+      layers = {
+        still("balancer-" .. colour .. ".png"),
+        {
+          filename = gfx.dir .. "machinery-" .. colour .. ".png",
+          priority = "high",
+          width = gfx.frame,
+          height = gfx.frame,
+          frame_count = ANIM_FRAMES,
+          line_length = 8,
+          animation_speed = 0.4,
+          scale = gfx.scale,
+        },
+        still("balancer-shadow.png", true),
+      },
+    }
   end
-  if not anim.filename then
-    return nil
-  end
-  local shift = anim.shift or { 0, 0 }
-  local sx, sy = shift[1] or shift.x or 0, shift[2] or shift.y or 0
-  return {
-    filename = anim.filename,
-    priority = anim.priority,
-    width = anim.width or (type(anim.size) == "table" and anim.size[1] or anim.size),
-    height = anim.height or (type(anim.size) == "table" and anim.size[2] or anim.size),
-    x = anim.x,
-    y = anim.y,
-    shift = { sx * SHRINK, sy * SHRINK },
-    scale = (anim.scale or 1) * SHRINK,
-    tint = anim.tint,
-    draw_as_shadow = anim.draw_as_shadow,
-  }
-end
-
-local function picture(splitter)
-  local s = splitter.structure and splitter.structure.north and first_frame(splitter.structure.north)
-  return s or first_frame(raw("splitter", "splitter").structure.north)
-end
-
-local function icons_of(item)
-  if item.icons then
-    return table.deepcopy(item.icons)
-  end
-  return { { icon = item.icon, icon_size = item.icon_size } }
+  return list
 end
 
 -- The effects list of the technology that unlocks `recipe`, or nil.
@@ -133,7 +138,8 @@ for i, tier in ipairs(TIERS) do
   if next_tier and next_tier.orphan then
     next_tier = nil
   end
-  local icons = icons_of(splitter_item)
+  local colour = tier.orphan and "express" or tier.name
+  local icons = { { icon = GFX .. "icons/balancer-" .. colour .. ".png", icon_size = 64 } }
 
   protos[#protos + 1] = {
     type = "simple-entity-with-owner",
@@ -151,7 +157,8 @@ for i, tier in ipairs(TIERS) do
     fast_replaceable_group = "mb-balancer",
     next_upgrade = next_tier and ("mb-balancer-" .. next_tier.name) or nil,
     render_layer = "object",
-    picture = picture(splitter),
+    animations = animations(colour),
+    random_variation_on_create = false,
     hidden = tier.orphan or nil,
     hidden_in_factoriopedia = tier.orphan or nil,
   }

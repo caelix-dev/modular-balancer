@@ -1,0 +1,148 @@
+{
+ "counts": {
+  "mb-hidden": {
+   "by_name": {
+    "mb-hidden-buffer": 50,
+    "mb-hidden-linked-belt-express": 8500,
+    "mb-hidden-loader-express": 50,
+    "mb-hidden-splitter-express": 2250
+   },
+   "total": 10850
+  },
+  "nauvis": {
+   "by_name": {
+    "express-transport-belt": 350,
+    "infinity-chest": 400,
+    "mb-balancer-express": 500,
+    "mb-edge-in-express-transport-belt": 150,
+    "mb-edge-out-express-transport-belt": 250,
+    "mb-test-loader-express": 400,
+    "transport-belt": 50
+   },
+   "total": 2100
+  }
+ },
+ "metrics": {
+  "entityUpdate": {
+   "aa_delta_pct": -2.4902723735408623,
+   "max_ms": 0.1353,
+   "median_ms": 0.12680000000000002,
+   "min_ms": 0.12165000000000001,
+   "run_medians_ms": [
+    0.12434999999999999,
+    0.128,
+    0.1256,
+    0.1353,
+    0.13155,
+    0.12825,
+    0.1243,
+    0.12165000000000001,
+    0.1262,
+    0.1274
+   ],
+   "stdev_ms": 0.00390404348791808
+  },
+  "gameUpdate": {
+   "aa_delta_pct": -4.548051651239852,
+   "max_ms": 0.48445,
+   "median_ms": 0.426125,
+   "min_ms": 0.3977,
+   "run_medians_ms": [
+    0.4191,
+    0.43265,
+    0.423,
+    0.48445,
+    0.4399,
+    0.42925,
+    0.422,
+    0.3977,
+    0.41455,
+    0.43274999999999997
+   ],
+   "stdev_ms": 0.022582196158330868
+  },
+  "scriptUpdate": {
+   "aa_delta_pct": -9.027777777777771,
+   "max_ms": 0.008,
+   "median_ms": 0.00675,
+   "min_ms": 0.006,
+   "run_medians_ms": [
+    0.0066,
+    0.0071,
+    0.0068,
+    0.008,
+    0.0074,
+    0.0067,
+    0.0067,
+    0.006,
+    0.0066,
+    0.007050000000000001
+   ],
+   "stdev_ms": 0.0005377163647211129
+  },
+  "transportLinesUpdate": {
+   "aa_delta_pct": -6.380881990638096,
+   "max_ms": 0.2336,
+   "median_ms": 0.194775,
+   "min_ms": 0.17825,
+   "run_medians_ms": [
+    0.1926,
+    0.1986,
+    0.1905,
+    0.2336,
+    0.20274999999999999,
+    0.19695000000000001,
+    0.1898,
+    0.17825,
+    0.18955,
+    0.1993
+   ],
+   "stdev_ms": 0.014532067987729758
+  },
+  "wholeUpdate": {
+   "aa_delta_pct": -3.966244725738393,
+   "max_ms": 0.5199,
+   "median_ms": 0.463125,
+   "min_ms": 0.43105000000000004,
+   "run_medians_ms": [
+    0.45095,
+    0.46499999999999997,
+    0.46125,
+    0.5199,
+    0.48114999999999997,
+    0.46565,
+    0.4602,
+    0.43105000000000004,
+    0.4513,
+    0.472
+   ],
+   "stdev_ms": 0.023314068833122103
+  }
+ },
+ "mods": [
+  "base",
+  "factorio-test",
+  "modular-balancer"
+ ],
+ "name": "mb-3x5-thr",
+ "runs": 10,
+ "ticklens": {
+  "elapsed_s": 30.0004007,
+  "engine_mod_max_ms": {
+   "factorio-test": 0.1281
+  },
+  "engine_mod_mean_ms": {
+   "factorio-test": 0.011687166666666667
+  },
+  "idle": 29971,
+  "sampled_mod_self_ms": {
+   "[level]": 3.000240086005734,
+   "factorio-test": 0.0
+  },
+  "samples": 29998,
+  "scriptUpdate_mean_ms": 0.013865777777777777,
+  "ticks": 1800,
+  "wholeUpdate_mean_ms": 0.8119930555555555
+ },
+ "ticks_per_run": 900
+}

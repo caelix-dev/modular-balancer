@@ -89,6 +89,63 @@ local function source_chest(s, p, item, stock)
   return chest
 end
 
+-- Places `net` on the hidden surface at once (builder.start, then builder.advance without a
+-- budget). All or nothing: nil and the error on a failure. Test code only: the mod places
+-- networks over ticks (scripts/balancer.lua).
+---@param net mb.Network
+---@param tier string
+---@param force? ForceID
+---@return table? placed
+---@return string? err
+function H.place(net, tier, force)
+  local job, err = builder.start(net, tier, force)
+  if not job then
+    return nil, err
+  end
+  local done, _, e = builder.advance(job, math.huge)
+  if not done then
+    return nil, e
+  end
+  return job.placed
+end
+
+-- Replaces `old` (and the networks in `extra`) by `net` at once with the staged primitives the
+-- mod uses over ticks: places the new network, seals the old ones and drains them into it
+-- (builder.drain), then settles its buffer. The placement is all or nothing (nil and the error,
+-- `old` untouched). A drain that gets stuck (the new buffer full) leaves the rest of the items in
+-- the old networks and returns the new network, "drain-stuck" and the old networks still
+-- holding items: nothing is lost. Test code only.
+---@param old table Placed
+---@param net mb.Network
+---@param tier string
+---@param force? ForceID
+---@param extra? table[]
+---@return table? placed
+---@return string? err
+---@return table[]? left
+function H.rebuild_net(old, net, tier, force, extra)
+  local new, err = H.place(net, tier, force)
+  if not new then
+    return nil, err
+  end
+  local olds = { old }
+  for _, p in ipairs(extra or {}) do
+    olds[#olds + 1] = p
+  end
+  local left = {}
+  for _, p in ipairs(olds) do
+    builder.seal(p)
+    if builder.drain(new, p, math.huge) ~= "done" then
+      left[#left + 1] = p
+    end
+  end
+  builder.settle(new)
+  if #left > 0 then
+    return new, "drain-stuck", left
+  end
+  return new
+end
+
 -- Builds a rig.
 -- opts.n, opts.m: ratio. opts.balance_lanes. opts.tier (default express). opts.recirc: passed to
 --   network.build (default on).
@@ -109,8 +166,8 @@ function H.rig(opts)
   local tier = opts.tier or H.TIER
   local belt = BELTS[tier]
   local net = opts.net or assert(network.build(n, m + ports, { balance_lanes = opts.balance_lanes, recirc = opts.recirc }))
-  local placed, err = builder.place(net, tier)
-  assert(placed, "builder.place failed: " .. tostring(err))
+  local placed, err = H.place(net, tier)
+  assert(placed, "H.place failed: " .. tostring(err))
   local s = game.surfaces.nauvis
   local rows = opts.rows or math.max(n, m + ports)
   local o, box = H.area(24, rows * H.ROW)
@@ -208,13 +265,13 @@ function H.add_output(rig, j)
   rig.sinks[j] = ce(s, { name = "mb-test-chest", position = { ox + 6, y } })
 end
 
--- Rebuilds the rig's network as n:m (builder.rebuild) and relinks the visible edges. Outputs
+-- Rebuilds the rig's network as n:m (H.rebuild_net) and relinks the visible edges. Outputs
 -- beyond the new m stay on nauvis, unlinked, with whatever they hold; new outputs get visible
 -- rows (make room with opts.rows).
 function H.rebuild(rig, m, opts)
   local net = assert(network.build(rig.n, m, opts))
-  local placed, err = builder.rebuild(rig.placed, net, rig.tier)
-  assert(placed, "builder.rebuild failed: " .. tostring(err))
+  local placed, err = H.rebuild_net(rig.placed, net, rig.tier)
+  assert(placed and not err, "H.rebuild_net failed: " .. tostring(err))
   rig.net, rig.placed = net, placed
   for i, edge in ipairs(rig.in_edges) do
     edge.connect_linked_belts(placed.inputs[i])
@@ -545,12 +602,19 @@ function H.count_box(box, item)
     end
   end
   local recs = storage.balancer and storage.balancer.recs or {}
+  -- networks of live groups (also those draining into a new network), and of removed groups
+  -- still being taken out (staged spills)
+  local owners = {}
   for _, rec in pairs(recs) do
-    local a = rec.anchor
+    owners[#owners + 1] = { anchor = rec.anchor, nets = balancer.nets_of(rec) }
+  end
+  for _, sp in ipairs(storage.balancer and storage.balancer.spill_queue or {}) do
+    owners[#owners + 1] = sp
+  end
+  for _, o in ipairs(owners) do
+    local a = o.anchor
     if a and a.position.x >= box[1][1] and a.position.x <= box[2][1] and a.position.y >= box[1][2] and a.position.y <= box[2][2] then
-      local nets = { table.unpack(rec.extra) }
-      nets[#nets + 1] = rec.placed
-      for _, p in ipairs(nets) do
+      for _, p in ipairs(o.nets) do
         for _, it in ipairs(builder.contents(p)) do
           if not item or it.name == item then
             n = n + it.count
@@ -569,9 +633,7 @@ function H.network_of(id)
   local rec = storage.balancer and storage.balancer.recs[id] or nil
   local n = 0.0
   if rec then
-    local nets = { table.unpack(rec.extra) }
-    nets[#nets + 1] = rec.placed
-    for _, p in ipairs(nets) do
+    for _, p in ipairs(balancer.nets_of(rec)) do
       for _, it in ipairs(builder.contents(p)) do
         n = n + it.count
       end

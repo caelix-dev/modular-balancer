@@ -1,0 +1,148 @@
+{
+ "counts": {
+  "bbb-hidden": {
+   "by_name": {
+    "bbb-belt": 6400,
+    "bbb-lane-splitter": 1600,
+    "bbb-linked-belt": 8850,
+    "bbb-splitter": 4000
+   },
+   "total": 20850
+  },
+  "nauvis": {
+   "by_name": {
+    "bbb-balancer-part": 1700,
+    "bbb-linked-belt": 950,
+    "express-transport-belt": 1850,
+    "infinity-chest": 950,
+    "mb-test-loader-express": 950,
+    "transport-belt": 50
+   },
+   "total": 6450
+  }
+ },
+ "metrics": {
+  "entityUpdate": {
+   "aa_delta_pct": 0.6811145510836024,
+   "max_ms": 0.08865,
+   "median_ms": 0.08105,
+   "min_ms": 0.07455,
+   "run_medians_ms": [
+    0.07705000000000001,
+    0.0779,
+    0.0814,
+    0.0807,
+    0.08865,
+    0.0834,
+    0.0797,
+    0.08585000000000001,
+    0.07455,
+    0.08315
+   ],
+   "stdev_ms": 0.004224666324759338
+  },
+  "gameUpdate": {
+   "aa_delta_pct": 0.7194244604316595,
+   "max_ms": 0.28759999999999997,
+   "median_ms": 0.267225,
+   "min_ms": 0.2409,
+   "run_medians_ms": [
+    0.25270000000000004,
+    0.2511,
+    0.2704,
+    0.26405,
+    0.28759999999999997,
+    0.2728,
+    0.26115,
+    0.28659999999999997,
+    0.2409,
+    0.2758
+   ],
+   "stdev_ms": 0.015303717776337138
+  },
+  "scriptUpdate": {
+   "aa_delta_pct": 2.564102564102571,
+   "max_ms": 0.0044,
+   "median_ms": 0.00395,
+   "min_ms": 0.0036,
+   "run_medians_ms": [
+    0.0036,
+    0.0036,
+    0.0041,
+    0.0038,
+    0.0044,
+    0.0041,
+    0.0038,
+    0.0042,
+    0.0036,
+    0.0044
+   ],
+   "stdev_ms": 0.0003204163957519446
+  },
+  "transportLinesUpdate": {
+   "aa_delta_pct": 1.7866811044937876,
+   "max_ms": 0.1018,
+   "median_ms": 0.093,
+   "min_ms": 0.0843,
+   "run_medians_ms": [
+    0.0892,
+    0.08985,
+    0.0933,
+    0.0927,
+    0.09945,
+    0.09605,
+    0.0896,
+    0.1018,
+    0.0843,
+    0.09905
+   ],
+   "stdev_ms": 0.005516953668264559
+  },
+  "wholeUpdate": {
+   "aa_delta_pct": 0.7692307692307774,
+   "max_ms": 0.32435,
+   "median_ms": 0.30155,
+   "min_ms": 0.27244999999999997,
+   "run_medians_ms": [
+    0.28554999999999997,
+    0.28600000000000003,
+    0.30485,
+    0.29825,
+    0.32435,
+    0.3076,
+    0.2939,
+    0.32225,
+    0.27244999999999997,
+    0.30995
+   ],
+   "stdev_ms": 0.01656534283778436
+  }
+ },
+ "mods": [
+  "base",
+  "better-belt-balancer",
+  "factorio-test",
+  "modular-balancer"
+ ],
+ "name": "r2-bbb-17x2-thr",
+ "runs": 10,
+ "ticklens": {
+  "elapsed_s": 30.0011887,
+  "engine_mod_max_ms": {
+   "factorio-test": 0.0995
+  },
+  "engine_mod_mean_ms": {
+   "factorio-test": 0.010697555555555554
+  },
+  "idle": 29967,
+  "sampled_mod_self_ms": {
+   "[level]": 2.0000792466666666,
+   "factorio-test": 0.0
+  },
+  "samples": 30000,
+  "scriptUpdate_mean_ms": 0.012681388888888888,
+  "ticks": 1800,
+  "wholeUpdate_mean_ms": 0.5868648888888889
+ },
+ "ticks_per_run": 900
+}

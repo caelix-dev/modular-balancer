@@ -1,0 +1,127 @@
+{
+ "counts": {
+  "mb-hidden": {
+   "by_name": {
+    "mb-hidden-buffer": 50,
+    "mb-hidden-linked-belt-express": 4650,
+    "mb-hidden-loader-express": 50,
+    "mb-hidden-splitter-express": 1250
+   },
+   "total": 6000
+  },
+  "nauvis": {
+   "by_name": {
+    "express-transport-belt": 550,
+    "infinity-chest": 550,
+    "mb-hidden-linked-belt-express": 550,
+    "mb-test-loader-express": 550
+   },
+   "total": 2200
+  }
+ },
+ "metrics": {
+  "entityUpdate": {
+   "aa_delta_pct": -8.289506636614066,
+   "max_ms": 0.2175,
+   "median_ms": 0.18695,
+   "min_ms": 0.17465,
+   "run_medians_ms": [
+    0.1819,
+    0.2175,
+    0.20984999999999998,
+    0.20765,
+    0.1867,
+    0.1872,
+    0.17465,
+    0.1832,
+    0.19125,
+    0.18080000000000002
+   ],
+   "stdev_ms": 0.014419704882170396
+  },
+  "gameUpdate": {
+   "aa_delta_pct": -5.169448659585223,
+   "max_ms": 0.51355,
+   "median_ms": 0.4698,
+   "min_ms": 0.45604999999999996,
+   "run_medians_ms": [
+    0.4644,
+    0.51355,
+    0.50805,
+    0.50815,
+    0.46855,
+    0.47104999999999997,
+    0.45604999999999996,
+    0.46455,
+    0.4871,
+    0.46325
+   ],
+   "stdev_ms": 0.02185930008028619
+  },
+  "scriptUpdate": {
+   "aa_delta_pct": -9.890109890109887,
+   "max_ms": 0.01,
+   "median_ms": 0.0086,
+   "min_ms": 0.0076,
+   "run_medians_ms": [
+    0.0076,
+    0.0095,
+    0.0095,
+    0.01,
+    0.0088,
+    0.008,
+    0.0077,
+    0.0085,
+    0.0087,
+    0.00805
+   ],
+   "stdev_ms": 0.0008232894725159283
+  },
+  "transportLinesUpdate": {
+   "aa_delta_pct": -5.560565073639921,
+   "max_ms": 0.17465,
+   "median_ms": 0.15935,
+   "min_ms": 0.15395,
+   "run_medians_ms": [
+    0.15435,
+    0.1699,
+    0.17155,
+    0.17465,
+    0.16149999999999998,
+    0.15395,
+    0.1546,
+    0.1572,
+    0.1619,
+    0.1563
+   ],
+   "stdev_ms": 0.007787661180782501
+  },
+  "wholeUpdate": {
+   "aa_delta_pct": -4.911248045617575,
+   "max_ms": 0.569,
+   "median_ms": 0.516475,
+   "min_ms": 0.50265,
+   "run_medians_ms": [
+    0.5089,
+    0.569,
+    0.55745,
+    0.5636,
+    0.5169,
+    0.5157,
+    0.50265,
+    0.51605,
+    0.5325,
+    0.5152
+   ],
+   "stdev_ms": 0.024477352911529353
+  }
+ },
+ "mods": [
+  "base",
+  "factorio-test",
+  "modular-balancer"
+ ],
+ "name": "r2-plain0-8x3-free",
+ "runs": 10,
+ "ticks_per_run": 900
+}

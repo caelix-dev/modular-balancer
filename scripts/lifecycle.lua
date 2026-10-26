@@ -15,12 +15,19 @@
 --                            edge's deconstruction (the undo finds no belt of that name there).
 --                            Undoing the removal of a block or an edge rebuilds a block or a belt
 --                            ghost; the balancer swaps the belt again when it is built.
---   upgrade planner          the planner never selects an edge (another prototype). When it marks
---                            the belt next to an edge of the same belt, the edge is swapped back
---                            to its belt and that belt gets the same upgrade order, so robots
---                            upgrade it like the rest of the line (the player pays for it and
---                            gets the old belt back). Until it is upgraded it is not a port
---                            (scripts/io.lua); then it is swapped for the new belt's edge.
+--   upgrade planner          edges are hidden, so no planner selects or lists them. When a
+--                            planner marks the belt-connectable next to an edge of the same tier
+--                            (a belt, an underground belt, a splitter), the edge is swapped back
+--                            to its belt and the belt gets the matching order: one pass upgrades
+--                            the whole line (the player pays for it and gets the old belt back).
+--                            Until it is upgraded it is not a port (scripts/io.lua); then it is
+--                            swapped for the new belt's edge. An order whose target is an edge (a
+--                            planner set up by script) is redirected to the edge's belt.
+--   fast-replace, drag       edges share the belt's fast-replace group: on_pre_build swaps the
+--                            edges under the entity a player is about to build back to belts, so
+--                            a belt dragged or placed over an edge (another tier, another
+--                            direction, an underground belt) replaces a plain belt like vanilla,
+--                            items kept, and the next flush swaps the tile again if it is a port.
 -- Belts with circuit wires or control behaviour are never swapped (Ruling 7), so blueprints, undo
 -- and upgrades see them as the player built them.
 --
@@ -32,12 +39,15 @@
 --   new tier's networks (scripts/balancer.lua, retire by tile).
 --   the hidden surface missing (deleted while the mod was absent): logged; the networks are
 --   dropped (their entities are gone) and placed again on a new surface.
+--   edges without the drawing of their missing half tile (a save from before it existed, or an
+--   animation prototype that changed) get one (belt_io.dress_all).
 -- The hidden surface deleted or cleared at runtime (on_pre_surface_deleted,
 -- on_pre_surface_cleared): every network's items are spilled at its blocks first, then every
 -- network is placed again on a new surface (balancer.drop_networks).
 local groups = require("scripts.groups")
 local balancer = require("scripts.balancer")
 local belt_io = require("scripts.io")
+local gui = require("scripts.gui")
 
 local lifecycle = {}
 
@@ -133,11 +143,16 @@ end
 --   event.record   the library record being reassigned (or the selected record of a book record)
 --   event.stack    the item used to select: a blueprint, or a book (its active blueprint)
 --   player.blueprint_to_setup, player.cursor_stack (a blueprint, or a book's active blueprint)
+-- Each block also gets its group's settings as tags (gui.tag_blueprint, through event.mapping),
+-- before the edges are rewritten (which keeps every entity's index and tags).
 function lifecycle.on_player_setup_blueprint(event)
   local pi = event.player_index
   local player = pi and pi > 0 and game.get_player(pi) or nil
+  local mapping = event.mapping
+  local map = mapping and mapping.valid and mapping.get() or nil
   local record = record_blueprint(event.record, player)
   if record and record.is_blueprint_setup() then
+    gui.tag_blueprint(record, map)
     lifecycle.clean_blueprint(record)
   end
   local stacks = { event.stack }
@@ -148,6 +163,7 @@ function lifecycle.on_player_setup_blueprint(event)
   for _, st in ipairs(stacks) do
     local bp = stack_blueprint(st)
     if bp and bp.is_blueprint_setup() then
+      gui.tag_blueprint(bp, map)
       lifecycle.clean_blueprint(bp)
     end
   end
@@ -201,10 +217,10 @@ end
 -- - built-entity of a belt whose tile is now an edge of that belt (undo of a build): the game
 --   finds no entity of that name there, so the edge is marked for deconstruction instead.
 -- - removed-entity of an edge (undo of mining an edge): the ghost it left is made a belt ghost.
--- - upgraded-entity of a belt whose tile is now an edge (the line was upgraded, then its last tile
---   swapped): the game finds no belt of that name there, so the edge is swapped back to its belt
---   and given the order the game meant (undo: back to original_name; redo: to the target), as
---   the upgrade planner path does.
+-- - upgraded-entity of a belt (or an edge) whose tile is now an edge (the tile was upgraded, then
+--   swapped): the game finds no belt of that name there, so the edge is given the order the game
+--   meant (undo: back to original_name; redo: to the target; an edge name stands for its belt),
+--   as the upgrade planner path does.
 -- - rotated-entity of an edge is not handled: a rotation that changed the edge's role swapped it
 --   for another edge prototype, so the undo finds nothing (the player rotates it back by hand).
 ---@param event { player_index: integer, actions: UndoRedoAction[] }
@@ -219,16 +235,16 @@ function lifecycle.on_undo_redo(event, undo)
       if a.type == "removed-entity" and belt_io.edge_belt(t.name --[[@as string]]) then
         unghost_at(s, t.position, pi)
       elseif a.type == "upgraded-entity" then
-        local from = undo and t.name or a.original_name
-        local to = undo and { name = a.original_name, quality = a.original_quality_name } or { name = t.name, quality = t.quality or "normal" }
+        -- the upgraded entity may have been the edge itself: an edge name stands for its belt
+        local from = (undo and t.name or a.original_name) --[[@as string]]
+        from = belt_io.edge_belt(from) or from
+        local to_name = (undo and a.original_name or t.name) --[[@as string]]
+        local to = { name = belt_io.edge_belt(to_name) or to_name, quality = undo and a.original_quality_name or t.quality or "normal" }
         local p = t.position
         local x, y = math.floor((p.x or p[1]) --[[@as number]]), math.floor((p.y or p[2]) --[[@as number]])
         for _, e in ipairs(s.find_entities_filtered({ area = { { x + 0.1, y + 0.1 }, { x + 0.9, y + 0.9 } }, type = "linked-belt" })) do
           if belt_io.edge_belt(e.name) == from then
-            local force = e.force
-            local belt = belt_io.unswap(e)
-            belt.order_upgrade({ target = to, force = force, player = player })
-            balancer.mark_near(belt, pi)
+            lifecycle.order_edge_upgrade(e, to, player, pi)
           end
         end
       elseif undo and a.type == "built-entity" then
@@ -244,38 +260,209 @@ function lifecycle.on_undo_redo(event, undo)
   end
 end
 
--- on_marked_for_upgrade of a transport belt (filtered): an edge of the same belt fed by it or
--- feeding it is swapped back to its belt, which gets the same upgrade order.
+-- The belt an edge becomes when its neighbour is upgraded to `target` (a LuaEntityPrototype):
+-- the target itself for a transport belt; for an underground belt or a splitter the transport
+-- belt of the same speed that has edges (the one whose related underground belt it is first,
+-- then by name). nil if there is none.
+---@param target LuaEntityPrototype
+---@return string?
+local function edge_target(target)
+  if target.type == "transport-belt" then
+    return belt_io.edge_name(target.name, "in") and target.name or nil
+  end
+  local speed = target.belt_speed
+  if not speed then
+    return nil
+  end
+  local names = {}
+  for name, p in pairs(prototypes.get_entity_filtered({ { filter = "type", type = "transport-belt" } })) do
+    if p.belt_speed == speed and belt_io.edge_name(name, "in") then
+      local related = p.related_underground_belt
+      if related and related.name == target.name then
+        return name
+      end
+      names[#names + 1] = name
+    end
+  end
+  table.sort(names)
+  return names[1]
+end
+
+-- Gives edge `edge`'s upgrade to its tile: the edge is swapped back to its belt (items kept) and
+-- the belt is ordered to be upgraded to `target` ({ name, quality }), since an edge cannot carry
+-- the order (hidden). Measured: real robots keep the items whether they upgrade a plain belt or
+-- an edge (they take an edge's items to storage), but LuaEntity::apply_upgrade and create_entity
+-- fast_replace by script drop the items of an edge they replace; a plain belt keeps them on every
+-- path. The belt is not a port while it waits for its upgrade (scripts/io.lua); once upgraded it
+-- is swapped for the new belt's edge. Returns the belt.
+---@param edge LuaEntity
+---@param target { name: string, quality: string }
+---@param player LuaPlayer?
+---@param player_index integer?
+---@return LuaEntity
+function lifecycle.order_edge_upgrade(edge, target, player, player_index)
+  local force = edge.force
+  local belt = belt_io.unswap(edge)
+  belt.order_upgrade({ target = target, force = force, player = player })
+  balancer.mark_near(belt, player_index)
+  return belt
+end
+
+-- on_marked_for_upgrade of a transport belt, underground belt, splitter or edge (filtered).
+--   an order whose target is an edge (only a planner set up by script or imported can name one:
+--   edges are hidden): completed by LuaEntity::apply_upgrade it would leave an unlinked edge and
+--   drop the items on the belt (measured), so it is cancelled when that edge's belt is the entity
+--   itself, else redirected to the edge's belt at the next flush (balancer.redirect_upgrade).
+--   an edge: edges are hidden, so the game refuses to mark them (measured); should one be marked
+--   anyway, an order to its own belt is cancelled (the edge stays a port) and any other goes to
+--   its belt (lifecycle.order_edge_upgrade).
+--   a belt-connectable next to an edge: an edge it feeds or is fed by gets the matching order on
+--   its belt, so a planner (which never selects an edge) upgrades the edge tile in the same pass.
+--   Only an edge of the same tier follows: of the same belt as a transport belt neighbour, of the
+--   same speed as an underground or splitter neighbour.
 function lifecycle.on_marked_for_upgrade(event)
   local e = event.entity
-  if not (e and e.valid and e.type == "transport-belt") or belt_io.is_ours(e.name) then
+  if not (e and e.valid) or not belt_io.IS_BELT_TYPE[e.type] then
+    return
+  end
+  local player = event.player_index and game.get_player(event.player_index) or nil
+  local quality = event.quality.name
+  local target_belt = belt_io.edge_belt(event.target.name)
+  if target_belt then
+    if target_belt == e.name and quality == e.quality.name then
+      e.cancel_upgrade(e.force, player)
+    else
+      -- the next flush cancels it and orders the edge's belt (raising this event again)
+      balancer.redirect_upgrade(e, { name = target_belt, quality = quality }, event.player_index)
+    end
+    return
+  end
+  if belt_io.edge_belt(e.name) then
+    local name = edge_target(event.target)
+    if name == belt_io.edge_belt(e.name) and quality == e.quality.name then
+      e.cancel_upgrade(e.force, player)
+    elseif name then
+      lifecycle.order_edge_upgrade(e, { name = name, quality = quality }, player, event.player_index)
+    end
+    return
+  end
+  if belt_io.is_ours(e.name) then
     return
   end
   local nb = e.belt_neighbours
   local edges = {}
   for _, list in ipairs({ nb.inputs, nb.outputs }) do
     for _, n in ipairs(list) do
-      if n.valid and belt_io.edge_belt(n.name) == e.name then
-        edges[#edges + 1] = n
+      local belt = n.valid and belt_io.edge_belt(n.name)
+      if belt then
+        local same
+        if e.type == "transport-belt" then
+          same = belt == e.name
+        else
+          same = prototypes.entity[belt].belt_speed == e.prototype.belt_speed
+        end
+        if same then
+          edges[#edges + 1] = n
+        end
       end
     end
   end
   if #edges == 0 then
     return
   end
-  local target = { name = event.target.name, quality = event.quality.name }
-  local player = event.player_index and game.get_player(event.player_index) or nil
+  local name = edge_target(event.target)
+  if not name then
+    return
+  end
+  local target = { name = name, quality = event.quality.name }
   for _, edge in ipairs(edges) do
     if edge.valid then
-      local force = edge.force
-      local belt = belt_io.unswap(edge)
-      belt.order_upgrade({ target = target, force = force, player = player })
-      balancer.mark_near(belt, event.player_index)
+      lifecycle.order_edge_upgrade(edge, target, player, event.player_index)
     end
   end
 end
 
--- on_cancelled_upgrade of a transport belt: the belt can be a port again.
+-- Before a belt-connectable is built over edges (a belt dragged or placed over them, an
+-- underground belt or splitter placed on them): each edge of force `force` under the new
+-- entity's footprint is swapped back to its belt first, so the game fast-replaces a plain belt,
+-- which keeps the items on it (an edge replaced by script fast-replace loses them, measured),
+-- and the next flush swaps the tile again if it is still a port (a belt dragged over an edge
+-- with the same belt and direction is not built at all, so the swap-back marks the groups near
+-- it). `proto` is the entity about to be built at `position` facing `direction`. Returns the number of edges swapped back.
+---@param s LuaSurface
+---@param position MapPosition
+---@param direction defines.direction
+---@param proto LuaEntityPrototype
+---@param force LuaForce
+---@param player_index integer?
+---@return integer
+function lifecycle.clear_edges_for_build(s, position, direction, proto, force, player_index)
+  if not belt_io.IS_BELT_TYPE[proto.type] or not proto.fast_replaceable_group then
+    return 0
+  end
+  local w, h = proto.tile_width, proto.tile_height
+  if direction == defines.direction.east or direction == defines.direction.west then
+    w, h = h, w
+  end
+  local x, y = (position.x or position[1]) --[[@as number]], (position.y or position[2]) --[[@as number]]
+  local area = { { x - w / 2 + 0.1, y - h / 2 + 0.1 }, { x + w / 2 - 0.1, y + h / 2 - 0.1 } }
+  local n = 0
+  for _, e in ipairs(s.find_entities_filtered({ area = area, type = "linked-belt", force = force })) do
+    if belt_io.edge_belt(e.name) and e.prototype.fast_replaceable_group == proto.fast_replaceable_group then
+      local belt = belt_io.unswap(e)
+      balancer.mark_near(belt, player_index)
+      n = n + 1
+    end
+  end
+  return n
+end
+
+-- The work of on_pre_build for `player` (a LuaPlayer, or in tests a table with the fields read
+-- here: valid, cursor_stack, surface, force, controller_type, character).
+-- Every build from an item in the cursor counts (F11, measured with a real player):
+--   normal       fast-replaces the edge (items lost without the swap-back);
+--   remote view  LuaPlayer::build_from_cursor built a real belt over an edge, even with the
+--                character 50 tiles away, and the edge lost its 2 plates;
+--   forced, super-forced (Shift / Ctrl+Shift): over an edge they place a belt ghost and mark the
+--                edge for deconstruction; over the swapped-back belt they do what vanilla does
+--                to a belt (another direction rotates it, another tier orders an upgrade).
+-- A blueprint or a ghost cursor is left alone. A needless swap-back is harmless: the next flush
+-- swaps the tile again. Returns the number of edges swapped back.
+---@param player LuaPlayer
+---@param event EventData.on_pre_build
+---@return integer
+function lifecycle.pre_build(player, event)
+  if not (player and player.valid) then
+    return 0
+  end
+  local ct = player.controller_type
+  if ct ~= defines.controllers.character and ct ~= defines.controllers.god and ct ~= defines.controllers.editor
+    and ct ~= defines.controllers.remote then
+    return 0
+  end
+  local st = player.cursor_stack
+  if not (st and st.valid_for_read) then
+    return 0
+  end
+  local proto = st.prototype.place_result
+  if not proto then
+    return 0
+  end
+  -- no reach check: build distance can exceed reach (mods), and a needless swap-back is harmless
+  return lifecycle.clear_edges_for_build(player.surface, event.position, event.direction, proto, player.force --[[@as LuaForce]], event.player_index)
+end
+
+-- on_pre_build: a player builds from the cursor (a belt drag calls it per tile).
+---@param event EventData.on_pre_build
+function lifecycle.on_pre_build(event)
+  local player = game.get_player(event.player_index)
+  if player then
+    lifecycle.pre_build(player, event)
+  end
+end
+
+-- on_cancelled_upgrade of a transport belt, underground belt or splitter: the belt can be a port
+-- again.
 function lifecycle.on_cancelled_upgrade(event)
   local e = event.entity
   if e and e.valid then
@@ -400,6 +587,7 @@ function lifecycle.on_configuration_changed()
     storage.surface_index, storage.regions = nil, nil
   end
   lifecycle.downgrade_orphans()
+  belt_io.dress_all()
   balancer.mark_all()
 end
 
@@ -422,7 +610,8 @@ function lifecycle.on_surface_gone(event)
   if ours(event.surface_index) then
     -- a network placed between the pre event and the clear (none measured) lost its entities:
     -- drop it (its region with it) and place it again
-    local any = false
+    -- (or a staged rebuild in progress: its new network's entities are gone)
+    local any = storage.balancer ~= nil and balancer.working(storage.balancer)
     for _, rec in pairs(storage.balancer and storage.balancer.recs or {}) do
       local first = rec.placed and rec.placed.entities[1]
       if first and not first.valid then

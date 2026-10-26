@@ -132,6 +132,44 @@ never.subgroup = nil
 never.order = "z"
 protos[#protos + 1] = never
 
+-- The port hood an edge draws (tools/render/, sprite set from prototypes/gfx.lua): sheets of 6 frames, the hood on the N, E,
+-- S, W, N, E side of the tile. An input edge points at its block (hood on the side it faces:
+-- frames 1-4 for north, east, south, west), an output edge away from it (frames 3-6). Belts other
+-- than the four vanilla tiers get the basic colours. The roof chevrons point the way the items go:
+-- hood-<colour>-in.png toward the block, hood-<colour>-out.png away from it.
+local HOOD_COLOURS = {
+  ["transport-belt"] = "basic",
+  ["fast-transport-belt"] = "fast",
+  ["express-transport-belt"] = "express",
+  ["turbo-transport-belt"] = "turbo",
+}
+local gfx = require("prototypes.gfx")
+local function edge_hood(belt_name, role)
+  local colour = HOOD_COLOURS[belt_name] or "basic"
+  local function way(first)
+    local function sheet(file, shadow)
+      return {
+        filename = gfx.dir .. file,
+        priority = "high",
+        width = gfx.frame,
+        height = gfx.frame,
+        x = (first - 1) * gfx.frame,
+        frames = 4,
+        scale = gfx.scale,
+        draw_as_shadow = shadow or nil,
+      }
+    end
+    return { sheets = { sheet("hood-" .. colour .. "-" .. role .. ".png"), sheet("hood-shadow.png", true) } }
+  end
+  local hood = way(role == "in" and 1 or 3)
+  return {
+    direction_in = hood,
+    direction_out = hood,
+    direction_in_side_loading = hood,
+    direction_out_side_loading = hood,
+  }
+end
+
 -- Edges, one input and one output per transport belt (docs/feasibility.md F1).
 local base_edge = raw("linked-belt", "linked-belt")
 for _, belt in pairs(data.raw["transport-belt"]) do
@@ -157,10 +195,12 @@ for _, belt in pairs(data.raw["transport-belt"]) do
     -- sources (order_upgrade on an edge is refused); scripts/lifecycle.lua follows the planner
     -- through the edge's neighbours instead, and redirects any order whose target is an edge
     e.next_upgrade = nil
-    -- the belt's look (spec Update 2026-10-25): no hatch structure, the belt's animation set,
-    -- sounds, corpse and explosion; selected and fast-replaced like the belt
-    e.structure = {}
-    e.structure_render_layer = nil
+    -- the belt's look (spec Update 2026-10-25): the belt's animation set, sounds, corpse and
+    -- explosion; selected and fast-replaced like the belt. Its structure is the block's port hood
+    -- (Plan 3 Task 4): a cowling over the half tile next to the block, where items go into or
+    -- come out of the link, with the belt's mouth at its far end (graphics/entity/balancer/, rendered by tools/render/).
+    e.structure = edge_hood(belt.name, role)
+    e.structure_render_layer = "object"
     e.animation_speed_coefficient = belt.animation_speed_coefficient
     e.corpse = belt.corpse
     e.dying_explosion = belt.dying_explosion

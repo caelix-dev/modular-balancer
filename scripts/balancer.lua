@@ -76,6 +76,7 @@ local groups = require("scripts.groups")
 local network = require("scripts.network")
 local builder = require("scripts.builder")
 local belt_io = require("scripts.io")
+local look = require("scripts.look")
 
 local balancer = {}
 
@@ -1139,6 +1140,16 @@ function balancer.flush(budget)
         break
       end
       work(st, { units = math.huge, refreshed = ctx.refreshed })
+    end
+  end
+  -- the connected look (scripts/look.lua): each refreshed block's graphics variation from its
+  -- group's tiles, next to the GUI hook so a staged rebuild that completes here is covered too
+  local dressed = {}
+  for _, gid in ipairs(ctx.refreshed) do
+    local g = groups.get(gid)
+    if g and not dressed[gid] then
+      dressed[gid] = true
+      look.dress(g.blocks, groups.where)
     end
   end
   -- scripts/gui.lua: settings of refused rebuilds, open GUIs; with the groups refreshed here and

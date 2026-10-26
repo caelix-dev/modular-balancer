@@ -73,6 +73,16 @@ local function built(entity, event)
   end
   local player = event.player_index
   if entity.type == "entity-ghost" then
+    if groups.tier_of(entity.ghost_name) then
+      -- a block ghost on a belt (the block does not collide with belts, so the game marks
+      -- nothing, not even for a forced build): the belt is marked for deconstruction, and the
+      -- block replaces it when it is built (below)
+      local p = entity.position
+      local belt = belt_io.foreign_belt_on(entity.surface, math.floor(p.x), math.floor(p.y))
+      if belt and not belt.to_be_deconstructed() then
+        belt.order_deconstruction(entity.force, player and game.get_player(player) or nil)
+      end
+    end
     if not lifecycle.unghost(entity, player) then
       lifecycle.replace_orphan_ghost(entity)
     end
@@ -89,7 +99,12 @@ local function built(entity, event)
   end
   if groups.tier_of(entity.name) then
     local p = entity.position
-    if belt_io.foreign_belt_on(entity.surface, math.floor(p.x), math.floor(p.y)) then
+    local belt = belt_io.foreign_belt_on(entity.surface, math.floor(p.x), math.floor(p.y))
+    if belt and belt.to_be_deconstructed() then
+      -- the belt a block ghost marked (above), still there because the robot built the block
+      -- first: the block replaces it
+      belt_io.clear_for_block(belt, event, entity.force)
+    elseif belt then
       belt_io.give_back(entity, event, "block-on-belt")
       return
     end

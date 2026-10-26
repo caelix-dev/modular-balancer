@@ -45,7 +45,7 @@ protos[#protos + 1] = inserter
 
 local block = table.deepcopy(data.raw["simple-entity-with-owner"]["simple-entity-with-owner"])
 block.name = "mb-test-block"
-block.collision_mask = { layers = { item = true, player = true, is_object = true } }
+block.collision_mask = { layers = { item = true } }
 block.minable = nil
 protos[#protos + 1] = block
 

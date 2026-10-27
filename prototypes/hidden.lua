@@ -100,6 +100,8 @@ for _, tier in ipairs(TIERS) do
   lb.allow_side_loading = false
   lb.allow_clone_connection = false
   lb.allow_blueprint_connection = false
+  -- on a block tile (the inserter port) it is drawn under the block body ("lower-object-above-shadow")
+  lb.structure_render_layer = "lower-object"
   protos[#protos + 1] = lb
 
   local ls = hide(table.deepcopy(raw("lane-splitter", "lane-splitter")), "mb-hidden-lane-splitter-" .. tier.name)
@@ -200,7 +202,8 @@ for _, belt in pairs(data.raw["transport-belt"]) do
     -- (Plan 3 Task 4): a cowling over the half tile next to the block, where items go into or
     -- come out of the link, with the belt's mouth at its far end (graphics/entity/balancer/, rendered by tools/render/).
     e.structure = edge_hood(belt.name, role)
-    e.structure_render_layer = "object"
+    -- under the character, like a belt, so a character walking over it is never cut off
+    e.structure_render_layer = "lower-object-above-shadow"
     e.animation_speed_coefficient = belt.animation_speed_coefficient
     e.corpse = belt.corpse
     e.dying_explosion = belt.dying_explosion

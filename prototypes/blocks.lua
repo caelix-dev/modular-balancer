@@ -157,7 +157,9 @@ for i, tier in ipairs(TIERS) do
     collision_mask = { layers = { item = true } },
     fast_replaceable_group = "mb-balancer",
     next_upgrade = next_tier and ("mb-balancer-" .. next_tier.name) or nil,
-    render_layer = "object",
+    -- under the character (layer "object"), like a belt: a block is walkable (0.1.1), and in the
+    -- "object" layer a character north of the block's centre was drawn behind it
+    render_layer = "lower-object-above-shadow",
     animations = animations(colour),
     random_variation_on_create = false,
     hidden = tier.orphan or nil,

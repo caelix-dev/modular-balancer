@@ -211,10 +211,10 @@ for _, belt in pairs(data.raw["transport-belt"]) do
     e.selection_box = table.deepcopy(belt.selection_box) or e.selection_box
     e.collision_mask = table.deepcopy(belt.collision_mask)
     e.selection_priority = belt.selection_priority
-    -- no fast-replace group: to a belt being built an edge is an obstacle like any other entity,
-    -- so smart belt building drags a line under it (as under a perpendicular plain belt) instead
-    -- of replacing it and merging two lines (user bug report 2026-10-30). Edges change tier by
-    -- the upgrade planner (scripts/lifecycle.lua) or by mining them and building the new belt.
+    -- no fast-replace group (the game gives it one of its own): to a belt being built an edge is
+    -- an obstacle, so smart belt building drags a line under it (as under a perpendicular plain
+    -- belt) instead of replacing it and merging two lines (user bug report 2026-10-30). A line
+    -- dragged along it in its direction still replaces it (scripts/lifecycle.lua, on_pre_build).
     e.fast_replaceable_group = nil
     e.hidden = true
     e.hidden_in_factoriopedia = true

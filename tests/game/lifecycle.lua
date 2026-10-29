@@ -1002,6 +1002,123 @@ describe("lifecycle", function()
     assert(H.count_box(box, ITEM) == before, "items: " .. H.count_box(box, ITEM) .. " of " .. before)
   end)
 
+  -- Review I3: the guards of on_pre_build (lifecycle.pre_build), driven with stand-in players (a
+  -- headless test has no LuaPlayer, and built-in events cannot be raised). A build from a
+  -- belt-connectable item in the cursor facing the edge's own direction (a belt line dragged or
+  -- upgraded along it), in any build mode (normal, forced, super-forced) and in remote view, by a
+  -- valid player who is not in a cutscene, swaps back the edges of the player's force under the
+  -- footprint; a build across the edge or against it never does (user bug report 2026-10-30:
+  -- swapped back, the game replaced the edge with the crossing belt and merged the lines; left
+  -- alone, the edge is an obstacle and smart belt building goes under it, measured with a real
+  -- player) (there is no reach check: the game checks reach before
+  -- it builds); anything else is left alone. The edge holds items: every swap back and every
+  -- re-swap by the next flush keeps them on the tile (final review m3), and a deconstruction
+  -- mark placed on the swapped-back belt (a forced build's ghost) is kept on the new edge. The
+  -- engine side (a real drag keeps the items) is the real-player check F11.
+  test("pre_build_guards", function()
+    local o = area(10, 9)
+    local s = game.surfaces.nauvis
+    local other = game.forces["mb-test-other"] or game.create_force("mb-test-other")
+    H.block(o, 4, 4, H.TIER)
+    H.feed(o, 4, 4, D.west, 2, { stock = 0 })
+    H.sink(o, 4, 4, D.east, 2)
+    balancer.flush()
+    local inv = game.create_inventory(4)
+    inv[1].set_stack({ name = H.BELT, count = 10 })
+    inv[2].set_stack({ name = "iron-chest", count = 1 })
+    inv[3].set_stack({ name = "blueprint", count = 1 })
+    local belt_stack, chest_stack, bp_stack, empty = inv[1], inv[2], inv[3], inv[4]
+    local C = defines.controllers
+    local function player(t)
+      local p = {
+        valid = true, surface = s, force = game.forces.player, controller_type = C.character, character = true,
+        cursor_stack = belt_stack,
+        can_reach_entity = function()
+          return true
+        end,
+      }
+      for k, v in pairs(t or {}) do
+        p[k] = v
+      end
+      return p
+    end
+    local function ev(position, mode, dir)
+      return { position = position or { o.x + 3, o.y + 4 }, direction = dir or D.east, build_mode = mode or defines.build_mode.normal, player_index = 1 }
+    end
+    local function edge_there()
+      local e = H.at(o, 3, 4, "linked-belt")
+      return e ~= nil and belt_io.edge_belt(e.name) ~= nil
+    end
+    assert(edge_there(), "test setup: no edge")
+    -- items on the edge (both lanes); nothing moves them, no tick passes in this test
+    local function on_tile()
+      local e = H.at(o, 3, 4, "linked-belt") or H.at(o, 3, 4, "transport-belt")
+      return e and H.items_on(e) or 0
+    end
+    local edge0 = assert(H.at(o, 3, 4, "linked-belt"))
+    for _, li in ipairs(H.LINES) do
+      assert(edge0.get_transport_line(li).insert_at(0.2, { name = ITEM, count = 1 }), "test setup: no item on the edge")
+    end
+    local held = on_tile()
+    assert(held == 2, "test setup: " .. held .. " items on the edge")
+    local function kept(what)
+      assert(on_tile() == held, what .. ": " .. on_tile() .. " of " .. held .. " items on the tile")
+    end
+    local cases = {
+      { "invalid player", player({ valid = false }), ev() },
+      { "cutscene", player({ controller_type = C.cutscene }), ev() },
+      { "empty cursor", player({ cursor_stack = empty }), ev() },
+      { "blueprint", player({ cursor_stack = bp_stack }), ev() },
+      { "not a belt", player({ cursor_stack = chest_stack }), ev() },
+      { "other force", player({ force = other }), ev() },
+      { "elsewhere", player(), ev({ o.x + 1, o.y + 1 }) },
+      { "across (north)", player(), ev(nil, nil, D.north) },
+      { "across (south)", player(), ev(nil, nil, D.south) },
+      { "against", player(), ev(nil, nil, D.west) },
+      { "across, forced", player(), ev(nil, defines.build_mode.forced, D.south) },
+    }
+    for _, c in ipairs(cases) do
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(lifecycle.pre_build(c[2], c[3]) == 0 and edge_there(), c[1] .. ": the edge was swapped back")
+    end
+    kept("after the refused cases")
+    ---@diagnostic disable-next-line: param-type-mismatch
+    assert(lifecycle.pre_build(player(), ev()) == 1, "a belt build over the edge did not swap it back")
+    local belt = H.at(o, 3, 4, "transport-belt")
+    assert(belt and belt.name == H.BELT, "the edge is not a plain belt before the build")
+    kept("swapped back")
+    balancer.flush()
+    assert(edge_there(), "the tile was not swapped again after a build that did not happen")
+    kept("swapped again")
+    -- remote view builds for real too, and a forced or super-forced build over an edge would
+    -- place a ghost and mark the edge for deconstruction (F11): their edges are swapped back too
+    for _, c in ipairs({
+      { "remote view", player({ controller_type = C.remote }), ev() },
+      { "forced build", player(), ev(nil, defines.build_mode.forced) },
+      { "super-forced build", player(), ev(nil, defines.build_mode.superforced) },
+    }) do
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(lifecycle.pre_build(c[2], c[3]) == 1, c[1] .. ": the edge was not swapped back")
+      kept(c[1] .. ", swapped back")
+      balancer.flush()
+      assert(edge_there(), c[1] .. ": the tile was not swapped again")
+      kept(c[1] .. ", swapped again")
+    end
+    -- a forced build that does happen marks the belt for deconstruction (and places a ghost);
+    -- when it does not, the next flush swaps the marked belt into an edge that keeps the mark
+    ---@diagnostic disable-next-line: param-type-mismatch
+    assert(lifecycle.pre_build(player(), ev(nil, defines.build_mode.forced)) == 1, "forced build: not swapped back")
+    local marked = assert(H.at(o, 3, 4, "transport-belt"), "forced build: no belt on the tile")
+    assert(marked.order_deconstruction(game.forces.player), "test setup: the belt was not marked")
+    balancer.flush()
+    local edge = H.at(o, 3, 4, "linked-belt")
+    assert(edge and belt_io.edge_belt(edge.name), "marked belt: the tile was not swapped again")
+    assert(edge.to_be_deconstructed(), "the re-swapped edge lost the deconstruction mark")
+    kept("marked belt, swapped again")
+    edge.cancel_deconstruction(game.forces.player)
+    inv.destroy()
+  end)
+
   -- Mining an edge gives its belt item and the items on it; the balancer drops that port. A
   -- deconstruction planner's marks survive the swaps: an edge marked with its block is a belt
   -- still marked once the block is gone.

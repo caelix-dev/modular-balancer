@@ -23,8 +23,12 @@
 --                            Until it is upgraded it is not a port (scripts/io.lua); then it is
 --                            swapped for the new belt's edge. An order whose target is an edge (a
 --                            planner set up by script) is redirected to the edge's belt.
---   fast-replace, drag       edges have no fast-replace group: nothing is built over an edge, and
---                            a belt dragged across one goes under it like under any obstacle.
+--   fast-replace, drag       edges have a fast-replace group of their own, so they are obstacles:
+--                            a belt dragged across or against one goes under it (smart belt
+--                            building). A belt line dragged along an edge in its direction (an
+--                            upgrade) is let through: on_pre_build swaps the edge back to its belt
+--                            first, the game fast-replaces that belt like vanilla, items kept, and
+--                            the next flush swaps the tile again if it is a port.
 -- Belts with circuit wires or control behaviour are never swapped (Ruling 7), so blueprints, undo
 -- and upgrades see them as the player built them.
 --
@@ -376,6 +380,89 @@ function lifecycle.on_marked_for_upgrade(event)
     if edge.valid then
       lifecycle.order_edge_upgrade(edge, target, player, event.player_index)
     end
+  end
+end
+
+-- Before a belt-connectable facing an edge's own direction is built over it (a belt line dragged
+-- or upgraded along the edge, measured with a real player): each such edge of force `force` under
+-- the new entity's footprint is swapped back to its belt first, so the game fast-replaces a plain
+-- belt, which keeps the items on it, and the next flush swaps the tile again if it is still a
+-- port. Edges have a fast-replace group of their own, so to anything else they are obstacles: a
+-- belt dragged across or against an edge is left alone and smart belt building goes under it
+-- (swapped back, the crossing belt replaced it and merged two lines: user bug report
+-- 2026-10-30). A click straight onto an edge raises no on_pre_build (the game refuses the
+-- obstacle first, measured), so a single belt cannot be placed on an edge by hand. `proto` is the
+-- entity about to be built at `position` facing `direction`. Returns the number of edges swapped back.
+---@param s LuaSurface
+---@param position MapPosition
+---@param direction defines.direction
+---@param proto LuaEntityPrototype
+---@param force LuaForce
+---@param player_index integer?
+---@return integer
+function lifecycle.clear_edges_for_build(s, position, direction, proto, force, player_index)
+  if not belt_io.IS_BELT_TYPE[proto.type] or not proto.fast_replaceable_group then
+    return 0
+  end
+  local w, h = proto.tile_width, proto.tile_height
+  if direction == defines.direction.east or direction == defines.direction.west then
+    w, h = h, w
+  end
+  local x, y = (position.x or position[1]) --[[@as number]], (position.y or position[2]) --[[@as number]]
+  local area = { { x - w / 2 + 0.1, y - h / 2 + 0.1 }, { x + w / 2 - 0.1, y + h / 2 - 0.1 } }
+  local n = 0
+  for _, e in ipairs(s.find_entities_filtered({ area = area, type = "linked-belt", force = force })) do
+    local belt_name = belt_io.edge_belt(e.name)
+    if belt_name and e.direction == direction and prototypes.entity[belt_name].fast_replaceable_group == proto.fast_replaceable_group then
+      local belt = belt_io.unswap(e)
+      balancer.mark_near(belt, player_index)
+      n = n + 1
+    end
+  end
+  return n
+end
+
+-- The work of on_pre_build for `player` (a LuaPlayer, or in tests a table with the fields read
+-- here: valid, cursor_stack, surface, force, controller_type, character).
+-- Every build from an item in the cursor counts (F11, measured with a real player):
+--   normal       fast-replaces the edge (items lost without the swap-back);
+--   remote view  LuaPlayer::build_from_cursor built a real belt over an edge, even with the
+--                character 50 tiles away, and the edge lost its 2 plates;
+--   forced, super-forced (Shift / Ctrl+Shift): over an edge they place a belt ghost and mark the
+--                edge for deconstruction; over the swapped-back belt they do what vanilla does
+--                to a belt (another direction rotates it, another tier orders an upgrade).
+-- A blueprint or a ghost cursor is left alone. A needless swap-back is harmless: the next flush
+-- swaps the tile again. Returns the number of edges swapped back.
+---@param player LuaPlayer
+---@param event EventData.on_pre_build
+---@return integer
+function lifecycle.pre_build(player, event)
+  if not (player and player.valid) then
+    return 0
+  end
+  local ct = player.controller_type
+  if ct ~= defines.controllers.character and ct ~= defines.controllers.god and ct ~= defines.controllers.editor
+    and ct ~= defines.controllers.remote then
+    return 0
+  end
+  local st = player.cursor_stack
+  if not (st and st.valid_for_read) then
+    return 0
+  end
+  local proto = st.prototype.place_result
+  if not proto then
+    return 0
+  end
+  -- no reach check: build distance can exceed reach (mods), and a needless swap-back is harmless
+  return lifecycle.clear_edges_for_build(player.surface, event.position, event.direction, proto, player.force --[[@as LuaForce]], event.player_index)
+end
+
+-- on_pre_build: a player builds from the cursor (a belt drag calls it per tile).
+---@param event EventData.on_pre_build
+function lifecycle.on_pre_build(event)
+  local player = game.get_player(event.player_index)
+  if player then
+    lifecycle.pre_build(player, event)
   end
 end
 

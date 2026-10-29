@@ -18,8 +18,7 @@
 --   lifecycle (scripts/lifecycle.lua):
 --            on_player_setup_blueprint, on_player_configured_blueprint (edges become belts),
 --            on_undo_applied, on_redo_applied, on_marked_for_upgrade and on_cancelled_upgrade
---            of transport belts, underground belts, splitters and edges, on_pre_build (edges
---            under a belt a player builds are swapped back first), on_pre_surface_deleted /
+--            of transport belts, underground belts, splitters and edges, on_pre_surface_deleted /
 --            on_pre_surface_cleared and on_surface_deleted / on_surface_cleared (the hidden
 --            surface)
 --   anything else (LuaEntity::destroy without raise_destroy, a deleted surface):
@@ -240,7 +239,6 @@ function events.register()
     { filter = "type", type = "splitter" }, { filter = "type", type = "linked-belt" },
   }
   script.on_event(E.on_marked_for_upgrade, lifecycle.on_marked_for_upgrade, belts)
-  script.on_event(E.on_pre_build, lifecycle.on_pre_build)
   script.on_event(E.on_cancelled_upgrade, lifecycle.on_cancelled_upgrade, belts)
   script.on_event(E.on_pre_surface_deleted, lifecycle.on_pre_surface_gone)
   script.on_event(E.on_pre_surface_cleared, lifecycle.on_pre_surface_gone)

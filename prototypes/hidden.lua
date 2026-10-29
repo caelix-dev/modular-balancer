@@ -196,7 +196,7 @@ for _, belt in pairs(data.raw["transport-belt"]) do
     -- through the edge's neighbours instead, and redirects any order whose target is an edge
     e.next_upgrade = nil
     -- the belt's look (spec Update 2026-10-25): the belt's animation set, sounds, corpse and
-    -- explosion; selected and fast-replaced like the belt. Its structure is the block's port hood
+    -- explosion; selected like the belt. Its structure is the block's port hood
     -- (Plan 3 Task 4): a cowling over the half tile next to the block, where items go into or
     -- come out of the link, with the belt's mouth at its far end (graphics/entity/balancer/, rendered by tools/render/).
     e.structure = edge_hood(belt.name, role)
@@ -211,7 +211,11 @@ for _, belt in pairs(data.raw["transport-belt"]) do
     e.selection_box = table.deepcopy(belt.selection_box) or e.selection_box
     e.collision_mask = table.deepcopy(belt.collision_mask)
     e.selection_priority = belt.selection_priority
-    e.fast_replaceable_group = belt.fast_replaceable_group
+    -- no fast-replace group: to a belt being built an edge is an obstacle like any other entity,
+    -- so smart belt building drags a line under it (as under a perpendicular plain belt) instead
+    -- of replacing it and merging two lines (user bug report 2026-10-30). Edges change tier by
+    -- the upgrade planner (scripts/lifecycle.lua) or by mining them and building the new belt.
+    e.fast_replaceable_group = nil
     e.hidden = true
     e.hidden_in_factoriopedia = true
     protos[#protos + 1] = e

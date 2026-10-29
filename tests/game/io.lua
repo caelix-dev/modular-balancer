@@ -53,8 +53,9 @@ describe("io", function()
   end)
 
   -- Plan 3 Task 2 (spec Update 2026-10-25, edge look): an edge looks and behaves like its belt.
-  -- Every edge has the belt's fast-replace group, and is hidden (in no planner list, never an
-  -- upgrade source) with no next upgrade. A swapped edge carries
+  -- No edge has a fast-replace group, so a belt dragged across it treats it as an obstacle and
+  -- goes under it (smart belt building) instead of replacing it; every edge is hidden (in no
+  -- planner list, never an upgrade source) with no next upgrade. A swapped edge carries
   -- one drawing of the belt's straight animation for its direction (the half tile a linked belt
   -- leaves blank), which goes with the edge.
   test("edges_look_like_belts", function()
@@ -62,7 +63,7 @@ describe("io", function()
       for _, role in ipairs({ "in", "out" }) do
         local e = prototypes.entity["mb-edge-" .. role .. "-" .. name]
         assert(e and e.type == "linked-belt", "no " .. role .. " edge for " .. name)
-        assert(e.fast_replaceable_group == belt.fast_replaceable_group, name .. " " .. role .. " edge replace group " .. tostring(e.fast_replaceable_group))
+        assert(e.fast_replaceable_group ~= belt.fast_replaceable_group, name .. " " .. role .. " edge replace group " .. tostring(e.fast_replaceable_group))
         assert(e.hidden and e.hidden_in_factoriopedia and not e.next_upgrade, name .. " " .. role .. " edge is listed or upgradable")
       end
       for _, dir in ipairs({ "north", "east", "south", "west" }) do

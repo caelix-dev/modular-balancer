@@ -175,6 +175,9 @@ for i, tier in ipairs(TIERS) do
     drop_sound = splitter_item.drop_sound,
     place_result = name,
     stack_size = 50,
+    -- 20 kg in every tier, so a rocket (1000 kg) lifts 50, one stack. Left to the recipe, the
+    -- weight would be half the splitter plus 5 belts: 35 kg (28 per rocket), turbo 70 kg (14).
+    weight = 20000,
     hidden = tier.orphan or nil,
     hidden_in_factoriopedia = tier.orphan or nil,
   }

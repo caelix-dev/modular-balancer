@@ -53,6 +53,9 @@
 -- lane splitter could pass only what its two lanes bring, and with only the left input
 -- lanes fed an N > M network would deliver half (0.5 per output). The lane-aware model
 -- (flow.solve_lanes) checks this.
+--
+-- With item filters on some outputs (opts.filters, scripts/filters.lua) the network is built
+-- differently, see filtered() below.
 local network = {}
 
 ---@class mb.Port
@@ -68,10 +71,12 @@ local network = {}
 ---@class mb.Network
 ---@field n_in integer
 ---@field n_out integer
----@field splitters { id: integer }[]
+---@field splitters { id: integer, filter: string?, prio: string? }[] filter: a filter splitter
+---  (filtered networks): that item goes out of the `prio` side ("left": port 1)
 ---@field priority { kind: string, id: integer }[]
 ---@field edges mb.Edge[]
----@field lane_splitters { kind: string, id: integer }[]?
+---@field lane_splitters { kind: string, id: integer, filter: string?, prio: string? }[]?
+---@field filtered boolean? built with item filters (see filtered())
 ---@field stats { splitters: integer, priority: integer, lane_splitters: integer, edges: integer }?
 
 ---@type table<string, boolean>
@@ -600,12 +605,297 @@ local function add_lane_splitters(net)
   end
 end
 
+-- The unfiltered network without lane splitters.
+---@param n_in integer
+---@param n_out integer
+---@param recirc boolean
+---@return mb.Network
+local function base(n_in, n_out, recirc)
+  ---@type mb.Network
+  local net
+  if recirc and n_out >= 3 then
+    net = recirculating(n_in, n_out)
+  elseif recirc and n_out == 2 then
+    -- The plain n:2 network ends in one splitter on both outputs, and a splitter already
+    -- gives what one output does not take to the other: it recirculates by itself. Keep
+    -- whichever is smaller (the plain one except for sizes just above a power of two,
+    -- such as 17:2).
+    local a, b = plain(n_in, 2), recirculating(n_in, 2)
+    net = (#b.splitters + #b.priority < #a.splitters + #a.priority) and b or a
+  elseif n_out == 1 then
+    net = merging(n_in)
+  else
+    net = plain(n_in, n_out)
+  end
+  return net
+end
+
+-- Filtered network (opts.filters, one mb.FilterSpec or false per output; scripts/filters.lua).
+--
+-- Sinks: an output without a lane filter is one sink (j, 0); an output with one has a sink per
+-- lane that has an item: (j, 1) left, (j, 2) right. Every item named in any filter gets the set
+-- of sinks that take it: the sinks whose whitelist (or lane slot) names it if there are any
+-- (exclusive), else every whole sink without a whitelist whose blacklist does not name it. Items
+-- not named anywhere (the rest) go to every whole sink without a whitelist. Named items with the
+-- same sink set as another named item form one class, and a named item whose set is the rest's
+-- joins the rest; each class keeps the order of its first item (items sorted by name).
+--
+-- Built from parts that are each exact (nothing here is simplified across parts):
+-- - every network input passes (its lane splitter with balance_lanes, then) a chain of filter
+--   splitters, one per item of every class but the rest: port 1 (filtered, priority) takes the
+--   item, port 2 the others and feeds the next. A class with several items merges its ports 1
+--   per input with a merge tree. What is left after the chain is the rest.
+-- - every class with sinks gets its own n:k network (base(), the group's recirc setting) from the
+--   n streams of that class to its k sinks: within a class every sink gets an equal share, and
+--   recirculation passes unused shares between them.
+-- - every whole sink merges the wires of the classes it is in (merge tree) into its output. A lane
+--   sink passes a lane splitter whose filter is its item, with output priority on its lane (the
+--   filter item goes to the priority lane: measured), and the two lanes of an output merge in a
+--   splitter, which keeps lanes apart.
+-- A class with no sink leaves its filtered port (or the end of the chain, for the rest)
+-- unconnected: those items wait in front of it and block that input, as a vanilla filter
+-- splitter whose filtered side is full.
+-- Merge splitters use only output port 1; scripts/builder.lua closes port 2. Filter splitters
+-- carry `filter` and `prio` and are never closed.
+---@param n integer
+---@param m integer
+---@param specs (mb.FilterSpec|false)[]
+---@param opts { balance_lanes: boolean?, recirc: boolean? }
+---@return mb.Network
+local function filtered(n, m, specs, opts)
+  local recirc = opts.recirc ~= false
+  local splitters, priority, lanes, edges = {}, {}, {}, {}
+  local function edge(from, to)
+    edges[#edges + 1] = { from = from, to = to }
+  end
+  local function port(kind, id, p)
+    return { kind = kind, id = id, port = p }
+  end
+  local function new_splitter(filter, prio)
+    local id = #splitters + 1
+    splitters[id] = { id = id, filter = filter, prio = prio }
+    return id
+  end
+  local function new_lane(filter, prio)
+    local id = #lanes + 1
+    lanes[id] = { kind = "lane_splitter", id = id, filter = filter, prio = prio }
+    return id
+  end
+  -- Merges the source ports `wires` into one (a tree of splitters, output port 1 only).
+  local function merge(wires)
+    while #wires > 1 do
+      local next_wires = {}
+      for i = 1, #wires, 2 do
+        if wires[i + 1] then
+          local id = new_splitter()
+          edge(wires[i], port("splitter", id, 1))
+          edge(wires[i + 1], port("splitter", id, 2))
+          next_wires[#next_wires + 1] = port("splitter", id, 1)
+        else
+          next_wires[#next_wires + 1] = wires[i]
+        end
+      end
+      wires = next_wires
+    end
+    return wires[1]
+  end
+
+  -- sinks and the sink set of every named item
+  local sinks, sink_of = {}, {}
+  local function sink(j, lane)
+    local key = j .. ":" .. lane
+    if not sink_of[key] then
+      sinks[#sinks + 1] = { j = j, lane = lane }
+      sink_of[key] = #sinks
+    end
+    return sink_of[key]
+  end
+  for j = 1, m do
+    local s = specs[j]
+    if s and s.lanes then
+      if s.left then
+        sink(j, 1)
+      end
+      if s.right then
+        sink(j, 2)
+      end
+    else
+      sink(j, 0)
+    end
+  end
+  local named, seen = {}, {}
+  for j = 1, m do
+    local s = specs[j]
+    if s then
+      local list = s.items or {}
+      if s.lanes then
+        list = {}
+        list[#list + 1] = s.left
+        list[#list + 1] = s.right
+      end
+      for _, x in ipairs(list) do
+        if not seen[x] then
+          seen[x] = true
+          named[#named + 1] = x
+        end
+      end
+    end
+  end
+  table.sort(named)
+  local function set_key(list)
+    table.sort(list)
+    return table.concat(list, ",")
+  end
+  local rest = {}
+  for j = 1, m do
+    local s = specs[j]
+    if not s or (not s.lanes and s.exclude) then
+      rest[#rest + 1] = sink_of[j .. ":0"]
+    end
+  end
+  local rest_key = set_key(rest)
+  local classes, class_of = {}, {}
+  for _, x in ipairs(named) do
+    local claim, open = {}, {}
+    for j = 1, m do
+      local s = specs[j]
+      if s and s.lanes then
+        if s.left == x then
+          claim[#claim + 1] = sink_of[j .. ":1"]
+        end
+        if s.right == x then
+          claim[#claim + 1] = sink_of[j .. ":2"]
+        end
+      elseif s and not s.exclude then
+        for _, y in ipairs(s.items or {}) do
+          if y == x then
+            claim[#claim + 1] = sink_of[j .. ":0"]
+          end
+        end
+      else
+        local excluded = false
+        for _, y in ipairs(s and s.items or {}) do
+          if y == x then
+            excluded = true
+          end
+        end
+        if not excluded then
+          open[#open + 1] = sink_of[j .. ":0"]
+        end
+      end
+    end
+    local list = #claim > 0 and claim or open
+    local key = set_key(list)
+    if key ~= rest_key then
+      if not class_of[key] then
+        classes[#classes + 1] = { items = {}, sinks = list }
+        class_of[key] = #classes
+      end
+      local c = classes[class_of[key]]
+      c.items[#c.items + 1] = x
+    end
+  end
+
+  -- per input: the chain of filter splitters, giving the stream of every class
+  local streams = {} -- streams[c][i]; c = #classes + 1 is the rest
+  for c = 1, #classes + 1 do
+    streams[c] = {}
+  end
+  for i = 1, n do
+    local wire = port("in", i, 1)
+    if opts.balance_lanes then
+      local id = new_lane()
+      edge(wire, port("lane_splitter", id, 1))
+      wire = port("lane_splitter", id, 1)
+    end
+    for c, cl in ipairs(classes) do
+      local parts = {}
+      for _, x in ipairs(cl.items) do
+        local id = new_splitter(x, "left")
+        edge(wire, port("splitter", id, 1))
+        parts[#parts + 1] = port("splitter", id, 1)
+        wire = port("splitter", id, 2)
+      end
+      if #cl.sinks > 0 then
+        streams[c][i] = merge(parts)
+      end
+    end
+    streams[#classes + 1][i] = wire
+  end
+
+  -- per class with sinks: its own network into the wires of its sinks
+  local sink_wires = {}
+  for k = 1, #sinks do
+    sink_wires[k] = {}
+  end
+  local all = {}
+  for c, cl in ipairs(classes) do
+    all[c] = cl.sinks
+  end
+  all[#classes + 1] = rest
+  for c = 1, #classes + 1 do
+    local list = all[c] or {}
+    if #list > 0 then
+      local sub = base(n, #list, recirc)
+      local s0, p0 = #splitters, #priority
+      for _, sp in ipairs(sub.splitters) do
+        splitters[#splitters + 1] = { id = sp.id + s0 }
+      end
+      for _, pr in ipairs(sub.priority or {}) do
+        priority[#priority + 1] = { kind = "priority", id = pr.id + p0 }
+      end
+      local function moved(p)
+        if p.kind == "splitter" then
+          return port("splitter", p.id + s0, p.port)
+        elseif p.kind == "priority" then
+          return port("priority", p.id + p0, p.port)
+        end
+        return port(p.kind, p.id, p.port)
+      end
+      for _, ed in ipairs(sub.edges) do
+        local from = ed.from.kind == "in" and streams[c][ed.from.id] or moved(ed.from)
+        if ed.to.kind == "out" then
+          local w = sink_wires[list[ed.to.id]]
+          w[#w + 1] = from
+        else
+          edge(from, moved(ed.to))
+        end
+      end
+    end
+  end
+
+  -- every output: its whole sink's wires merged, or its lane sinks
+  for j = 1, m do
+    local s = specs[j]
+    local out = port("out", j, 1)
+    if s and s.lanes then
+      local sides = {}
+      local items = { s.left or false, s.right or false }
+      for lane = 1, 2 do
+        local x = items[lane]
+        if x then
+          local id = new_lane(x, lane == 1 and "left" or "right")
+          edge(merge(sink_wires[sink_of[j .. ":" .. lane]]), port("lane_splitter", id, 1))
+          sides[#sides + 1] = port("lane_splitter", id, 1)
+        end
+      end
+      edge(merge(sides), out)
+    else
+      edge(merge(sink_wires[sink_of[j .. ":0"]]), out)
+    end
+  end
+  return { n_in = n, n_out = m, splitters = splitters, priority = priority, lane_splitters = lanes, edges = edges,
+    filtered = true }
+end
+
 -- Returns a Network, or nil and "invalid". Any size builds.
 -- opts.recirc (default true): recirculate every output's unused share (needs n_out >= 2;
 -- with one output there is nothing to redistribute). opts.balance_lanes: lane splitters.
+-- opts.filters: one mb.FilterSpec (or false) per output; with any filter the network is a
+-- filtered one (see filtered() above), else the same as without.
 ---@param n_in integer
 ---@param n_out integer
----@param opts? { balance_lanes: boolean?, recirc: boolean? }
+---@param opts? { balance_lanes: boolean?, recirc: boolean?, filters: (mb.FilterSpec|false)[]? }
 ---@return mb.Network? net
 ---@return string? err
 function network.build(n_in, n_out, opts)
@@ -620,24 +910,20 @@ function network.build(n_in, n_out, opts)
     return nil, "invalid"
   end
   opts = opts or {}
-  ---@type mb.Network
   local net
-  if opts.recirc ~= false and n_out >= 3 then
-    net = recirculating(n_in, n_out)
-  elseif opts.recirc ~= false and n_out == 2 then
-    -- The plain n:2 network ends in one splitter on both outputs, and a splitter already
-    -- gives what one output does not take to the other: it recirculates by itself. Keep
-    -- whichever is smaller (the plain one except for sizes just above a power of two,
-    -- such as 17:2).
-    local a, b = plain(n_in, 2), recirculating(n_in, 2)
-    net = (#b.splitters + #b.priority < #a.splitters + #a.priority) and b or a
-  elseif n_out == 1 then
-    net = merging(n_in)
-  else
-    net = plain(n_in, n_out)
+  local any = false
+  for j = 1, n_out do
+    if opts.filters and opts.filters[j] then
+      any = true
+    end
   end
-  if opts.balance_lanes then
-    add_lane_splitters(net)
+  if any then
+    net = filtered(n_in, n_out, opts.filters --[[@as (mb.FilterSpec|false)[] ]], opts)
+  else
+    net = base(n_in, n_out, opts.recirc ~= false)
+    if opts.balance_lanes then
+      add_lane_splitters(net)
+    end
   end
   net.stats = {
     splitters = #net.splitters,

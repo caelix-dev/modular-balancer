@@ -2,7 +2,7 @@
 
 A Factorio 2.1 mod that adds a modular N:M belt balancer. Place 1x1 blocks in any connected shape and attach belts: every belt feeding a block is an input, every belt it feeds is an output, and the group works as an exact N:M balancer. Items are never lost or duplicated, and the steady state does no per-tick script work.
 
-Version 0.1.5, for Factorio 2.1. Space Age is optional. MIT License.
+Version 0.2.0, for Factorio 2.1. Space Age is optional. MIT License.
 
 ## Blocks
 
@@ -39,6 +39,23 @@ How settings travel:
 
 On servers, players whose permission group may not open entity GUIs or paste entity settings cannot change these settings either.
 
+## Filters
+
+The lower part of the settings window is the clicked block's own item filter, laid out as an inserter's. Unlike the settings above, a filter belongs to one block, but the whole balancer routes by it. It applies to that block's outputs: its belts, its inserters and belts into another balancer.
+
+- **Use filters** turns the filter on. Off, it is kept but does nothing, and the slots, the switch and Per lane cannot be changed. Picking the first item on a block turns it on.
+- **Whitelist** (five slots): the block's outputs take only these items, and these items go only to blocks that list them, as with a vanilla filter splitter. Several blocks listing the same item share it equally. The other outputs of the balancer share everything else.
+- **Blacklist:** the block's outputs take everything except the listed items (and except items another block's filter claims).
+- **Per lane:** slot 1 goes on the left lane of the block's outputs and slot 2 on the right lane, nothing else. Only two slots are shown; slots 3 to 5, the Whitelist/Blacklist switch and, in that block's window, Balance lanes keep their values but are locked while it is on.
+
+In alt mode a block shows its filter items, as an inserter does (crossed out for a blacklist).
+
+Items match by name, in any quality. An item no output takes (for example when every output has a whitelist) waits at the input and blocks it, as it would in front of a filter splitter whose filtered side is full. Within the items an output takes, every output still gets an equal share, and with Redistribute on a slow output's share goes to the others that take the same items.
+
+The filtering is done by filter splitters in the hidden network, so it costs no script time either; the network is larger (about one splitter per input per filtered item, plus a small balancer per group of items that go to the same outputs). Changing a filter rebuilds the balancer once; its items are kept, and they pass through the filters again. If that rebuild fails, the old network keeps running with its old filters until the balancer is next changed.
+
+Filters travel with copy and paste settings (between blocks of one balancer, the filter only), blueprints, ghosts (set on the ghost, applied when it is built), clones and upgrades of the block.
+
 ## Building and editing
 
 Blueprints, copy-paste, undo/redo, ghosts and the upgrade planner work with balancers. A blueprint holds the blocks and the player's own belts, and the mod connects them again where they are built.
@@ -62,7 +79,7 @@ Blueprints, copy-paste, undo/redo, ghosts and the upgrade planner work with bala
 
 **Undo.**
 - Undoing a rotation that turned an edge into the other role (input to output) does nothing; rotate it back by hand.
-- Undoing the removal of a whole balancer brings its blocks back with the default settings (balance lanes off, redistribute on).
+- Undoing the removal of a whole balancer brings its blocks back with the default settings (balance lanes off, redistribute on) and no filters.
 
 ## Removing a balancer
 

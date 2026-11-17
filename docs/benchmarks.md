@@ -8,7 +8,7 @@ the round 2 numbers still apply to 0.1.4. The README's "Performance" section sum
 
 The user accepted the cost below and chose a per-balancer toggle (spec Update 2026-10-25 (2)).
 Every balancer's settings window (click a block) has the checkbox **"Redistribute unused
-shares"** ("남는 몫 되돌려 보내기"):
+shares"**:
 
 - **On (the default):** the recirculating network, the rows "recirculating, after" below. Every
   output stays equal even when some outputs take less than their share.

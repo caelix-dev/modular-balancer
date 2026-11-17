@@ -36,6 +36,15 @@
 --                balancer's settings, and a change goes to it as well as to the ghosts. When the
 --                ghost is built, its frame moves to the new block.
 --
+-- Item filters (scripts/filters.lua) belong to one block, not to the group: the frame's lower part
+-- shows and changes the filter of the block it was opened on (on a ghost: its tag mb_filter, that
+-- ghost only). Copy and paste carry the group settings and the block's filter (within one group,
+-- the filter only); blueprints tag every block with its filter; a clone takes its source's; an
+-- upgraded block (another tier on the same tile) keeps it. The filter part is laid out as an
+-- inserter's (Use filters, five slots, the whitelist/blacklist switch, vanilla captions) plus
+-- "Per lane"; with it on, slots 3 to 5, the switch and, in this block's window, the group's
+-- balance-lanes checkbox keep their values but are locked.
+--
 -- storage.mb_gui = {
 --   open = { [player index] = LuaEntity },                     the block or block ghost whose
 --                                                              GUI is open
@@ -53,11 +62,13 @@
 -- in on_load.
 local groups = require("scripts.groups")
 local balancer = require("scripts.balancer")
+local filters = require("scripts.filters")
 
 local gui = {}
 
 local FRAME = "mb_settings"
 local TAG_LANES, TAG_RECIRC = "mb_lanes", "mb_recirc"
+local TAG_FILTER = "mb_filter"
 
 -- How player indices become players: game.get_player, replaced by tests (a headless test has no
 -- LuaPlayer, tests/game/lanes.lua uses a stand-in). Not state: the same function on every peer.
@@ -174,6 +185,19 @@ local function shown_group(e)
 end
 
 -- Shows the settings and ratio of block or ghost `target` in `frame`.
+-- The filter slots (`count` of them, slot i named mb_slot<i>) in their table inside `deep`.
+---@param deep LuaGuiElement
+---@param count integer
+---@return LuaGuiElement
+local function add_slots(deep, count)
+  local slots = deep.add({ type = "table", name = "mb_slots", column_count = count, style = "filter_slot_table" })
+  for i = 1, count do
+    slots.add({ type = "choose-elem-button", name = "mb_slot" .. i, elem_type = "item", style = "slot_button",
+      elem_filters = { { filter = "hidden", invert = true } }, tags = { mb_slot = i } })
+  end
+  return slots
+end
+
 ---@param frame LuaGuiElement
 ---@param target LuaEntity
 local function fill(frame, target)
@@ -182,8 +206,51 @@ local function fill(frame, target)
     return
   end
   local s = gui.settings_of(target)
+  local f = gui.filter_of(target) or { items = {}, use = false, exclude = false, lanes = false }
+  local per_lane = f.use and f.lanes
   inner.mb_lanes.state = s.lanes
+  -- per lane decides this block's lanes: the group's lane balancing is locked in its window
+  inner.mb_lanes.enabled = not per_lane
   inner.mb_recirc.state = s.recirc
+  -- the filter part (tests may hand in a frame without it), laid out as an inserter's filters:
+  -- with "Use filters" off the slots, the switch and "Per lane" are disabled; per lane
+  -- shows only slots 1 and 2 (3 to 5 keep their items, hidden)
+  local row, flags = inner.mb_frow, inner.mb_fflags
+  local deep = row and row.mb_fdeep
+  local slots = deep and deep.mb_slots
+  local left = row and row.mb_fleft
+  ---@diagnostic disable-next-line: unnecessary-if
+  if left and deep and slots and flags then
+    left.mb_fuse.state = f.use
+    local count = f.lanes and 2 or filters.SLOTS
+    if deep.object_name == "LuaGuiElement" and slots.column_count ~= count then
+      -- a table keeps the width of hidden cells: rebuilt with as many slots as are shown
+      slots.destroy()
+      slots = add_slots(deep, count)
+    end
+    for i = 1, filters.SLOTS do
+      local b = slots["mb_slot" .. i]
+      ---@diagnostic disable-next-line: unnecessary-if
+      if b then
+        local v = f.items[i]
+        -- an item of a removed mod stays in the record but cannot be shown
+        b.elem_value = (v and v ~= "" and prototypes.item[v]) and v or nil
+        b.visible = i <= count
+        b.enabled = f.use
+        if f.lanes and i == 1 then
+          b.tooltip = { "mb-gui.slot-left" }
+        elseif f.lanes and i == 2 then
+          b.tooltip = { "mb-gui.slot-right" }
+        else
+          b.tooltip = ""
+        end
+      end
+    end
+    left.mb_fmode.switch_state = f.exclude and "right" or "left"
+    left.mb_fmode.enabled = f.use and not f.lanes
+    flags.mb_flanes.state = f.lanes
+    flags.mb_flanes.enabled = f.use
+  end
   local id = shown_group(target)
   local rec = id and balancer.get(id)
   if rec and rec.placed then
@@ -289,10 +356,14 @@ function gui.paste(source, destination, player_index)
     return false
   end
   local from, to = group_of(source), group_of(destination)
-  if from and from == to then
-    return false
+  local changed = false
+  if not (from and from == to) then
+    changed = gui.apply(destination, gui.settings_of(source), player_index)
   end
-  return gui.apply(destination, gui.settings_of(source), player_index)
+  if gui.set_filter(destination, gui.filter_of(source), player_index) then
+    changed = true
+  end
+  return changed
 end
 
 -- The settings in the tags of a block built from a blueprint, or nil when it has none.
@@ -303,6 +374,49 @@ function gui.settings_from_tags(tags)
     return nil
   end
   return { lanes = tags[TAG_LANES] == true, recirc = tags[TAG_RECIRC] ~= false }
+end
+
+-- The item filter in the tags of a built block or a ghost, or nil.
+---@param tags Tags?
+---@return table?
+function gui.filter_from_tags(tags)
+  return type(tags) == "table" and filters.normalize(tags[TAG_FILTER]) or nil
+end
+
+-- The item filter of block or ghost `e` (a scripts/filters.lua record), or nil.
+---@param e LuaEntity
+---@return table?
+function gui.filter_of(e)
+  if is_ghost(e) then
+    return gui.filter_from_tags(e.tags)
+  end
+  return is_block(e) and filters.normalize(groups.filter(e.unit_number)) or nil
+end
+
+-- Gives block or ghost `e` item filter `f` (nil clears it). A block's group is marked, so the
+-- next flush rebuilds its network. Returns true when the filter changed.
+---@param e LuaEntity
+---@param f table?
+---@param player_index integer?
+---@return boolean
+function gui.set_filter(e, f, player_index)
+  f = filters.normalize(f)
+  if is_ghost(e) then
+    local t = e.tags or {}
+    if filters.same(t[TAG_FILTER], f) then
+      return false
+    end
+    t[TAG_FILTER] = f
+    e.tags = t
+  else
+    local id = group_of(e)
+    if not (id and groups.set_filter(e.unit_number, f)) then
+      return false
+    end
+    balancer.mark({ id }, nil, player_index)
+  end
+  gui.refresh_all()
+  return true
 end
 
 -- Writes the settings of each block's group as tags on its blueprint entity. `map` is the
@@ -328,6 +442,10 @@ function gui.tag_blueprint(bp, map)
         local s = groups.settings(id)
         bp.set_blueprint_entity_tag(i, TAG_LANES, s.lanes)
         bp.set_blueprint_entity_tag(i, TAG_RECIRC, s.recirc)
+        local f = groups.filter(e.unit_number)
+        if f then
+          bp.set_blueprint_entity_tag(i, TAG_FILTER, f)
+        end
         n = n + 1
       end
     end
@@ -397,6 +515,28 @@ function gui.open(player, block)
     tooltip = { "mb-gui.balance-lanes-tooltip" }, tags = { mb_setting = "lanes" } })
   inner.add({ type = "checkbox", name = "mb_recirc", state = true, caption = { "mb-gui.recirc" },
     tooltip = { "mb-gui.recirc-tooltip" }, tags = { mb_setting = "recirc" } })
+  -- this block's filter, laid out as an inserter's: "Use filters" above the whitelist/blacklist
+  -- switch (vanilla captions) on the left, the slots on the right, "Per lane" below them
+  local line = inner.add({ type = "line", direction = "horizontal", style = "inside_shallow_frame_with_padding_line" })
+  line.style.top_margin = 8
+  line.style.bottom_margin = 8
+  local row = inner.add({ type = "flow", name = "mb_frow", direction = "horizontal" })
+  row.style.vertical_align = "center"
+  local left = row.add({ type = "flow", name = "mb_fleft", direction = "vertical" })
+  left.style.vertical_spacing = 8
+  left.add({ type = "checkbox", name = "mb_fuse", state = false, caption = { "gui-inserter.use-filters" },
+    tooltip = { "mb-gui.filter-tooltip" }, tags = { mb_setting = "fuse" } })
+  left.add({ type = "switch", name = "mb_fmode", switch_state = "left", left_label_caption = { "gui-inserter.whitelist" },
+    right_label_caption = { "gui-inserter.blacklist" }, tooltip = { "mb-gui.filter-mode-tooltip" }, tags = { mb_setting = "exclude" } })
+  local gap = row.add({ type = "empty-widget" })
+  gap.style.horizontally_stretchable = true
+  gap.style.minimal_width = 12
+  local deep = row.add({ type = "frame", name = "mb_fdeep", style = "slot_button_deep_frame" })
+  add_slots(deep, filters.SLOTS)
+  local flags = inner.add({ type = "flow", name = "mb_fflags", direction = "horizontal" })
+  flags.style.top_margin = 8
+  flags.add({ type = "checkbox", name = "mb_flanes", state = false, caption = { "mb-gui.filter-lanes" },
+    tooltip = { "mb-gui.filter-lanes-tooltip" }, tags = { mb_setting = "flanes" } })
   fill(frame, block)
   frame.auto_center = true
   local st = state()
@@ -488,14 +628,21 @@ function gui.paste_input(player)
   return gui.paste(src, dst, player.index)
 end
 
--- A checkbox of the frame of `player` changed. Returns true when a setting changed.
+-- A checkbox (or the whitelist/blacklist switch) of the frame of `player` changed. Returns true
+-- when a setting changed.
 ---@param player LuaPlayer
 ---@param el LuaGuiElement
 ---@return boolean
 function gui.checked(player, el)
   local key = el.valid and el.tags and el.tags.mb_setting
-  if key ~= "lanes" and key ~= "recirc" then
+  if key ~= "lanes" and key ~= "recirc" and key ~= "fuse" and key ~= "exclude" and key ~= "flanes" then
     return false
+  end
+  local value
+  if el.type == "switch" then
+    value = el.switch_state == "right"
+  else
+    value = el.state
   end
   local block = state().open[player.index]
   if not ((group_of(block) or is_ghost(block)) and gui.can_use(player, block) and allowed(player, defines.input_action.open_gui)) then
@@ -503,7 +650,52 @@ function gui.checked(player, el)
     return false
   end
   ---@cast block LuaEntity
-  local changed = gui.apply(block, { [key] = el.state }, player.index)
+  local changed
+  if key == "fuse" or key == "exclude" or key == "flanes" then
+    local f = filters.normalize(gui.filter_of(block)) or { items = { "", "", "", "", "" }, use = false, exclude = false, lanes = false }
+    if key == "fuse" then
+      f.use = value
+    elseif key == "exclude" then
+      f.exclude = value
+    else
+      f.lanes = value
+    end
+    changed = gui.set_filter(block, f, player.index)
+  else
+    changed = gui.apply(block, { [key] = value }, player.index)
+  end
+  if not changed then
+    local frame = player.gui.screen[FRAME] --[[@as LuaGuiElement?]]
+    if frame then
+      fill(frame, block)
+    end
+  end
+  return changed
+end
+
+-- A filter slot of the frame of `player` changed. Returns true when the filter changed.
+---@param player LuaPlayer
+---@param el LuaGuiElement
+---@return boolean
+function gui.elem_changed(player, el)
+  local i = el.valid and el.tags and el.tags.mb_slot
+  if type(i) ~= "number" then
+    return false
+  end
+  local block = state().open[player.index]
+  if not ((group_of(block) or is_ghost(block)) and gui.can_use(player, block) and allowed(player, defines.input_action.open_gui)) then
+    gui.close(player)
+    return false
+  end
+  ---@cast block LuaEntity
+  local old = filters.normalize(gui.filter_of(block))
+  local f = old or { items = { "", "", "", "", "" }, use = false, exclude = false, lanes = false }
+  local v = el.elem_value
+  f.items[i] = type(v) == "string" and v or ""
+  if not old and f.items[i] ~= "" then
+    f.use = true -- the first item picked on a block without a filter turns filtering on
+  end
+  local changed = gui.set_filter(block, f, player.index)
   if not changed then
     local frame = player.gui.screen[FRAME] --[[@as LuaGuiElement?]]
     if frame then
@@ -597,6 +789,22 @@ function gui.on_checked(event)
   local player = player_of(event)
   if player then
     gui.checked(player, event.element)
+  end
+end
+
+---@param event EventData.on_gui_switch_state_changed
+function gui.on_switched(event)
+  local player = player_of(event)
+  if player then
+    gui.checked(player, event.element)
+  end
+end
+
+---@param event EventData.on_gui_elem_changed
+function gui.on_elem_changed(event)
+  local player = player_of(event)
+  if player then
+    gui.elem_changed(player, event.element)
   end
 end
 

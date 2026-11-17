@@ -9,8 +9,9 @@
 --   changed: on_player_rotated_entity, on_player_flipped_entity, on_entity_settings_pasted
 --            (the inserter positions or a belt direction change; between two blocks, the
 --            balancer settings, scripts/gui.lua)
---   settings (scripts/gui.lua): on_gui_checked_state_changed, on_gui_closed, on_gui_click (the
---            close button), on_player_left_game / on_player_removed (GUI state cleanup),
+--   settings (scripts/gui.lua): on_gui_checked_state_changed, on_gui_elem_changed (filter slots),
+--            on_gui_switch_state_changed (whitelist/blacklist),
+--            on_gui_closed, on_gui_click (the close button), on_player_left_game / on_player_removed (GUI state cleanup),
 --            on_player_changed_position / on_player_controller_changed (a frame whose block is
 --            out of reach closes; work only while that player has a frame open), and the linked
 --            custom inputs mb-open-gui, mb-copy-settings, mb-paste-settings
@@ -65,6 +66,20 @@ local function filters()
   return list
 end
 
+-- The item filter a block built on tile (x, y) of `si` keeps from the block it replaces (another
+-- tier, the upgrade planner or a fast-replace build): the record of a block on that tile whose
+-- entity is already gone, or what the removal of a block marked for upgrade left this tick.
+local function carried_filter(si, x, y)
+  local old = groups.block_at(si, x, y)
+  local e = old and groups.entity(old)
+  if old and not (e and e.valid) and groups.filter(old) then
+    return groups.filter(old)
+  end
+  local c = storage.mb_carry
+  local hit = c and c.tick == game.tick and c.at[si .. ":" .. x .. "," .. y]
+  return hit or nil
+end
+
 local function relevant(entity)
   return entity.type == "inserter" or belt_io.IS_BELT_TYPE[entity.type]
 end
@@ -114,10 +129,13 @@ local function built(entity, event)
     -- a block from a blueprint carries its balancer's settings (a new group takes them); a clone
     -- takes its source's group's
     local settings = gui.settings_from_tags(event.tags)
-    if not settings and event.source and event.source.valid and groups.of(event.source.unit_number) then
-      settings = groups.settings(groups.of(event.source.unit_number))
+    local filter = gui.filter_from_tags(event.tags)
+    if event.source and event.source.valid and groups.of(event.source.unit_number) then
+      settings = settings or groups.settings(groups.of(event.source.unit_number))
+      filter = filter or groups.filter(event.source.unit_number)
     end
-    local ids, gone = groups.on_block_built(entity, settings)
+    filter = filter or carried_filter(entity.surface_index, math.floor(p.x), math.floor(p.y))
+    local ids, gone = groups.on_block_built(entity, settings, filter)
     balancer.mark(ids, gone, player)
     balancer.mark_block(entity, player)
   elseif relevant(entity) then
@@ -134,6 +152,17 @@ local function removed(entity, event)
     return
   end
   if groups.tier_of(entity.name) then
+    local f = groups.filter(entity.unit_number)
+    if f and entity.to_be_upgraded() then
+      -- the block that replaces it (built later in this tick) keeps its filter
+      local c = storage.mb_carry
+      if not (c and c.tick == game.tick) then
+        c = { tick = game.tick, at = {} }
+        storage.mb_carry = c
+      end
+      local p = entity.position
+      c.at[entity.surface_index .. ":" .. math.floor(p.x) .. "," .. math.floor(p.y)] = f
+    end
     local ids, gone = groups.on_block_removed(entity)
     balancer.set_sink(gone, event.player_index, event.robot, event.platform)
     balancer.mark(ids, gone, event.player_index)
@@ -218,6 +247,8 @@ function events.register()
   script.on_event(E.on_gui_checked_state_changed, gui.on_checked)
   script.on_event(E.on_gui_closed, gui.on_closed)
   script.on_event(E.on_gui_click, gui.on_click)
+  script.on_event(E.on_gui_elem_changed, gui.on_elem_changed)
+  script.on_event(E.on_gui_switch_state_changed, gui.on_switched)
   script.on_event(E.on_player_left_game, gui.on_left)
   script.on_event(E.on_player_removed, gui.on_removed)
   script.on_event(E.on_player_changed_position, gui.on_moved)

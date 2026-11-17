@@ -28,6 +28,9 @@
 -- not even while the connected output is blocked. Without this, a splitter fills its dead end
 -- (alternating in free flow, or when its live output backs up) and those items stay there until
 -- the network is rebuilt or removed (measured: 12 left in a 3:1 after draining a shrink).
+-- A filter splitter of a filtered network (scripts/network.lua) carries its own item filter and
+-- output priority and is never closed: an unconnected side is where items nobody takes wait. A
+-- lane splitter may carry a filter and priority too (the filter item goes to the priority lane).
 --
 -- The buffer (a strip of BUFFER_W tiles right of the grid) holds what a rebuild could not put
 -- back on the belts:
@@ -136,11 +139,14 @@ local function plan(net, tier, origin)
       outs[ed.from.id][ed.from.port] = true
     end
   end
-  local function splitter_cell(kind, id)
+  local function splitter_cell(kind, id, sp)
     local x, y = cell()
     local t = { name = "mb-hidden-splitter-" .. tier, position = { x + 1.5, y + 1 }, direction = EAST }
     if kind == "priority" then
       t.prio = "left"
+    elseif sp and sp.filter then
+      -- a filter splitter (filtered networks): never closed; an unconnected side blocks
+      t.prio, t.item = sp.prio, sp.filter
     else
       local o = outs[id] or {}
       if o[1] ~= o[2] then
@@ -154,14 +160,15 @@ local function plan(net, tier, origin)
     out_tile[kind][id] = { { x + 2.5, y + 0.5 }, { x + 2.5, y + 1.5 } }
   end
   for _, sp in ipairs(net.splitters) do
-    splitter_cell("splitter", sp.id)
+    splitter_cell("splitter", sp.id, sp)
   end
   for _, pr in ipairs(net.priority or {}) do
     splitter_cell("priority", pr.id)
   end
   for _, ls in ipairs(net.lane_splitters or {}) do
     local x, y = cell()
-    create({ name = "mb-hidden-lane-splitter-" .. tier, position = { x + 1.5, y + 0.5 }, direction = EAST })
+    create({ name = "mb-hidden-lane-splitter-" .. tier, position = { x + 1.5, y + 0.5 }, direction = EAST,
+      prio = ls.prio, item = ls.filter })
     in_tile.lane_splitter[ls.id] = { { x + 0.5, y + 0.5 } }
     out_tile.lane_splitter[ls.id] = { { x + 2.5, y + 0.5 } }
   end
@@ -232,6 +239,9 @@ function builder.start(net, tier, force)
     outputs = {},
     entities = {},
     dead_ends = {}, -- unit numbers of splitters with a closed dead-end output
+    -- a filtered network: a drain puts items only into the buffer, which feeds input 1, so every
+    -- item passes the filters (on a belt inside it could reach outputs that do not take it)
+    buffer_only = net.filtered or nil,
   }
   local ok, p = pcall(plan, net, tier, placed.origin)
   if not ok then
@@ -273,6 +283,8 @@ local function run(job, budget)
       end
       if op.filter then
         e.splitter_filter = { name = NEVER }
+      elseif op.item then
+        e.splitter_filter = { name = op.item }
       end
       if op.dead then
         placed.dead_ends[e.unit_number] = true
@@ -513,7 +525,7 @@ end
 ---@param tmp LuaInventory
 ---@return integer
 local function put_into(new, src, tmp)
-  if not keep_whole(src) and onto_belts(new, src) then
+  if not new.buffer_only and not keep_whole(src) and onto_belts(new, src) then
     return 1
   end
   local buffer = new.buffer

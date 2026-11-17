@@ -6,16 +6,18 @@
 -- (scripts/network.lua, filtered networks), never by script.
 --
 -- Record (stored on the block, scripts/groups.lua, and as the blueprint tag mb_filter):
---   { items = { s1, s2, s3, s4, s5 }, exclude = boolean, lanes = boolean }
+--   { items = { s1, s2, s3, s4, s5 }, use = boolean, exclude = boolean, lanes = boolean }
 -- Slots hold item names, "" for an empty slot (tags keep no holes in arrays). The default (every
 -- slot empty, both flags off) is stored as nil.
+--   use       "Use filters" (as on an inserter): off, the record is kept but filters nothing.
 --   items     whitelist: the block's outputs take only these items, and these items go only to
 --             blocks that list them (exclusive, like a vanilla filter splitter).
 --   exclude   blacklist: the block's outputs take everything except these items (and except the
 --             items another block's whitelist claims).
 --   lanes     per lane: slot 1 goes on the left lane of every output of the block, slot 2 on the
 --             right lane, nothing else (a whitelist per lane). Slots 3 to 5 and `exclude` are kept
---             but do nothing while it is on (the GUI locks them).
+--             but do nothing while it is on (the GUI locks them, and the group's balance-lanes
+--             checkbox in this block's window).
 -- Items are matched by name, any quality (a splitter filter without a quality, measured).
 local filters = {}
 
@@ -23,7 +25,7 @@ filters.SLOTS = 5
 
 -- A clean copy of record `f` (from storage, a tag or the GUI), or nil for the default or garbage.
 ---@param f any
----@return { items: string[], exclude: boolean, lanes: boolean }?
+---@return { items: string[], use: boolean, exclude: boolean, lanes: boolean }?
 function filters.normalize(f)
   if type(f) ~= "table" then
     return nil
@@ -43,10 +45,12 @@ function filters.normalize(f)
     end
   end
   local exclude, lanes = f.exclude == true, f.lanes == true
-  if not (any or exclude or lanes) then
+  -- a record from before "Use filters" existed (no `use`) was in use
+  local use = f.use == true or (f.use == nil and (any or exclude or lanes))
+  if not (any or use or exclude or lanes) then
     return nil
   end
-  return { items = items, exclude = exclude, lanes = lanes }
+  return { items = items, use = use, exclude = exclude, lanes = lanes }
 end
 
 -- True when two records (normalized or not) are the same.
@@ -55,7 +59,7 @@ function filters.same(a, b)
   if a == nil or b == nil then
     return a == b
   end
-  if a.exclude ~= b.exclude or a.lanes ~= b.lanes then
+  if a.use ~= b.use or a.exclude ~= b.exclude or a.lanes ~= b.lanes then
     return false
   end
   for i = 1, filters.SLOTS do
@@ -73,15 +77,15 @@ end
 ---@field exclude boolean? blacklist of `items` (else whitelist)
 ---@field items string[]? sorted, distinct (not with lanes)
 
--- What record `f` does, for the network: nil when it does nothing (no item that `valid` accepts:
--- every slot empty, or only items that no longer exist), else a spec. `valid` (item name ->
+-- What record `f` does, for the network: nil when it does nothing ("Use filters" off, or no item
+-- that `valid` accepts: every slot empty, or only items that no longer exist), else a spec. `valid` (item name ->
 -- boolean, default accepts all) drops items of removed mods.
 ---@param f any
 ---@param valid (fun(name: string): boolean)?
 ---@return mb.FilterSpec?
 function filters.effective(f, valid)
   f = filters.normalize(f)
-  if not f then
+  if not (f and f.use) then
     return nil
   end
   local function ok(name)

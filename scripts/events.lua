@@ -10,6 +10,7 @@
 --            (the inserter positions or a belt direction change; between two blocks, the
 --            balancer settings, scripts/gui.lua)
 --   settings (scripts/gui.lua): on_gui_checked_state_changed, on_gui_elem_changed (filter slots),
+--            on_gui_switch_state_changed (whitelist/blacklist),
 --            on_gui_closed, on_gui_click (the close button), on_player_left_game / on_player_removed (GUI state cleanup),
 --            on_player_changed_position / on_player_controller_changed (a frame whose block is
 --            out of reach closes; work only while that player has a frame open), and the linked
@@ -247,6 +248,7 @@ function events.register()
   script.on_event(E.on_gui_closed, gui.on_closed)
   script.on_event(E.on_gui_click, gui.on_click)
   script.on_event(E.on_gui_elem_changed, gui.on_elem_changed)
+  script.on_event(E.on_gui_switch_state_changed, gui.on_switched)
   script.on_event(E.on_player_left_game, gui.on_left)
   script.on_event(E.on_player_removed, gui.on_removed)
   script.on_event(E.on_player_changed_position, gui.on_moved)

@@ -85,7 +85,7 @@ local function expect(net, x, want)
 end
 
 local W = function(...)
-  return { items = { ... } }
+  return { items = { ... }, use = true }
 end
 
 return {
@@ -101,13 +101,16 @@ return {
   end,
 
   effective_specs = function()
-    assert(filters.effective({ items = { "b", "a", "b" } }).items[1] == "a")
-    assert(#filters.effective({ items = { "b", "a", "b" } }).items == 2)
-    assert(filters.effective({ items = { "a" }, exclude = true }).exclude)
-    local l = filters.effective({ items = { "a", "", "c" }, lanes = true, exclude = true })
+    assert(filters.effective({ items = { "b", "a", "b" }, use = true }).items[1] == "a")
+    assert(#filters.effective({ items = { "b", "a", "b" }, use = true }).items == 2)
+    assert(filters.effective({ items = { "a" }, exclude = true, use = true }).exclude)
+    local l = filters.effective({ items = { "a", "", "c" }, lanes = true, exclude = true, use = true })
     assert(l and l.lanes and l.left == "a" and l.right == nil and not l.exclude, "lanes: slots 1-2, whitelist")
-    assert(filters.effective({ items = { "", "", "c" }, lanes = true }) == nil, "slot 3 does nothing per lane")
-    assert(filters.effective({ items = { "gone" } }, function(n)
+    assert(filters.effective({ items = { "", "", "c" }, lanes = true, use = true }) == nil, "slot 3 does nothing per lane")
+    assert(filters.effective({ items = { "a" }, use = false }) == nil, "Use filters off does nothing")
+    assert(filters.effective({ items = { "a" } }) ~= nil, "a record from before Use filters is in use")
+    assert(filters.normalize({ use = false }) == nil and filters.normalize({}) == nil, "defaults")
+    assert(filters.effective({ items = { "gone" }, use = true }, function(n)
       return n ~= "gone"
     end) == nil, "removed items are dropped")
     assert(filters.signature({ false, false }, 2) == "")
@@ -140,7 +143,7 @@ return {
   end,
 
   blacklist_takes_the_rest = function()
-    local specs = { filters.effective({ items = { "iron" }, exclude = true }), false, filters.effective(W("copper")) }
+    local specs = { filters.effective({ items = { "iron" }, exclude = true, use = true }), false, filters.effective(W("copper")) }
     local net = assert(network.build(4, 3, { filters = specs }))
     check_ports(net)
     expect(net, "iron", "2")
@@ -155,7 +158,7 @@ return {
     check_ports(net)
     expect(net, "stone", "dead")
     -- excluded everywhere
-    specs = { filters.effective({ items = { "iron" }, exclude = true }) }
+    specs = { filters.effective({ items = { "iron" }, exclude = true, use = true }) }
     net = assert(network.build(2, 1, { filters = specs }))
     check_ports(net)
     expect(net, "iron", "dead")
@@ -163,14 +166,14 @@ return {
   end,
 
   lanes_put_each_item_on_its_lane = function()
-    local specs = { filters.effective({ items = { "iron", "copper" }, lanes = true }), false }
+    local specs = { filters.effective({ items = { "iron", "copper" }, lanes = true, use = true }), false }
     local net = assert(network.build(3, 2, { balance_lanes = true, filters = specs }))
     check_ports(net)
     expect(net, "iron", "1:L")
     expect(net, "copper", "1:R")
     expect(net, "stone", "2")
     -- one slot only, and the same item on both lanes
-    specs = { filters.effective({ items = { "", "copper" }, lanes = true }), filters.effective({ items = { "iron", "iron" }, lanes = true }), false }
+    specs = { filters.effective({ items = { "", "copper" }, lanes = true, use = true }), filters.effective({ items = { "iron", "iron" }, lanes = true, use = true }), false }
     net = assert(network.build(2, 3, { filters = specs }))
     check_ports(net)
     expect(net, "copper", "1:R")

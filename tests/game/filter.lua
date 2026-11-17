@@ -98,7 +98,7 @@ describe("filter", function()
     local sb1 = H.sink(o, 6, 4, D.east, 3)
     local sb2 = H.sink(o, 6, 4, D.south, 3)
     balancer.flush()
-    assert(gui.set_filter(a, { items = { "iron-plate" } }), "the filter changed nothing")
+    assert(gui.set_filter(a, { items = { "iron-plate" }, use = true }), "the filter changed nothing")
     balancer.flush()
     local rec = assert(balancer.get(groups.of(b.unit_number)))
     assert(rec.n == 2 and rec.m == 3 and rec.fsig and rec.fsig:find("W:iron%-plate"), "network " .. rec.n .. ":" .. rec.m .. " " .. tostring(rec.fsig))
@@ -130,8 +130,8 @@ describe("filter", function()
     H.feed(o, 6, 5, D.west, 3, { stock = STOCK, item = "stone" })
     local sa = H.sink(o, 6, 3, D.east, 3)
     local sb = H.sink(o, 6, 4, D.east, 3)
-    gui.set_filter(a, { items = { "iron-plate" }, exclude = true })
-    gui.set_filter(b, { items = { "iron-plate", "copper-plate", "stone" }, lanes = true, exclude = true })
+    gui.set_filter(a, { items = { "iron-plate" }, exclude = true, use = true })
+    gui.set_filter(b, { items = { "iron-plate", "copper-plate", "stone" }, lanes = true, exclude = true, use = true })
     balancer.flush()
     local rec = assert(balancer.get(groups.of(b.unit_number)))
     assert(rec.n == 3 and rec.m == 2, "network " .. rec.n .. ":" .. rec.m)
@@ -162,7 +162,7 @@ describe("filter", function()
     H.feed(o, 6, 3, D.west, 3, { stock = 2000, item = "iron-plate" })
     local sa = H.sink(o, 6, 3, D.east, 3)
     local sb = H.sink(o, 6, 4, D.east, 3)
-    gui.set_filter(a, { items = { "copper-plate" } }) -- the iron has only the lower output
+    gui.set_filter(a, { items = { "copper-plate" }, use = true }) -- the iron has only the lower output
     balancer.flush()
     after_ticks(400, function()
       assert(chest_count(sa, "iron-plate") == 0 and chest_count(sb, "iron-plate") > 100, "the filter does not route")
@@ -187,7 +187,7 @@ describe("filter", function()
     local s = game.surfaces.nauvis
     local a = H.block(o, 2, 2, H.TIER)
     local b = H.block(o, 3, 2, H.TIER)
-    local fa = { items = { "iron-plate", "", "", "", "" }, exclude = false, lanes = false }
+    local fa = { items = { "iron-plate", "", "", "", "" }, use = true, exclude = false, lanes = false }
     gui.set_filter(a, fa)
     filter_is(b, nil, "the neighbour")
     -- paste within one group: the filter only
@@ -220,7 +220,7 @@ describe("filter", function()
 
     -- a ghost set by hand, then built
     local g = assert(s.create_entity({ name = "entity-ghost", inner_name = "mb-balancer-basic", position = { o.x + 10, o.y + 2 }, force = "player" }))
-    local fl = { items = { "", "copper-plate", "", "", "" }, exclude = false, lanes = true }
+    local fl = { items = { "", "copper-plate", "", "", "" }, use = true, exclude = false, lanes = true }
     assert(gui.set_filter(g, fl), "the ghost filter changed nothing")
     filter_is(g, fl, "the ghost")
     local _, gb = g.revive({ raise_revive = true })
@@ -250,8 +250,8 @@ describe("filter", function()
       valid = true, destroy = function() end,
       mb_inner = {
         mb_lanes = {}, mb_recirc = {}, mb_ratio = {},
-        mb_slots = { mb_slot1 = slot(1), mb_slot2 = slot(2), mb_slot3 = slot(3), mb_slot4 = slot(4), mb_slot5 = slot(5) },
-        mb_fflags = { mb_exclude = { enabled = true }, mb_flanes = {} },
+        mb_frow = { mb_fleft = { mb_fuse = {}, mb_fmode = { enabled = true } }, mb_fdeep = { mb_slots = { mb_slot1 = slot(1), mb_slot2 = slot(2), mb_slot3 = slot(3), mb_slot4 = slot(4), mb_slot5 = slot(5) } } },
+        mb_fflags = { mb_flanes = {} },
       },
     }
     local p = stand_in({ opened_gui_type = defines.gui_type.custom })
@@ -264,16 +264,30 @@ describe("filter", function()
       ---@diagnostic disable-next-line: param-type-mismatch
       assert(gui.elem_changed(p, el), "a slot changed nothing")
       ---@diagnostic disable-next-line: param-type-mismatch
-      assert(gui.checked(p, fake({ valid = true, tags = { mb_setting = "exclude" }, state = true })), "exclude changed nothing")
+      assert(gui.checked(p, fake({ valid = true, type = "switch", tags = { mb_setting = "exclude" }, switch_state = "right" })), "the blacklist switch changed nothing")
       ---@diagnostic disable-next-line: param-type-mismatch
       assert(gui.checked(p, fake({ valid = true, tags = { mb_setting = "flanes" }, state = true })), "per lane changed nothing")
-      filter_is(b, { items = { "iron-plate", "", "stone", "", "" }, exclude = true, lanes = true }, "after the GUI")
+      filter_is(b, { items = { "iron-plate", "", "stone", "", "" }, use = true, exclude = true, lanes = true }, "after the GUI")
       ---@diagnostic disable-next-line: param-type-mismatch
       gui.check(p)
       local inner = frame.mb_inner
-      assert(inner.mb_slots.mb_slot3.elem_value == "stone" and inner.mb_slots.mb_slot3.enabled == false, "slot 3 not shown locked")
-      assert(inner.mb_slots.mb_slot1.enabled == true and inner.mb_slots.mb_slot2.enabled == true, "slots 1-2 locked")
-      assert(inner.mb_fflags.mb_exclude.state == true and inner.mb_fflags.mb_exclude.enabled == false, "exclude not shown locked")
+      local sl = inner.mb_frow.mb_fdeep.mb_slots
+      assert(sl.mb_slot3.elem_value == "stone" and sl.mb_slot3.visible == false, "slot 3 not hidden per lane")
+      assert(sl.mb_slot1.visible and sl.mb_slot1.enabled == true and sl.mb_slot2.enabled == true, "slots 1-2 locked or hidden")
+      assert(inner.mb_frow.mb_fleft.mb_fuse.state == true, "Use filters not shown")
+      assert(inner.mb_frow.mb_fleft.mb_fmode.switch_state == "right" and inner.mb_frow.mb_fleft.mb_fmode.enabled == false, "the switch not shown locked")
+      assert(inner.mb_lanes.enabled == false, "balance lanes not locked per lane")
+      -- Use filters off: the filter is kept but routes nothing
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(gui.checked(p, fake({ valid = true, tags = { mb_setting = "fuse" }, state = false })), "Use filters changed nothing")
+      local fb = groups.filter(b.unit_number)
+      assert(fb and fb.use == false and fb.items[1] == "iron-plate", "turning filters off lost the filter")
+      ---@diagnostic disable-next-line: param-type-mismatch
+      gui.check(p)
+      local s1 = fake(sl.mb_slot1)
+      assert(s1.enabled == false, "slots not disabled with filters off")
+      assert(inner.mb_frow.mb_fleft.mb_fmode.enabled == false and inner.mb_fflags.mb_flanes.enabled == false, "switch or per lane not disabled with filters off")
+      assert(fake(inner.mb_lanes).enabled == true, "balance lanes locked while filters are off")
     end)
     storage.mb_gui.open[77] = nil
     assert(ok, err)

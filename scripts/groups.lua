@@ -37,6 +37,7 @@
 -- O(1) per block. scripts/balancer.lua coalesces: one refresh per group per batch of
 -- events, not one per event.
 local filters = require("scripts.filters")
+local badge = require("scripts.badge")
 
 local groups = {}
 
@@ -62,6 +63,7 @@ groups.TIERS = { "basic", "fast", "express", "turbo" }
 ---@field x integer
 ---@field y integer
 ---@field filter table? the block's item filter (scripts/filters.lua record), nil for none
+---@field badge LuaRenderObject[]? its filter icons in alt mode (scripts/badge.lua)
 
 ---@class mb.GroupsState
 ---@field next_id integer
@@ -225,6 +227,7 @@ local function remove(st, unit, ids, gone)
   g.blocks[unit] = nil
   g.count = g.count - 1
   st.blocks[unit] = nil
+  badge.clear(rec.badge)
   local at = st.at[rec.surface_index]
   local key = rec.x .. "," .. rec.y
   if at and at[key] == unit then
@@ -316,6 +319,7 @@ function groups.on_block_built(entity, settings, filter)
     end
   end
   st.blocks[unit] = { entity = entity, group = 0, surface_index = si, x = x, y = y, filter = filters.normalize(filter) }
+  st.blocks[unit].badge = badge.draw(entity, st.blocks[unit].filter)
   st.at[si][key] = unit
 
   -- Distinct same-tier, same-force neighbour groups.
@@ -493,6 +497,8 @@ function groups.set_filter(unit, f)
     return false
   end
   rec.filter = filters.normalize(f)
+  badge.clear(rec.badge)
+  rec.badge = badge.draw(rec.entity, rec.filter)
   return true
 end
 

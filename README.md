@@ -41,11 +41,14 @@ On servers, players whose permission group may not open entity GUIs or paste ent
 
 ## Filters
 
-The lower part of the settings window is the clicked block's own item filter. Unlike the settings above, a filter belongs to one block, but the whole balancer routes by it. It applies to that block's outputs: its belts, its inserters and belts into another balancer.
+The lower part of the settings window is the clicked block's own item filter, laid out as an inserter's. Unlike the settings above, a filter belongs to one block, but the whole balancer routes by it. It applies to that block's outputs: its belts, its inserters and belts into another balancer.
 
-- **Five slots** (a whitelist): the block's outputs take only these items, and these items go only to blocks that list them, as with a vanilla filter splitter. Several blocks listing the same item share it equally. The other outputs of the balancer share everything else.
-- **Exclude:** the block's outputs take everything except the listed items (and except items another block's filter claims).
-- **Per lane:** slot 1 goes on the left lane of the block's outputs and slot 2 on the right lane, nothing else. Slots 3 to 5 and Exclude keep their values but are locked while it is on.
+- **Use filters** turns the filter on. Off, it is kept but does nothing, and the slots, the switch and Per lane cannot be changed. Picking the first item on a block turns it on.
+- **Whitelist** (five slots): the block's outputs take only these items, and these items go only to blocks that list them, as with a vanilla filter splitter. Several blocks listing the same item share it equally. The other outputs of the balancer share everything else.
+- **Blacklist:** the block's outputs take everything except the listed items (and except items another block's filter claims).
+- **Per lane:** slot 1 goes on the left lane of the block's outputs and slot 2 on the right lane, nothing else. Only two slots are shown; slots 3 to 5, the Whitelist/Blacklist switch and, in that block's window, Balance lanes keep their values but are locked while it is on.
+
+In alt mode a block shows its filter items, as an inserter does (crossed out for a blacklist).
 
 Items match by name, in any quality. An item no output takes (for example when every output has a whitelist) waits at the input and blocks it, as it would in front of a filter splitter whose filtered side is full. Within the items an output takes, every output still gets an equal share, and with Redistribute on a slow output's share goes to the others that take the same items.
 

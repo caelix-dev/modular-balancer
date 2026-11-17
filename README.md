@@ -2,7 +2,7 @@
 
 A Factorio 2.1 mod that adds a modular N:M belt balancer. Place 1x1 blocks in any connected shape and attach belts: every belt feeding a block is an input, every belt it feeds is an output, and the group works as an exact N:M balancer. Items are never lost or duplicated, and the steady state does no per-tick script work.
 
-Version 0.1.4, for Factorio 2.1. Space Age is optional. MIT License.
+Version 0.1.5, for Factorio 2.1. Space Age is optional. MIT License.
 
 ## Blocks
 
@@ -35,6 +35,7 @@ How settings travel:
 - **Two balancers joined:** the joined balancer keeps the settings of the one with more blocks.
 - **One balancer split:** every part keeps its settings.
 - **A block that joins an existing balancer** takes that balancer's settings. A pasted blueprint touching an existing balancer can therefore end up with either side's settings, depending on which blocks are built first.
+- **Ghosts:** click a block ghost to set the settings before it is built, or copy and paste settings onto or from a ghost. They go to every connected ghost of the same tier and apply when the ghosts are built. A ghost next to a built balancer shows and changes that balancer's settings. An open settings window follows its ghost to the block built in its place.
 
 On servers, players whose permission group may not open entity GUIs or paste entity settings cannot change these settings either.
 

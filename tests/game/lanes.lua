@@ -742,4 +742,121 @@ describe("lanes", function()
       done()
     end)
   end)
+
+  -- Settings on block ghosts: the open, copy and paste controls take a ghost; a change is written
+  -- as tags on the whole connected ghost cluster (and goes to a balancer the cluster touches), the
+  -- group the ghosts start when built has it, and an open frame moves to the built block.
+  test("ghost_settings_apply_when_built", function()
+    local o, box = area(14, 8)
+    local s = game.surfaces.nauvis
+    local name = "mb-balancer-" .. H.TIER
+    ---@return LuaEntity
+    local function ghost(dx, dy)
+      local g = s.create_entity({ name = "entity-ghost", inner_name = name, position = { o.x + dx, o.y + dy }, force = "player" })
+      assert(g, "test setup: no ghost")
+      return g
+    end
+    local function built(g)
+      local _, e = g.revive({ raise_revive = true })
+      assert(e and e.valid, "the ghost was not built")
+      return e
+    end
+    local C = defines.controllers
+    local function player(t)
+      local p = {
+        valid = true, index = 77, name = "stand-in", force = game.forces.player, controller_type = C.character,
+        gui = { screen = {} },
+        can_reach_entity = function()
+          return true
+        end,
+        is_cursor_empty = function()
+          return true
+        end,
+      }
+      for k, v in pairs(t or {}) do
+        p[k] = v
+      end
+      return p
+    end
+    -- a ghost-only cluster of two, a ghost touching a built balancer, a lone ghost
+    local g1, g2 = ghost(6, 2), ghost(7, 2)
+    local a = H.block(o, 2, 2, H.TIER)
+    local g3 = ghost(3, 2)
+    local g4 = ghost(2, 5)
+    local b = H.block(o, 10, 5, H.TIER)
+    balancer.flush()
+    local ga, gb = groups.of(a.unit_number), groups.of(b.unit_number)
+    assert(ga and gb and ga ~= gb, "test setup: two groups expected")
+    local opened = {}
+    local real_open = gui.open
+    gui.open = function(_, e)
+      opened[#opened + 1] = e
+    end
+    local ok, err = pcall(function()
+      -- the open control takes a ghost
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(gui.open_input(player({ selected = g1 })) and opened[#opened] == g1, "a ghost did not open")
+
+      -- a ghost-only cluster: the change is on every ghost of the cluster, and on nothing else
+      local s1 = gui.settings_of(g1)
+      assert(s1.lanes == false and s1.recirc == true, "a new ghost does not show the defaults")
+      assert(gui.apply(g1, { lanes = true }), "the ghost setting changed nothing")
+      for _, g in ipairs({ g1, g2 }) do
+        local t = g.tags or {}
+        assert(t.mb_lanes == true and t.mb_recirc == true, "a ghost of the cluster was not tagged")
+      end
+      assert(g3.tags == nil and g4.tags == nil, "a ghost outside the cluster was tagged")
+      same(groups.settings(ga), false, true, "a balancer the cluster does not touch")
+
+      -- a ghost touching a built balancer shows and changes that balancer
+      same(gui.settings_of(g3), false, true, "the touching ghost")
+      assert(gui.apply(g3, { recirc = false }), "the touching ghost changed nothing")
+      same(groups.settings(ga), false, false, "the balancer the ghost touches")
+      assert((g3.tags or {}).mb_recirc == false, "the touching ghost was not tagged")
+
+      -- copy from a block, paste onto a ghost; copy from a ghost, paste onto a block
+      ---@diagnostic disable-next-line: param-type-mismatch
+      gui.copy_input(player({ selected = a }))
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(gui.paste_input(player({ selected = g4 })), "paste onto a ghost did nothing")
+      same(gui.settings_of(g4), false, false, "the ghost pasted onto")
+      ---@diagnostic disable-next-line: param-type-mismatch
+      gui.copy_input(player({ selected = g1 }))
+      ---@diagnostic disable-next-line: param-type-mismatch
+      assert(gui.paste_input(player({ selected = b })), "paste from a ghost did nothing")
+      same(groups.settings(gb), true, true, "the block pasted onto from a ghost")
+    end)
+    gui.open = real_open
+    storage.mb_gui.open[77], storage.mb_gui.copy[77], storage.mb_gui.where[77] = nil, nil, nil
+    assert(ok, err)
+
+    -- built: the cluster's group has the ghosts' settings whichever is built first
+    local e2 = built(g2)
+    balancer.flush()
+    same(groups.settings(groups.of(e2.unit_number)), true, true, "the group the ghosts started")
+    local e1 = built(g1)
+    balancer.flush()
+    assert(groups.of(e1.unit_number) == groups.of(e2.unit_number), "the ghosts did not form one group")
+    same(groups.settings(groups.of(e1.unit_number)), true, true, "the group after the second block")
+
+    -- an open frame on a ghost moves to the block built from it
+    local frame = { valid = true, mb_inner = { mb_lanes = {}, mb_recirc = {}, mb_ratio = {} }, destroy = function() end }
+    local stand_in = player({ opened_gui_type = defines.gui_type.custom })
+    stand_in.gui.screen.mb_settings = frame
+    local where = { si = g4.surface_index, x = math.floor(g4.position.x --[[@as number]]), y = math.floor(g4.position.y --[[@as number]]), name = name }
+    local e4 = built(g4)
+    balancer.flush()
+    -- (set after the flush: gui.after_flush drops entries of players the game does not know)
+    storage.mb_gui.open[77] = g4
+    storage.mb_gui.where[77] = where
+    ---@diagnostic disable-next-line: param-type-mismatch
+    gui.check(stand_in)
+    local moved = storage.mb_gui.open[77]
+    storage.mb_gui.open[77], storage.mb_gui.where[77] = nil, nil
+    assert(moved == e4, "the frame did not move to the built block")
+    same(groups.settings(groups.of(e4.unit_number)), false, false, "the lone ghost's group")
+    assert(frame.mb_inner.mb_recirc.state == false, "the moved frame does not show the block's settings")
+    balancer.flush()
+    assert(H.count_box(box, ITEM) == 0, "items appeared")
+  end)
 end)

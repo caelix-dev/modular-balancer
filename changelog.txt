@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.1.5
+Date: 2026-11-18
+  Features:
+    - Balancer settings (balance lanes, redistribute unused shares) can be set on block ghosts: click a ghost to open the settings, or copy and paste settings onto or from a ghost. The settings go to every connected ghost of the same tier and apply when they are built; a ghost next to a built balancer shows and changes that balancer's settings. An open settings window follows its ghost to the block built in its place.
+  Locale:
+    - The message for inserters on a block that already uses its tile now also names circuit-wired belts.
+---------------------------------------------------------------------------------------------------
 Version: 0.1.4
 Date: 2026-11-10
   Changes:

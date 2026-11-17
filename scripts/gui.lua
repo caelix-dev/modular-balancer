@@ -28,10 +28,20 @@
 --                tags that starts a new group gives it those settings (scripts/events.lua). A
 --                block that joins an existing group takes that group's settings.
 --   clones       a cloned block that starts a new group takes its source group's settings.
+--   ghosts       the frame, copy and paste work on block ghosts too. A ghost has no group yet, so
+--                its settings are tags on the ghost (the blueprint tags above), written on every
+--                ghost of the same block connected to it edge to edge (gui.ghost_cluster), so the
+--                group they start when built has them whichever is built first. Built blocks
+--                those ghosts touch are the balancer they will join: the frame shows that
+--                balancer's settings, and a change goes to it as well as to the ghosts. When the
+--                ghost is built, its frame moves to the new block.
 --
 -- storage.mb_gui = {
---   open = { [player index] = LuaEntity },                     the block whose GUI is open
---   copy = { [player index] = LuaEntity },                     the block copied by the
+--   open = { [player index] = LuaEntity },                     the block or block ghost whose
+--                                                              GUI is open
+--   where = { [player index] = { si, x, y, name } },           the tile of an open ghost, to
+--                                                              find the block built from it
+--   copy = { [player index] = LuaEntity },                     the block or ghost copied by the
 --                                                              copy-entity-settings control;
 --                                                              its current settings are pasted
 -- }
@@ -58,7 +68,8 @@ end
 
 local function state()
   storage.mb_gui = storage.mb_gui or { open = {}, copy = {} }
-  return storage.mb_gui --[[@as { open: table<integer, LuaEntity>, copy: table<integer, LuaEntity> }]]
+  storage.mb_gui.where = storage.mb_gui.where or {}
+  return storage.mb_gui --[[@as { open: table<integer, LuaEntity>, where: table<integer, table>, copy: table<integer, LuaEntity> }]]
 end
 
 ---@param e LuaEntity?
@@ -74,33 +85,123 @@ local function group_of(e)
   return is_block(e) and groups.of((e --[[@as LuaEntity]]).unit_number) or nil
 end
 
+-- True for a ghost of a balancer block.
+---@param e LuaEntity?
+---@return boolean
+local function is_ghost(e)
+  return e ~= nil and e.valid and e.type == "entity-ghost" and groups.tier_of(e.ghost_name) ~= nil
+end
+
+-- A block or a block ghost: what the frame, copy and paste work on.
+---@param e LuaEntity?
+---@return boolean
+local function is_target(e)
+  return is_block(e) or is_ghost(e)
+end
+
+local SIDES = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
+
+-- The ghosts of the same block (name, force, surface) connected to ghost `g` edge to edge, `g`
+-- first, and the ids of the groups of the built blocks of that tier and force they touch (the
+-- balancer they join when built), in id order. Runs only on a GUI action, or on a flush while a
+-- ghost's frame is open.
+---@param g LuaEntity
+---@return LuaEntity[], integer[]
+function gui.ghost_cluster(g)
+  local surface, name, force = g.surface, g.ghost_name, g.force --[[@as LuaForce]]
+  local si, tier = surface.index, groups.tier_of(name)
+  ---@type table<any, boolean>
+  local seen = {}
+  seen[g.unit_number] = true
+  local list, todo, touched = {}, { g }, {}
+  local i = 1
+  while todo[i] do
+    local e = todo[i]
+    i = i + 1
+    list[#list + 1] = e
+    local x, y = math.floor(e.position.x --[[@as number]]), math.floor(e.position.y --[[@as number]])
+    for _, d in ipairs(SIDES) do
+      local nx, ny = x + d[1], y + d[2]
+      local unit = groups.block_at(si, nx, ny)
+      local grp = unit and groups.get(groups.of(unit))
+      if grp then
+        if grp.tier == tier and grp.force_index == force.index then
+          touched[grp.id] = true
+        end
+      else
+        for _, n in ipairs(surface.find_entities_filtered({ ghost_name = name, force = force, position = { nx + 0.5, ny + 0.5 } })) do
+          if not seen[n.unit_number] then
+            seen[n.unit_number] = true
+            todo[#todo + 1] = n
+          end
+        end
+      end
+    end
+  end
+  local ids = {}
+  for id in pairs(touched) do
+    ids[#ids + 1] = id
+  end
+  table.sort(ids)
+  return list, ids
+end
+
+-- Of the groups `ids` (in id order), the one a merge keeps: the most blocks, the lower id on a
+-- tie (scripts/groups.lua).
+---@param ids integer[]
+---@return integer?
+local function merge_winner(ids)
+  local best, most = nil, -1
+  for _, id in ipairs(ids) do
+    local g = groups.get(id)
+    if g and g.count > most then
+      best, most = id, g.count
+    end
+  end
+  return best
+end
+
+-- The group whose settings and ratio block or ghost `e` shows: a block's own; for a ghost, the
+-- balancer its cluster will join, or nil.
+---@param e LuaEntity
+---@return integer?
+local function shown_group(e)
+  if is_ghost(e) then
+    local _, ids = gui.ghost_cluster(e)
+    return merge_winner(ids)
+  end
+  return group_of(e)
+end
+
+-- Shows the settings and ratio of block or ghost `target` in `frame`.
 ---@param frame LuaGuiElement
----@param id integer?
-local function fill(frame, id)
-  local s = groups.settings(id)
+---@param target LuaEntity
+local function fill(frame, target)
   local inner = frame.mb_inner
   if not inner then
     return
   end
+  local s = gui.settings_of(target)
   inner.mb_lanes.state = s.lanes
   inner.mb_recirc.state = s.recirc
-  local rec = balancer.get(id)
+  local id = shown_group(target)
+  local rec = id and balancer.get(id)
   if rec and rec.placed then
     inner.mb_ratio.caption = { "mb-gui.ratio", rec.n, rec.m }
+  elseif is_ghost(target) then
+    inner.mb_ratio.caption = { "mb-gui.ghost" }
   else
     inner.mb_ratio.caption = { "mb-gui.idle" }
   end
 end
 
--- Shows the current settings of group `id` in every open GUI on one of its blocks.
----@param id integer
-local function refresh_open(id)
-  local st = state()
-  for pi, block in pairs(st.open) do
+-- Shows the current settings in every open GUI.
+function gui.refresh_all()
+  for pi, target in pairs(state().open) do
     local player = gui.lookup_player(pi)
     local frame = player and player.valid and player.gui.screen[FRAME] --[[@as LuaGuiElement?]]
-    if frame and group_of(block) == id then
-      fill(frame, id)
+    if frame and is_target(target) then
+      fill(frame, target)
     end
   end
 end
@@ -117,22 +218,81 @@ function gui.set(id, s, player_index)
     return false
   end
   balancer.mark({ id }, nil, player_index)
-  refresh_open(id)
+  gui.refresh_all()
   return true
 end
 
--- Copies the settings of `source`'s group to `destination`'s group (both blocks). Returns true
+-- The settings of block or ghost `e`: its group's for a block; for a ghost, those of the
+-- balancer it will join, or else its own tags, or else the defaults.
+---@param e LuaEntity
+---@return { lanes: boolean, recirc: boolean }
+function gui.settings_of(e)
+  if is_ghost(e) then
+    local id = shown_group(e)
+    if id then
+      return groups.settings(id)
+    end
+    local s = gui.settings_from_tags(e.tags) or {}
+    return { lanes = s.lanes == true, recirc = s.recirc ~= false }
+  end
+  return groups.settings(group_of(e))
+end
+
+-- Gives block or ghost `e` settings `s` (fields left nil are kept): a block's group; for a
+-- ghost, the tags of its whole cluster and the groups the cluster touches. Returns true when a
+-- setting changed.
+---@param e LuaEntity
+---@param s { lanes: boolean?, recirc: boolean? }
+---@param player_index integer?
+---@return boolean
+function gui.apply(e, s, player_index)
+  if not is_ghost(e) then
+    return gui.set(group_of(e), s, player_index)
+  end
+  local old = gui.settings_of(e)
+  local full = { lanes = old.lanes, recirc = old.recirc }
+  if s.lanes ~= nil then
+    full.lanes = s.lanes
+  end
+  if s.recirc ~= nil then
+    full.recirc = s.recirc
+  end
+  local list, ids = gui.ghost_cluster(e)
+  local changed = false
+  for _, g in ipairs(list) do
+    local t = g.tags or {}
+    if t[TAG_LANES] ~= full.lanes or t[TAG_RECIRC] ~= full.recirc then
+      t[TAG_LANES], t[TAG_RECIRC] = full.lanes, full.recirc
+      g.tags = t
+      changed = true
+    end
+  end
+  for _, id in ipairs(ids) do
+    if gui.set(id, full, player_index) then
+      changed = true
+    end
+  end
+  if changed then
+    gui.refresh_all()
+  end
+  return changed
+end
+
+-- Copies the settings of `source` to `destination` (each a block or a block ghost). Returns true
 -- when a setting changed.
 ---@param source LuaEntity
 ---@param destination LuaEntity
 ---@param player_index integer?
 ---@return boolean
 function gui.paste(source, destination, player_index)
-  local from, to = group_of(source), group_of(destination)
-  if not (from and to) or from == to then
+  if not (is_target(source) and is_target(destination)) or source == destination then
     return false
   end
-  return gui.set(to, groups.settings(from), player_index)
+  local from, to = group_of(source), group_of(destination)
+  if from and from == to then
+    return false
+  end
+  return gui.apply(destination, gui.settings_of(source), player_index)
 end
 
 -- The settings in the tags of a block built from a blueprint, or nil when it has none.
@@ -185,14 +345,14 @@ local function allowed(player, action)
   return pg == nil or pg.allows_action(action)
 end
 
--- The one rule for opening a block's settings and for pasting settings onto it: a block of
--- the player's force that the player can reach, or any such block in remote view (2.x opens
--- entity GUIs and pastes settings from the map).
+-- The one rule for opening a block's settings and for pasting settings onto it: a block or block
+-- ghost of the player's force that the player can reach, or any such one in remote view (2.x
+-- opens entity GUIs and pastes settings from the map).
 ---@param player LuaPlayer
 ---@param e LuaEntity?
 ---@return boolean
 function gui.can_use(player, e)
-  if not is_block(e) then
+  if not is_target(e) then
     return false
   end
   ---@cast e LuaEntity
@@ -203,20 +363,21 @@ end
 -- Closes the settings GUI of `player` (if open).
 ---@param player LuaPlayer
 function gui.close(player)
-  state().open[player.index] = nil
+  local st = state()
+  st.open[player.index] = nil
+  st.where[player.index] = nil
   local frame = player.gui.screen[FRAME] --[[@as LuaGuiElement?]]
   if frame then
     frame.destroy()
   end
 end
 
--- Opens the settings GUI of block `block` for `player`: a frame with the standard draggable
--- title bar and close button, the ratio and the two checkboxes.
+-- Opens the settings GUI of block or block ghost `block` for `player`: a frame with the standard
+-- draggable title bar and close button, the ratio and the two checkboxes.
 ---@param player LuaPlayer
 ---@param block LuaEntity
 function gui.open(player, block)
-  local id = group_of(block)
-  if not id then
+  if not (group_of(block) or is_ghost(block)) then
     return
   end
   gui.close(player)
@@ -236,9 +397,14 @@ function gui.open(player, block)
     tooltip = { "mb-gui.balance-lanes-tooltip" }, tags = { mb_setting = "lanes" } })
   inner.add({ type = "checkbox", name = "mb_recirc", state = true, caption = { "mb-gui.recirc" },
     tooltip = { "mb-gui.recirc-tooltip" }, tags = { mb_setting = "recirc" } })
-  fill(frame, id)
+  fill(frame, block)
   frame.auto_center = true
-  state().open[player.index] = block
+  local st = state()
+  st.open[player.index] = block
+  if is_ghost(block) then
+    st.where[player.index] = { si = block.surface_index, x = math.floor(block.position.x --[[@as number]]),
+      y = math.floor(block.position.y --[[@as number]]), name = block.ghost_name }
+  end
   player.opened = frame
 end
 
@@ -246,18 +412,29 @@ end
 -- (gui.can_use) or no longer allowed, refreshed otherwise.
 ---@param player LuaPlayer
 function gui.check(player)
-  local block = state().open[player.index]
+  local st = state()
+  local block = st.open[player.index]
   if block == nil then
     return
   end
-  local id = group_of(block)
-  if not (id and gui.can_use(player, block) and allowed(player, defines.input_action.open_gui)) then
+  local w = st.where[player.index]
+  if w and not is_ghost(block) then
+    -- the ghost was built (or removed): the frame moves to the block built in its place
+    local unit = groups.block_at(w.si, w.x, w.y)
+    local built = unit and groups.entity(unit)
+    if built and built.valid and built.name == w.name then
+      block = built
+      st.open[player.index] = built
+    end
+    st.where[player.index] = nil
+  end
+  if not ((group_of(block) or is_ghost(block)) and gui.can_use(player, block) and allowed(player, defines.input_action.open_gui)) then
     gui.close(player)
     return
   end
   local frame = player.gui.screen[FRAME] --[[@as LuaGuiElement?]]
   if frame then
-    fill(frame, id)
+    fill(frame, block)
     if player.opened_gui_type == defines.gui_type.none then
       -- the game let go of it without on_gui_closed (measured, F11: leaving remote view by
       -- script); opened again so E and Esc still close it
@@ -282,29 +459,29 @@ function gui.open_input(player)
   return true
 end
 
--- The copy-entity-settings control: remembers the block under the cursor (anything else clears
--- it). Its settings are read when they are pasted, as vanilla pastes the source's current
+-- The copy-entity-settings control: remembers the block or block ghost under the cursor
+-- (anything else clears it). Its settings are read when they are pasted, as vanilla pastes the source's current
 -- settings.
 ---@param player LuaPlayer
 function gui.copy_input(player)
   local e = player.selected
   local st = state()
-  if group_of(e) and allowed(player, defines.input_action.copy_entity_settings) then
+  if is_target(e) and allowed(player, defines.input_action.copy_entity_settings) then
     st.copy[player.index] = e
   else
     st.copy[player.index] = nil
   end
 end
 
--- The paste-entity-settings control: gives the block under the cursor the current settings of
--- the copied block; nothing when that block is gone (as vanilla). Returns true when a setting
+-- The paste-entity-settings control: gives the block or block ghost under the cursor the
+-- current settings of the copied one; nothing when that one is gone (as vanilla). Returns true when a setting
 -- changed.
 ---@param player LuaPlayer
 ---@return boolean
 function gui.paste_input(player)
   local src = state().copy[player.index]
   local dst = player.selected
-  if not (src and group_of(src) and gui.can_use(player, dst) and allowed(player, defines.input_action.paste_entity_settings)) then
+  if not (src and is_target(src) and gui.can_use(player, dst) and allowed(player, defines.input_action.paste_entity_settings)) then
     return false
   end
   ---@cast dst LuaEntity
@@ -321,16 +498,16 @@ function gui.checked(player, el)
     return false
   end
   local block = state().open[player.index]
-  local id = group_of(block)
-  if not id or not gui.can_use(player, block) or not allowed(player, defines.input_action.open_gui) then
+  if not ((group_of(block) or is_ghost(block)) and gui.can_use(player, block) and allowed(player, defines.input_action.open_gui)) then
     gui.close(player) -- the block is gone or out of reach
     return false
   end
-  local changed = gui.set(id, { [key] = el.state }, player.index)
+  ---@cast block LuaEntity
+  local changed = gui.apply(block, { [key] = el.state }, player.index)
   if not changed then
     local frame = player.gui.screen[FRAME] --[[@as LuaGuiElement?]]
     if frame then
-      fill(frame, id)
+      fill(frame, block)
     end
   end
   return changed
@@ -342,6 +519,7 @@ end
 function gui.forget(index)
   local st = state()
   st.open[index] = nil
+  st.where[index] = nil
   st.copy[index] = nil
 end
 

@@ -78,6 +78,7 @@ local network = require("scripts.network")
 local builder = require("scripts.builder")
 local belt_io = require("scripts.io")
 local look = require("scripts.look")
+local filters = require("scripts.filters")
 
 local balancer = {}
 
@@ -98,6 +99,7 @@ function balancer.after_flush(_) end
 ---@field m integer network outputs of `placed`
 ---@field lanes boolean? `placed` has lane splitters (nil: no, a network from a pre-0.1.0 save)
 ---@field recirc boolean? `placed` recirculates (nil: yes, a network from a pre-0.1.0 save)
+---@field fsig string? the item filters of `placed`'s outputs (filters.signature; nil or "": none)
 ---@field inputs mb.IoPort[] linked to placed.inputs[i]
 ---@field outputs mb.IoPort[] linked to placed.outputs[j]
 ---@field units (integer|uint64)[] blocks at the last refresh
@@ -533,8 +535,23 @@ local UNSWAP_COST = 150
 local SPILL_COST = 25
 
 -- The shape a rebuild targets.
-local function job_key(n, m, want)
-  return n .. ":" .. m .. ":" .. tostring(want.lanes) .. ":" .. tostring(want.recirc)
+local function job_key(n, m, want, fsig)
+  return n .. ":" .. m .. ":" .. tostring(want.lanes) .. ":" .. tostring(want.recirc) .. ":" .. fsig
+end
+
+local function item_exists(name)
+  return prototypes.item[name] ~= nil
+end
+
+-- The item filter of every output port (its block's, scripts/filters.lua), false where none.
+---@param outputs mb.IoPort[]
+---@return (mb.FilterSpec|false)[]
+local function output_filters(outputs)
+  local specs = {}
+  for j, p in ipairs(outputs) do
+    specs[j] = filters.effective(groups.filter(p.block), item_exists) or false
+  end
+  return specs
 end
 
 -- The new network of group `gid` is complete: it becomes the working network, and the old one
@@ -556,6 +573,7 @@ local function finish_job(st, gid, job)
   end
   rec.placed, rec.extra = job.b.placed, {}
   rec.n, rec.m, rec.lanes, rec.recirc = job.n, job.m, job.lanes, job.recirc
+  rec.fsig = job.fsig ~= "" and job.fsig or nil
   rec.failed, rec.failed_err = nil, nil
   if #rec.draining > 0 then
     st.drains[gid] = true
@@ -586,7 +604,8 @@ local function run_job(st, gid, job, ctx)
     if math.max(job.n, job.m) > SMALL then
       st.last_generated = game.tick
     end
-    local net = assert(network.build(job.n, job.m, { balance_lanes = job.lanes, recirc = job.recirc }))
+    local net = assert(network.build(job.n, job.m, { balance_lanes = job.lanes, recirc = job.recirc,
+      filters = job.filters }))
     job.net = net -- plain tables, kept until the next step plans it
     ctx.units = ctx.units - builder.COST.generate
       * (#net.splitters + #(net.priority or {}) + #(net.lane_splitters or {}) + 2 * #net.edges)
@@ -693,7 +712,9 @@ local function refresh_group(st, gid, ctx, player_index)
   end
   local n, m = #inputs, #outputs
   local want = groups.settings(gid)
-  local key = job_key(n, m, want)
+  local specs = output_filters(outputs)
+  local fsig = filters.signature(specs, m)
+  local key = job_key(n, m, want, fsig)
   if rec.failed and (rec.failed ~= key or ctx.retry[gid]) then
     rec.failed, rec.failed_err = nil, nil
   end
@@ -708,7 +729,8 @@ local function refresh_group(st, gid, ctx, player_index)
     -- the same time, so the handler is registered exactly while st.stuck is non-empty, as on_load sets it)
   end
   if n > 0 and m > 0 then
-    local stale = rec.placed and ((rec.lanes == true) ~= want.lanes or (rec.recirc ~= false) ~= want.recirc)
+    local stale = rec.placed and ((rec.lanes == true) ~= want.lanes or (rec.recirc ~= false) ~= want.recirc
+      or (rec.fsig or "") ~= fsig)
     if rec.placed and rec.n == n and rec.m == m and not stale then
       -- the network fits: networks merged in drain into it as it is
       if #rec.extra > 0 then
@@ -728,7 +750,7 @@ local function refresh_group(st, gid, ctx, player_index)
         if not job then
           st.job_seq = (st.job_seq or 0) + 1
           job = { key = key, n = n, m = m, lanes = want.lanes, recirc = want.recirc, tier = g.tier, force = g.force,
-            player_index = player_index, seq = st.job_seq }
+            player_index = player_index, seq = st.job_seq, filters = filters.any(specs) and specs or nil, fsig = fsig }
           st.jobs[gid] = job
         end
         status, err = run_job(st, gid, job, ctx)

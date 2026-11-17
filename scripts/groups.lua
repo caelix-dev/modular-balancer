@@ -29,10 +29,15 @@
 -- lower id on a tie), the parts of a split all keep the old group's setting, and a new group takes
 -- the settings it is given (a block built from a blueprint, scripts/events.lua) or the defaults.
 --
+-- Filters: each block can carry its own item filter (scripts/filters.lua), kept on its block
+-- record, so it goes with the block through merges, splits and moves and is dropped with it.
+--
 -- Cost: a removal only floods the group when the removed block had two or more neighbours in
 -- it, and stops as soon as all of them are reached, so taking a group apart from its ends is
 -- O(1) per block. scripts/balancer.lua coalesces: one refresh per group per batch of
 -- events, not one per event.
+local filters = require("scripts.filters")
+
 local groups = {}
 
 local PREFIX = "mb-balancer-"
@@ -56,6 +61,7 @@ groups.TIERS = { "basic", "fast", "express", "turbo" }
 ---@field surface_index integer
 ---@field x integer
 ---@field y integer
+---@field filter table? the block's item filter (scripts/filters.lua record), nil for none
 
 ---@class mb.GroupsState
 ---@field next_id integer
@@ -281,8 +287,9 @@ end
 ---@param entity LuaEntity a block
 ---@param settings { lanes: boolean?, recirc: boolean? }? for a new group only (a block that joins
 ---   a group takes that group's settings)
+---@param filter table? the block's own item filter (a blueprint tag, a clone's source)
 ---@return integer[] ids, integer[] gone
-function groups.on_block_built(entity, settings)
+function groups.on_block_built(entity, settings, filter)
   local st = state()
   local ids, gone = {}, {}
   local unit = entity.valid and entity.unit_number
@@ -308,7 +315,7 @@ function groups.on_block_built(entity, settings)
       return settle(st, ids, gone)
     end
   end
-  st.blocks[unit] = { entity = entity, group = 0, surface_index = si, x = x, y = y }
+  st.blocks[unit] = { entity = entity, group = 0, surface_index = si, x = x, y = y, filter = filters.normalize(filter) }
   st.at[si][key] = unit
 
   -- Distinct same-tier, same-force neighbour groups.
@@ -372,10 +379,11 @@ function groups.on_block_moved(entity)
   local st, ids, gone = state(), {}, {}
   local unit = entity.unit_number
   local settings = groups.settings(groups.of(unit))
+  local filter = groups.filter(unit)
   if unit then
     remove(st, unit, ids, gone)
   end
-  local i2, g2 = groups.on_block_built(entity, settings)
+  local i2, g2 = groups.on_block_built(entity, settings, filter)
   for _, id in ipairs(i2) do
     ids[#ids + 1] = id
   end
@@ -464,6 +472,28 @@ function groups.set_settings(id, s)
   end
   local new = groups.settings(id)
   return old.lanes ~= new.lanes or old.recirc ~= new.recirc
+end
+
+-- The item filter of block `unit` (a scripts/filters.lua record), or nil.
+---@param unit integer|uint64|nil
+---@return table?
+function groups.filter(unit)
+  local rec = unit and state().blocks[unit]
+  return rec and rec.filter or nil
+end
+
+-- Sets the item filter of block `unit` (nil or the default clears it). Returns true when it
+-- changed.
+---@param unit integer|uint64|nil
+---@param f table?
+---@return boolean
+function groups.set_filter(unit, f)
+  local rec = unit and state().blocks[unit]
+  if not rec or filters.same(rec.filter, f) then
+    return false
+  end
+  rec.filter = filters.normalize(f)
+  return true
 end
 
 -- The group id of a block, or nil.

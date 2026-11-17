@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.0
+Date: 2026-11-18
+  Features:
+    - Item filters per block, in the lower part of the settings window: five slots (the block's outputs take only these items, and these items go only to blocks that list them), Exclude (everything but these items), and Per lane (slot 1 on the left lane, slot 2 on the right lane). The whole balancer routes by them with filter splitters in its hidden network, no script.
+    - Filters travel with copy and paste settings, blueprints, ghosts, clones and block upgrades.
+---------------------------------------------------------------------------------------------------
 Version: 0.1.5
 Date: 2026-11-18
   Features:

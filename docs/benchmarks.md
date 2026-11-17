@@ -1,6 +1,8 @@
 # UPS gate: modular-balancer against Better Belt Balancer and Belt Balancer 3
 
-Plan 3 Task 1 (2026-10-25). Factorio 2.1.23, vanilla preset, express tier everywhere.
+Measured 2026-10-25 (Plan 3 Task 1, before 0.1.0) in Factorio 2.1.23, vanilla preset, express
+tier everywhere. The network generator (`scripts/network.lua`) has not changed since round 2, so
+the round 2 numbers still apply to 0.1.4. The README's "Performance" section summarises them.
 
 ## Outcome: per-balancer recirculation toggle (Plan 3 Task 3)
 

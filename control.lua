@@ -6,14 +6,14 @@ local balancer = require("scripts.balancer")
 local lifecycle = require("scripts.lifecycle")
 
 -- A mod that changes a belt speed after modular-balancer's data-final-fixes leaves the hidden
--- network of that tier at the old speed; log it (final review M3, Task 2 review M6).
+-- network of that tier at the old speed; log it.
 local function check_speeds()
   for _, msg in ipairs(builder.speed_mismatches()) do
     log("modular-balancer: hidden network speed differs from its belt: " .. msg)
   end
 end
--- on_init and on_configuration_changed can each be registered only once: later tasks add their
--- work to these handlers (call it from here), they do not register their own.
+-- on_init and on_configuration_changed can each be registered only once: other modules add their
+-- work to these handlers (call it from here) instead of registering their own.
 script.on_init(function()
   groups.init()
   check_speeds()
@@ -28,7 +28,7 @@ script.on_configuration_changed(function()
   balancer.harden()
   check_speeds()
 end)
--- Only re-sets the conditional flush handler (MODDING-RULES §2).
+-- Only re-sets the conditional handlers (flush and stuck-drain retry; MODDING-RULES §2).
 script.on_load(function()
   balancer.on_load()
 end)

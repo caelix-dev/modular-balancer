@@ -9,8 +9,8 @@
 -- nor the is_object layer, so characters and vehicles move over it.
 --
 -- Recipe: the tier's splitter plus 5 of the tier's belts, unlocked by the technology that
--- unlocks the tier's splitter. Graphics and icon: original sprites, coloured per tier like the
--- vanilla belts (see below); the port hoods over the edges are drawn by the edges themselves
+-- unlocks the tier's splitter. Graphics and icon: Blender renders (tools/render/), painted per tier
+-- like the vanilla belts (see below); the port hoods over the edges are drawn by the edges themselves
 -- (prototypes/hidden.lua).
 -- `next_upgrade` chains the tiers for the upgrade planner.
 -- Required from data.lua.

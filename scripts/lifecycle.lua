@@ -29,7 +29,7 @@
 --                            upgrade) is let through: on_pre_build swaps the edge back to its belt
 --                            first, the game fast-replaces that belt like vanilla, items kept, and
 --                            the next flush swaps the tile again if it is a port.
--- Belts with circuit wires or control behaviour are never swapped (Ruling 7), so blueprints, undo
+-- Belts with circuit wires or control behaviour are never swapped, so blueprints, undo
 -- and upgrades see them as the player built them.
 --
 -- Configuration changes (control.lua on_configuration_changed):
@@ -424,13 +424,11 @@ end
 
 -- The work of on_pre_build for `player` (a LuaPlayer, or in tests a table with the fields read
 -- here: valid, cursor_stack, surface, force, controller_type, character).
--- Every build from an item in the cursor counts (F11, measured with a real player):
---   normal       fast-replaces the edge (items lost without the swap-back);
---   remote view  LuaPlayer::build_from_cursor built a real belt over an edge, even with the
---                character 50 tiles away, and the edge lost its 2 plates;
---   forced, super-forced (Shift / Ctrl+Shift): over an edge they place a belt ghost and mark the
---                edge for deconstruction; over the swapped-back belt they do what vanilla does
---                to a belt (another direction rotates it, another tier orders an upgrade).
+-- Every build from an item in the cursor counts, in any controller including remote view
+-- (docs/feasibility.md F11, measured with a real player). Only an edge facing the build's
+-- direction whose belt has the item's fast-replace group is swapped back (clear_edges_for_build);
+-- the game then does to that plain belt what vanilla does (another tier: fast-replace, or with
+-- Shift an upgrade order). Any other build meets the edge as an obstacle.
 -- A blueprint or a ghost cursor is left alone. A needless swap-back is harmless: the next flush
 -- swaps the tile again. Returns the number of edges swapped back.
 ---@param player LuaPlayer

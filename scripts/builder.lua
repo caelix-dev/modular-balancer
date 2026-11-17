@@ -1,7 +1,7 @@
 -- Places a generated network (scripts/network.lua) on the hidden surface over several calls
 -- (start/advance/abort), moves the items of an old network into a new one (seal/drain/settle),
--- takes them out (take) and removes a network (destroy). Every step is bounded by a work-unit
--- budget (builder.COST), so scripts/balancer.lua can spread a rebuild over ticks. Test code
+-- takes them out (take) and removes a network (destroy). Placing, draining and taking are bounded
+-- by a work-unit budget (builder.COST), so scripts/balancer.lua can spread a rebuild over ticks. Test code
 -- places or rebuilds at once with tests/game/harness.lua H.place and H.rebuild_net.
 --
 -- Every node gets a cell on a grid inside the network's region. A cell is CELL_W x CELL_H tiles,
@@ -61,7 +61,7 @@ builder.max_buffer_slots = 65535
 -- item count: a full 96:96 holds about 65 000 single items. A field so a test can lower it.
 builder.max_take_slots = 65535
 
--- Test hook (tests/game/placement.lua): when set to k, a placement (builder.advance) fails while
+-- Test hook (tests/game/placement.lua, play.lua, lanes.lua): when set to k, a placement (builder.advance) fails while
 -- creating entity k.
 ---@type integer?
 builder.fail_after = nil
@@ -733,8 +733,8 @@ function builder.take(placed, budget)
 end
 
 -- Shrinks `placed`'s buffer chest back to its prototype size once it is empty (after a big
--- shrink it can have up to builder.max_buffer_slots slots). No per-tick work: call it from an
--- event that touches the group (Plan 2 Task 4). Returns true if it shrank the chest.
+-- shrink it can have up to builder.max_buffer_slots slots). No per-tick work: scripts/balancer.lua
+-- calls it when it refreshes the group. Returns true if it shrank the chest.
 ---@param placed table
 ---@return boolean
 function builder.compact(placed)

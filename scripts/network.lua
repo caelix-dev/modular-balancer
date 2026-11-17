@@ -37,7 +37,7 @@
 --
 -- N:1 (both modes; with one output there is nothing to redistribute) is a merge tree with a
 -- priority splitter at its root, see merging() below. So even with recirc = false an N:1
--- network for N not a power of two has one priority node, unlike Plan 1's plain N:1.
+-- network for N not a power of two has one priority node.
 --
 -- Two butterflies in a row are built as a Benes network (2k - 1 stages, see stages()): the
 -- second runs in reverse, so its first stage would repeat the last stage of the first.
@@ -514,7 +514,7 @@ end
 -- G spreads its inputs equally over all outputs whatever their mix, so an output that takes
 -- less than its share sends the rest round again and the others share it equally (water
 -- filling). The overflow wires are G inputs that may be starved, so G alone draws its live
--- inputs unequally under backpressure (the F8 prototype, 3:5 with 2 outputs open:
+-- inputs unequally under backpressure (measured in the engine: 3:5 with 2 outputs open drew
 -- 45 / 22.5 / 22.5). F is an exact balancer in both directions whatever its outputs ask
 -- for, so it draws the network inputs equally.
 ---@return mb.Network

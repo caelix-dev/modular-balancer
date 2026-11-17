@@ -1,4 +1,4 @@
--- The per-balancer settings (Plan 3 Task 3) and their small GUI.
+-- The per-balancer settings and their small GUI.
 --
 -- Two settings per group of blocks, stored on the group (scripts/groups.lua, which also handles
 -- merges: the larger group's settings win, and splits: every part keeps them):
@@ -176,7 +176,7 @@ function gui.tag_blueprint(bp, map)
 end
 
 -- Whether `player`'s permission group allows `action` (defines.input_action); no group allows
--- everything (M5).
+-- everything.
 ---@param player LuaPlayer
 ---@param action defines.input_action
 ---@return boolean
@@ -185,7 +185,7 @@ local function allowed(player, action)
   return pg == nil or pg.allows_action(action)
 end
 
--- The one rule for opening a block's settings and for pasting settings onto it (M2): a block of
+-- The one rule for opening a block's settings and for pasting settings onto it: a block of
 -- the player's force that the player can reach, or any such block in remote view (2.x opens
 -- entity GUIs and pastes settings from the map).
 ---@param player LuaPlayer
@@ -211,7 +211,7 @@ function gui.close(player)
 end
 
 -- Opens the settings GUI of block `block` for `player`: a frame with the standard draggable
--- title bar and close button (M1), the ratio and the two checkboxes.
+-- title bar and close button, the ratio and the two checkboxes.
 ---@param player LuaPlayer
 ---@param block LuaEntity
 function gui.open(player, block)
@@ -242,7 +242,7 @@ function gui.open(player, block)
   player.opened = frame
 end
 
--- Re-checks the open settings GUI of `player` (M3): closed when its block is gone, out of reach
+-- Re-checks the open settings GUI of `player`: closed when its block is gone, out of reach
 -- (gui.can_use) or no longer allowed, refreshed otherwise.
 ---@param player LuaPlayer
 function gui.check(player)
@@ -283,7 +283,7 @@ function gui.open_input(player)
 end
 
 -- The copy-entity-settings control: remembers the block under the cursor (anything else clears
--- it). Its settings are read when they are pasted (M4), as vanilla pastes the source's current
+-- it). Its settings are read when they are pasted, as vanilla pastes the source's current
 -- settings.
 ---@param player LuaPlayer
 function gui.copy_input(player)
@@ -336,7 +336,7 @@ function gui.checked(player, el)
   return changed
 end
 
--- Forgets everything kept for player `index` (on_player_removed, M1): its open block and its
+-- Forgets everything kept for player `index` (on_player_removed): its open block and its
 -- copied block, so a new player who gets the index inherits nothing.
 ---@param index integer
 function gui.forget(index)
@@ -346,9 +346,9 @@ function gui.forget(index)
 end
 
 -- After every balancer flush (balancer.after_flush): a group whose rebuild was refused keeps its
--- old network, so its settings go back to those of that network (M6: the checkboxes show what
+-- old network, so its settings go back to those of that network (the checkboxes show what
 -- the balancer does; the refusal message says the old balancer and its settings are kept), and
--- every open GUI is checked again (M3: its block may be gone, or its ratio changed).
+-- every open GUI is checked again (its block may be gone, or its ratio changed).
 ---@param refreshed integer[]
 function gui.after_flush(refreshed)
   for _, gid in ipairs(refreshed) do
@@ -444,7 +444,7 @@ function gui.on_closed(event)
   end
 end
 
--- on_player_left_game: the frame would stay on screen after a reload (M1).
+-- on_player_left_game: the frame would stay on screen after a reload.
 ---@param event EventData.on_player_left_game
 function gui.on_left(event)
   local player = player_of(event)
@@ -459,7 +459,7 @@ function gui.on_removed(event)
 end
 
 -- on_player_changed_position and on_player_controller_changed: a frame whose block is now out of
--- reach closes (M3). Only a player with an open frame does any work.
+-- reach closes. Only a player with an open frame does any work.
 ---@param event EventData.on_player_changed_position|EventData.on_player_controller_changed
 function gui.on_moved(event)
   local st = storage.mb_gui

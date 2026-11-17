@@ -4,7 +4,8 @@
 -- storage.regions        { cursor_x, cursor_y, row_h, used = { [key] = Region }, free = { Region } }
 --                        Region = { x, y, w, h } in tiles; key = "x,y" of its origin
 --
--- Regions are whole chunks plus a free chunk-aligned gap, laid out in rows of ROW_WIDTH tiles.
+-- Regions are rounded up to whole chunks with at least one free tile after the content, laid out
+-- in rows of ROW_WIDTH tiles.
 -- A released region goes on the free list, joined with free neighbours; a request takes the
 -- smallest free region that fits and leaves the rest of it free (surface.alloc, surface.free).
 -- All of this runs only when a network is built or removed.

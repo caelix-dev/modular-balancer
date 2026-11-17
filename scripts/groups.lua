@@ -1,8 +1,9 @@
 -- Connected groups of visible balancer blocks: blocks of one tier, one force and one surface
--- that touch edge to edge (4-neighbours) form one group, which becomes one balancer (spec
--- Update 2). Groups are merged when a block joins two or more of them and split when a removed
--- block was their only link. Runs only on build, remove and force-merge events
--- (scripts/events.lua).
+-- that touch edge to edge (4-neighbours) form one group, which becomes one balancer.
+-- Groups are merged when a block joins two or more of them and split when a removed block was
+-- their only link. Runs only on events: builds, removals, moves and force merges
+-- (scripts/events.lua), settings changes (scripts/gui.lua) and configuration changes
+-- (control.lua).
 --
 -- storage.groups = {
 --   next_id = integer,
@@ -21,7 +22,7 @@
 -- merged into another (game.merge_forces moves the entities without build or remove events).
 -- A script that sets LuaEntity::force on a block raises no event either; that is not tracked.
 --
--- Settings (Plan 3 Task 3): each group carries the balancer's two per-group settings, `lanes`
+-- Settings: each group carries the balancer's two per-group settings, `lanes`
 -- (balance lanes, default off) and `recirc` (redistribute unused shares, default on; nil reads as
 -- on, so groups from older saves keep the full guarantee). They live on the group, so they follow
 -- its id: a merge keeps the setting of the group that absorbs the others (the larger one, the
@@ -30,8 +31,8 @@
 --
 -- Cost: a removal only floods the group when the removed block had two or more neighbours in
 -- it, and stops as soon as all of them are reached, so taking a group apart from its ends is
--- O(1) per block. Callers that rebuild per changed group (Task 4) should coalesce: one rebuild
--- per group per batch of events, not one per event.
+-- O(1) per block. scripts/balancer.lua coalesces: one refresh per group per batch of
+-- events, not one per event.
 local groups = {}
 
 local PREFIX = "mb-balancer-"

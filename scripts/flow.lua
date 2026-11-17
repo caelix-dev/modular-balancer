@@ -17,7 +17,7 @@
 --   a plain splitter (no input priority):
 --     s(out 1) = min(a1 + a2, 1)
 --     s(out 2) = min(max(0, a1 + a2 - b1), 1)
---   This rule reproduces the F8 engine measurements of the recirculation prototype (3:5
+--   This rule reproduces the engine measurements of the recirculation prototype (3:5
 --   with two outputs open drew 45 / 22.5 / 22.5 items/s; 2:3 with a slow output gave
 --   15 / 37.5 / 37.5), pinned by flow_test.lua::f8_prototype_matches_the_engine.
 --
@@ -30,14 +30,12 @@
 -- At a fixed point these flows conserve items at every splitter and reproduce the
 -- water-filling split above (see the conservation checks in tests/unit/flow_test.lua).
 --
--- Offline only: tests/unit uses this module to prove the generator's networks; the mod
--- does not load it at runtime (Plan 2 runs only scripts/network.lua in game). If it is ever
--- used in game, call it only from build events and handle its error.
+-- Test code only: tests/unit and tests/game/exactness.lua use it to prove the generator's
+-- networks; product code never requires it, and release zips leave it out (.gitattributes).
 --
 -- Loops are solved by Gauss-Seidel fixed-point iteration (sweeps alternate between the
 -- node order and its reverse), sweeping all nodes until the
--- largest change in one sweep is at most TOLERANCE (1e-13, below the 1e-12 the plan asks
--- for). That is a step size, not a residual: with geometric convergence at rate r the
+-- largest change in one sweep is at most TOLERANCE (1e-13). That is a step size, not a residual: with geometric convergence at rate r the
 -- remaining error is about TOLERANCE * r / (1 - r), so 1e-13 keeps it far below the tests'
 -- 1e-9 for any rate seen (at most about 1 700 sweeps over all 256 ratios). The update is
 -- monotone (supply up, demand down), so from the default start (no inner supply, full
@@ -45,14 +43,14 @@
 -- demand 0) to the greatest; their network input and output flows agree (tested). It
 -- raises an error after MAX_SWEEPS sweeps.
 --
--- Where this can differ from the engine (Task 5 measures the engine):
+-- Where this can differ from the engine (tests/game/exactness.lua measures the engine):
 -- - Steady state only: no transients, belt lengths, item spacing or discrete items. A
 --   real splitter alternates item by item per lane; the model uses the long-run average.
 -- - The model assumes every edge reaches the full belt rate 1.0 when supplied and not
 --   blocked. A linked-belt pair or a splitter that loses compression would cap below 1.0.
 -- - flow.solve treats the belt as one stream. flow.solve_lanes splits it into two lanes of
---   0.5 each, assuming a splitter splits each lane independently (F3) and a lane splitter
---   water-fills between lanes like a splitter between belts (F5 measured only 1:2).
+--   0.5 each, assuming a splitter splits each lane independently and a lane splitter
+--   water-fills between lanes like a splitter between belts (measured only for 1:2).
 -- - If a network had several steady states the model returns the one reached from the
 --   initial values (default: no supply on inner edges, full demand). The tests also start
 --   from the all-blocked state.

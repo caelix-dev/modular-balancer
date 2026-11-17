@@ -27,7 +27,7 @@
 --                                                           tried again)
 -- }
 --
--- Bounded work (Plan 3 Task 5): the handler spends balancer.tick_budget work units per tick on
+-- Bounded work: the handler spends balancer.tick_budget work units per tick on
 -- scans, rebuilds, drains and spills; what does not fit waits for the next tick.
 --
 -- Conditional handlers, both re-set in on_load from storage alone (MODDING-RULES §2):
@@ -37,8 +37,8 @@
 -- balancer.registered (a per-peer mirror for tests, never read by product code).
 --
 -- Coalescing. Events only mark groups dirty (balancer.mark, mark_near, mark_block). The next
--- tick flushes them all at once (an on_nth_tick(1) handler that exists only while something is
--- dirty, re-set in on_load), so a bulk build or deconstruction refreshes each group once, not once
+-- tick flushes them all at once (the on_nth_tick(1) handler, registered only while
+-- balancer.pending, re-set in on_load), so a bulk build or deconstruction refreshes each group once, not once
 -- per entity. There is no per-tick script in the steady state.
 --
 -- A flush:
@@ -51,21 +51,22 @@
 --      group occupied (a rebuild there would build over them) and are marked for the group's
 --      robots (balancer.spill_clear);
 --   2. refreshes each live dirty group: scan; if it has at least one input and one output, its
---      edges and block-tile linked belts are put in place (claimed), the network is rebuilt
---      only when N or M changed, networks were merged in, or the group's settings (balance
---      lanes, redistribute unused shares; scripts/groups.lua, scripts/gui.lua) differ from those
---      the network was built with, and every port is linked. A group
+--      edges and block-tile linked belts are put in place (claimed); a network is built when the
+--      group has none, and rebuilt (staged, see "Staged rebuilds") only when N or M changed or
+--      the group's settings (balance lanes, redistribute unused shares; scripts/groups.lua,
+--      scripts/gui.lua) differ from those the network was built with; networks merged in drain
+--      into the working one; and every port is linked. A group
 --      without inputs or without outputs keeps its network, dormant, with its items, and has no
 --      visible ports;
 --   3. links shared tiles: the output network linked belt of one group straight to the input
---      network linked belt of the other (a tile between two blocks stays a plain belt, F1);
+--      network linked belt of the other (a tile between two blocks stays a plain belt);
 --   4. cleans the pool (and the loose edges): an edge no group claimed is swapped back to its
 --      belt (items kept), a
 --      block-tile linked belt no group claimed is removed and its items go into its group's
 --      network buffer (or are spilled when there is none);
 --   5. marks the groups around every tile whose belt-connectable is not what it was before the
 --      flush (swapped, unswapped, a block-tile linked belt added, removed or turned), for the next
---      tick (F3 re-check triggers; e.g. an inserter port facing a tile that is a plain belt again
+--      tick (e.g. an inserter port facing a tile that is a plain belt again
 --      moves). Only net changes count: a tile swapped and swapped back in the same flush (a
 --      failed rebuild, a group left without outputs) marks nothing, so a flush that cannot make
 --      progress does not run again every tick.
@@ -95,8 +96,8 @@ function balancer.after_flush(_) end
 ---@field stuck_shown boolean? a stuck drain's refusal was shown
 ---@field n integer network inputs of `placed`
 ---@field m integer network outputs of `placed`
----@field lanes boolean? `placed` has lane splitters (nil: no, a network from an older save)
----@field recirc boolean? `placed` recirculates (nil: yes, a network from an older save)
+---@field lanes boolean? `placed` has lane splitters (nil: no, a network from a pre-0.1.0 save)
+---@field recirc boolean? `placed` recirculates (nil: yes, a network from a pre-0.1.0 save)
 ---@field inputs mb.IoPort[] linked to placed.inputs[i]
 ---@field outputs mb.IoPort[] linked to placed.outputs[j]
 ---@field units (integer|uint64)[] blocks at the last refresh
@@ -105,7 +106,8 @@ function balancer.after_flush(_) end
 ---@field anchor { surface_index: integer, position: MapPosition }?
 ---@field refused { reason: string, position: MapPosition }[]
 
--- Work units (builder.COST) the flush handler spends per tick on rebuilds, drains and spills.
+-- Work units (builder.COST) the flush handler spends per tick on scans, rebuilds, drains, spills
+-- and edge unswaps.
 -- About 30 ms on a desktop. Generating a network cannot be split, so a tick that generates one
 -- can take longer (64:65: about 90 ms). A module constant, the same on every peer; tests lower it.
 balancer.tick_budget = 30000
@@ -181,9 +183,10 @@ local function arm_stuck()
   set_stuck_handler(true)
 end
 
--- True while a flush has work to do: dirty groups, or loose edges to claim or swap back. The one
--- rule for the flush handler: arm() is called whenever this becomes true, flush() unregisters the
--- handler and empties both, and on_load re-arms from it, so a client joining (or a save loaded)
+-- True while a flush has work to do: dirty groups, loose edges to claim or swap back, upgrade
+-- redirects, or staged work (balancer.working). The one rule for the flush handler: arm() is
+-- called whenever this becomes true, flush() ends by registering the handler exactly when this is
+-- still true, and on_load re-arms from it, so a client joining (or a save loaded)
 -- in such a tick registers the same handler as the players already in the game (MODDING-RULES
 -- §2). Reads storage only.
 ---@param st table?
@@ -203,7 +206,7 @@ function balancer.working(st)
     or (st.spill_queue ~= nil and next(st.spill_queue) ~= nil))
 end
 
--- on_load: re-sets the flush handler when a save was made with work pending.
+-- on_load: re-sets the flush handler and the stuck-drain retry from storage.
 function balancer.on_load()
   if balancer.pending(storage.balancer) then
     arm()
@@ -214,6 +217,8 @@ function balancer.on_load()
 end
 
 -- Marks groups for the next flush. `player_index` is the player whose action changed them.
+-- `internal`: marked by the flush itself, not by an event (a failed staged rebuild is then not
+-- retried).
 ---@param ids integer[]
 ---@param gone integer[]?
 ---@param player_index integer?
@@ -269,14 +274,14 @@ function balancer.mark_block_at(si, x, y, player_index)
   balancer.mark(ids, nil, player_index)
 end
 
--- A belt-connectable or an inserter changed (built, removed, rotated, flipped, pasted): marks
--- the groups it can affect. A belt changes the shape of belts up to two tiles away (curves,
--- side loading), and an inserter reaches belt_io.reach() tiles.
 -- Marks the groups of the blocks within `r` tiles of tile (x, y) of surface `si`.
 function balancer.mark_around(si, x, y, r, player_index)
   mark_tiles(si, x - r, y - r, x + r, y + r, player_index)
 end
 
+-- A belt-connectable or an inserter changed (built, removed, rotated, flipped, pasted): marks
+-- the groups it can affect. A belt changes the shape of belts up to two tiles away (curves,
+-- side loading), and an inserter reaches belt_io.reach() tiles.
 ---@param entity LuaEntity
 function balancer.mark_near(entity, player_index)
   local r = entity.type == "inserter" and belt_io.reach() or 2
@@ -284,7 +289,7 @@ function balancer.mark_near(entity, player_index)
   mark_tiles(entity.surface_index, x1 - r, y1 - r, x2 + r, y2 + r, player_index)
 end
 
--- The balancer record of a group (tests and later tasks), or nil.
+-- The balancer record of a group (scripts/gui.lua, tests), or nil.
 ---@param id integer?
 ---@return mb.Balancer?
 function balancer.get(id)
@@ -501,8 +506,8 @@ local function retire(st, id, ctx, live)
   end
 end
 
--- Staged rebuilds (Plan 3 Task 5, Review Focus 5: rebuild cost is bounded). A rebuild is a job
--- in st.jobs[gid] = { key, n, m, lanes, recirc, tier, force, player_index, b }:
+-- Staged rebuilds (the cost of a rebuild per tick is bounded). A rebuild is a job in
+-- st.jobs[gid] = { key, seq, n, m, lanes, recirc, tier, force, player_index, b, net? }:
 --   1. generate and plan the network (network.build, builder.start): one tick, it cannot be
 --      split; it starts only in a tick with budget left;
 --   2. place it, a budget's worth of entities per tick (builder.advance). The old network keeps
@@ -513,7 +518,7 @@ end
 --      it, a budget's worth of items per tick (st.drains, builder.drain). Each item moves exactly
 --      once, from a sealed network to the working one, so nothing is lost or duplicated whatever
 --      the tick or save it is interrupted at.
--- A small rebuild fits in one tick and completes inside the flush that asked for it, as before.
+-- A small rebuild fits in one tick and completes inside the flush that asked for it.
 -- Everything is in storage, and the budget is counted in work units, not time, so a save
 -- made mid-rebuild loads and finishes it, and every peer of a multiplayer game does the same work
 -- in the same tick.
@@ -1008,7 +1013,7 @@ local function step_job(st, gid, job, rec, ctx)
     ctx.refreshed[#ctx.refreshed + 1] = gid
   elseif status == "failed" then
     -- the next flush keeps the old network, drops the ports it cannot take and shows the
-    -- refusal; this shape is not tried again until the group changes or a player marks it
+    -- refusal; this shape is not tried again until the group changes or an event marks it
     log("modular-balancer: group " .. gid .. " " .. job.n .. ":" .. job.m .. " not rebuilt: " .. tostring(err))
     rec.failed, rec.failed_err = job.key, err
     balancer.mark({ gid }, nil, job.player_index, true)
@@ -1026,7 +1031,7 @@ local function jobs_in_order(st)
 end
 
 -- The staged work of a tick, within ctx.units: rebuild jobs (in the order they started), then
--- drains, then spills (group id order).
+-- drains (group id order), then spills (queue order).
 local function work(st, ctx)
   for _, gid in ipairs(jobs_in_order(st)) do
     if ctx.units <= 0 then
@@ -1038,7 +1043,7 @@ local function work(st, ctx)
       abort_job(st, gid)
     elseif ctx.deferred and ctx.deferred[gid] then
       -- its refresh waits for a later tick (budget) and may change its shape: no work on a
-      -- placement that may be dropped (review m3)
+      -- placement that may be dropped
     else
       step_job(st, gid, job, rec, ctx)
     end
@@ -1055,7 +1060,8 @@ end
 -- Refreshes every dirty group (see the header), then does staged work: rebuilds, drains and
 -- spills (see "Staged rebuilds"). The on_nth_tick(1) handler calls it with balancer.tick_budget
 -- work units; without a budget (tests, balancer.refresh) it finishes all staged work at once.
--- The handler stays registered while dirty groups, loose edges or staged work remain.
+-- The handler stays registered while balancer.pending (dirty groups, loose edges, upgrade
+-- redirects, staged work).
 ---@param budget number?
 function balancer.flush(budget)
   local st = state()
@@ -1083,7 +1089,7 @@ function balancer.flush(budget)
     units = budget or math.huge, budget = budget or math.huge, retry = retry, deferred = {} }
   -- a large network waiting to be generated goes first, before any refresh, every other tick, so
   -- a steady stream of small refreshes (robots building near balancers) cannot starve it
-  -- (review m1). Its group is not dirty now (a refresh may change its shape).
+  -- Its group is not dirty now (a refresh may change its shape).
   if budget and st.last_generated ~= game.tick - 1 then
     for _, gid in ipairs(jobs_in_order(st)) do
       local job = st.jobs[gid] --[[@as table]]
@@ -1117,7 +1123,7 @@ function balancer.flush(budget)
   end
   link_shared(st, ctx)
   cleanup(st, ctx)
-  -- F3: a tile swapped into an edge or back, or a block-tile linked belt that changed, can
+  -- A tile swapped into an edge or back, or a block-tile linked belt that changed, can
   -- change the ports next to it (a port facing a tile that is a plain belt again, a belt whose
   -- shape changed). Their groups are flushed again on the next tick, but only for tiles that
   -- really differ now: a flush that put everything back as it was marks nothing.
@@ -1361,8 +1367,8 @@ function balancer.redirect_upgrade(e, target, player_index)
   arm()
 end
 
--- Configuration change: networks placed by an older version can be damaged (Plan 3 Task 5 sets
--- every hidden entity indestructible when it is created). Makes them indestructible too.
+-- Configuration change: makes every hidden entity of an existing network indestructible
+-- (networks from development builds before 0.1.0 were not; builder.lua sets it on creation).
 function balancer.harden()
   for _, rec in pairs(storage.balancer and storage.balancer.recs or {}) do
     for _, p in ipairs(nets_of(rec)) do
@@ -1388,7 +1394,7 @@ end
 -- The hidden surface is about to go (deleted or cleared by another mod or a command): every
 -- network's items are spilled at its group, the networks are dropped, and every group is marked,
 -- so the next flush places new networks on a new surface. Nothing is deleted.
--- Unbounded on purpose (review m7): it runs in the event before the hidden surface goes, so every
+-- Unbounded on purpose: it runs in the event before the hidden surface goes, so every
 -- network must be out before the event returns. A rare admin or mod action.
 function balancer.drop_networks()
   local st = state()
@@ -1428,11 +1434,11 @@ function balancer.drop_networks()
   balancer.mark_all()
   -- mark_all arms only when a live group is left: with none (the last balancer was just mined
   -- and its network was being spilled), nothing is pending any more and the handler goes, so the
-  -- registration matches storage as on_load would set it (review m1)
+  -- registration matches storage as on_load would set it
   set_flush_handler(balancer.pending(st))
 end
 
--- Marks group `id` and flushes at once (the interface of the plan; events mark and let the next
+-- Marks group `id` and flushes at once (tests: tests/game/play.lua; events mark and let the next
 -- tick flush).
 ---@param id integer
 ---@param player_index integer?

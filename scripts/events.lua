@@ -30,8 +30,9 @@
 -- type filters for belt-connectables and inserters (MODDING-RULES §3). Blocks go to the groups;
 -- the groups they change and the groups near any other entity are marked for the next balancer
 -- flush (coalesced, one refresh per group per batch of events). A belt-connectable built on a
--- block tile, or a block built on one, is undone and handed back (Ruling 6). The build events
--- also take ghosts of linked belts: a ghost of an edge becomes a ghost of its belt, and an edge
+-- block tile, or a block built on a belt, is undone and handed back, except that a block ghost
+-- marks the belt under it for deconstruction and the built block then replaces that belt (items
+-- kept). The build events also take ghosts of linked belts and of blocks: a ghost of an edge becomes a ghost of its belt, and an edge
 -- built by the game (not by this mod, which raises no event for its own swaps) is kept only if
 -- a group claims it at the next flush. The player or robot that mines the last block of a group
 -- gets its network's items (scripts/balancer.lua). A mod has one handler per event: control.lua
@@ -46,7 +47,7 @@ local events = {}
 
 local E = defines.events
 
--- Name filters for the block prototypes that exist (turbo only with Space Age), and type
+-- Name filters for the block prototypes (turbo exists hidden without Space Age), and type
 -- filters for belt-connectables and inserters.
 local function filters()
   local list = {}

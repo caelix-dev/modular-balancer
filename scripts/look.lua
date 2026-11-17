@@ -1,4 +1,4 @@
--- Connected look of the balancer blocks (Plan 3 Task 4). Shared by the prototype stage
+-- Connected look of the balancer blocks. Shared by the prototype stage
 -- (prototypes/blocks.lua: one graphics variation per neighbourhood) and the control stage
 -- (scripts/balancer.lua: sets each block's variation when its group is refreshed).
 --

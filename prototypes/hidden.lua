@@ -16,7 +16,7 @@
 --   mb-hidden-buffer                the buffer chest (one per network) that holds what a rebuild
 --                                   could not put back on the belts; its size is set per network
 --                                   at runtime with set_inventory_size_override
--- On nauvis (the player's side), scripts/io.lua places:
+-- On the player's surfaces, scripts/io.lua places:
 --   mb-hidden-linked-belt-<tier>    also the block-tile interface and the inserter belt port (F1,
 --                                   F3), on a block's own tile under the block
 --   mb-edge-in-<belt>, mb-edge-out-<belt>
@@ -28,14 +28,16 @@
 --                                   edges allow side loading like the belt they replace; output
 --                                   edges do not. They look like the belt (no hatch; the half
 --                                   tile a linked belt leaves blank is drawn by scripts/io.lua,
---                                   see below) and share its fast-replace group, so belts are
---                                   dragged and fast-replaced over them and the balancer swaps the
---                                   new belt again. Hidden, so no planner lists them
+--                                   see below). They have a fast-replace group of their own
+--                                   (below), so a belt dragged across or against one goes under
+--                                   it; a line dragged along it in its direction replaces it
+--                                   (scripts/lifecycle.lua, on_pre_build) and the balancer swaps
+--                                   the new belt again. Hidden, so no planner lists them
 -- Tiers: basic, fast, express and turbo (see TIERS).
 --
 -- Required from data-final-fixes.lua, so every speed is read from the final belt prototype: a
 -- mod that changes a belt's speed in data-updates or in an earlier data-final-fixes also
--- changes the hidden entities of that tier (final review M3).
+-- changes the hidden entities of that tier.
 
 ---@type { name: string, belt: string, splitter: string, speed: number? }[]
 local TIERS = {
@@ -195,9 +197,8 @@ for _, belt in pairs(data.raw["transport-belt"]) do
     -- sources (order_upgrade on an edge is refused); scripts/lifecycle.lua follows the planner
     -- through the edge's neighbours instead, and redirects any order whose target is an edge
     e.next_upgrade = nil
-    -- the belt's look (spec Update 2026-10-25): the belt's animation set, sounds, corpse and
-    -- explosion; selected like the belt. Its structure is the block's port hood
-    -- (Plan 3 Task 4): a cowling over the half tile next to the block, where items go into or
+    -- the belt's look: the belt's animation set, sounds, corpse and explosion; selected like
+    -- the belt. Its structure is the block's port hood: a cowling over the half tile next to the block, where items go into or
     -- come out of the link, with the belt's mouth at its far end (graphics/entity/balancer/, rendered by tools/render/).
     e.structure = edge_hood(belt.name, role)
     e.structure_render_layer = "object"

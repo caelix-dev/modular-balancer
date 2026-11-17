@@ -1,4 +1,4 @@
--- Two hidden, forced startup settings gate the development code (final review M4). Neither a
+-- Two hidden, forced startup settings gate the development code. Neither a
 -- player nor a value saved earlier in an instance's mod-settings.dat can change them.
 --
 -- `mb-dev` gates the test code: the harness prototypes (tests/game/data.lua), the `mb-test`

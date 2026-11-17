@@ -1,6 +1,8 @@
 -- Belts and inserters around a group of blocks (docs/feasibility.md F1, F3, F4): finds a group's
 -- inputs and outputs, swaps belt tiles for edges and back, and places the linked belts that sit
--- on a block's own tile. Runs only from scripts/balancer.lua (build, remove and rotate events).
+-- on a block's own tile. Called from scripts/balancer.lua (the flush), scripts/events.lua (builds on
+-- a block tile) and scripts/lifecycle.lua (edge swap-back, configuration changes); runs only on
+-- events.
 --
 -- Ports. For each block and each side d whose neighbour tile T holds no block:
 --   edge      a plain transport belt on T pointing straight into the block (input) or leaving it
@@ -17,7 +19,7 @@
 --             into the block or takes from it: a linked belt on the block's own tile faces T (the
 --             block-tile interface). At most one per block; a second one is refused. An edge
 --             candidate with circuit wires or a control behaviour is served the same way, so the
---             player's belt and its wires stay untouched (Ruling 7); with the block's tile
+--             player's belt and its wires stay untouched; with the block's tile
 --             already taken it is refused ("wired-belt"), never swapped.
 --   inserter  inserters whose pickup position is on the block tile take from it (one output
 --             port per block), those whose drop position is on it put into it (one input port).
@@ -183,7 +185,7 @@ local function unswappable_role(e, d)
 end
 
 -- True when belt `e` has a circuit wire or a control behaviour that does something (enable /
--- disable by circuit or logistic condition, read contents). A swap would lose them (Ruling 7).
+-- disable by circuit or logistic condition, read contents). A swap would lose them.
 ---@param e LuaEntity
 local function controlled(e)
   for _, c in pairs(e.get_wire_connectors(false)) do
@@ -313,7 +315,7 @@ function belt_io.scan(group)
               port.kind = nil
             end
           elseif not edge_belt and controlled(e) then
-            -- Ruling 7: an edge cannot carry wires or control behaviour, so a wired or
+            -- an edge cannot carry wires or control behaviour, so a wired or
             -- controlled belt is left untouched and served by the block-tile interface
             if tile_port then
               refuse("wired-belt", tx, ty)
@@ -693,7 +695,7 @@ function belt_io.clear_for_block(belt, event, force)
   inv.destroy()
 end
 
--- Ruling 6: undoes a build that put a belt-connectable on a block tile (or a block on a belt).
+-- Undoes a build that put a belt-connectable on a block tile (or a block on a belt).
 -- The entity is mined with its contents and handed back to the player or robot that built it;
 -- what does not fit (or with no builder) is spilled where it stood. Shows `reason` as flying
 -- text to the player. No item is lost.

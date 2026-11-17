@@ -1,5 +1,9 @@
 # Feasibility findings
 
+A research log written during development (2026-10-24 to 2026-10-26, before 0.1.0). The
+findings are kept as measured at the time; some designs described here were later changed.
+Current behaviour is in `README.md`, the code map in `CLAUDE.md`.
+
 Measured in Factorio 2.1.23 with fdev (`fdev test`, MCP `server_start` / `exec_lua` /
 `screenshot`).
 

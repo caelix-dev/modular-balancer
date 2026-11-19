@@ -178,7 +178,13 @@ return {
     check_ports(net)
     expect(net, "copper", "1:R")
     expect(net, "iron", "2:L 2:R")
-    expect(net, "stone", "3")
+    expect(net, "stone", "1:L 3")
+    -- an empty slot takes the rest: an item nobody sends on the left lane keeps it empty
+    specs = { filters.effective({ items = { "planner", "" }, lanes = true, use = true }) }
+    net = assert(network.build(1, 1, { filters = specs }))
+    check_ports(net)
+    expect(net, "stone", "1:R")
+    expect(net, "planner", "1:L")
   end,
 
   big_filtered_network_builds = function()

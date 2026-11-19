@@ -633,10 +633,11 @@ end
 -- Filtered network (opts.filters, one mb.FilterSpec or false per output; scripts/filters.lua).
 --
 -- Sinks: an output without a lane filter is one sink (j, 0); an output with one has a sink per
--- lane that has an item: (j, 1) left, (j, 2) right. Every item named in any filter gets the set
--- of sinks that take it: the sinks whose whitelist (or lane slot) names it if there are any
--- (exclusive), else every whole sink without a whitelist whose blacklist does not name it. Items
--- not named anywhere (the rest) go to every whole sink without a whitelist. Named items with the
+-- lane: (j, 1) left, (j, 2) right. A lane with an empty slot is open: it takes what an output
+-- without a filter takes. Every item named in any filter gets the set of sinks that take it: the
+-- sinks whose whitelist (or lane slot) names it if there are any (exclusive), else every open
+-- sink (a whole sink without a whitelist whose blacklist does not name it, or an open lane).
+-- Items not named anywhere (the rest) go to every open sink. Named items with the
 -- same sink set as another named item form one class, and a named item whose set is the rest's
 -- joins the rest; each class keeps the order of its first item (items sorted by name).
 --
@@ -650,8 +651,10 @@ end
 --   recirculation passes unused shares between them.
 -- - every whole sink merges the wires of the classes it is in (merge tree) into its output. A lane
 --   sink passes a lane splitter whose filter is its item, with output priority on its lane (the
---   filter item goes to the priority lane: measured), and the two lanes of an output merge in a
---   splitter, which keeps lanes apart.
+--   filter item goes to the priority lane: measured). An open lane passes a lane splitter whose
+--   filter is the other lane's item, with priority on the other lane: that item never reaches it
+--   (claimed), so everything goes to the open lane (a filter splitter sends the other items only
+--   to its other side). The two lanes of an output merge in a splitter, which keeps lanes apart.
 -- A class with no sink leaves its filtered port (or the end of the chain, for the rest)
 -- unconnected: those items wait in front of it and block that input, as a vanilla filter
 -- splitter whose filtered side is full.
@@ -713,12 +716,8 @@ local function filtered(n, m, specs, opts)
   for j = 1, m do
     local s = specs[j]
     if s and s.lanes then
-      if s.left then
-        sink(j, 1)
-      end
-      if s.right then
-        sink(j, 2)
-      end
+      sink(j, 1)
+      sink(j, 2)
     else
       sink(j, 0)
     end
@@ -751,6 +750,13 @@ local function filtered(n, m, specs, opts)
     local s = specs[j]
     if not s or (not s.lanes and s.exclude) then
       rest[#rest + 1] = sink_of[j .. ":0"]
+    elseif s.lanes then
+      if not s.left then
+        rest[#rest + 1] = sink_of[j .. ":1"]
+      end
+      if not s.right then
+        rest[#rest + 1] = sink_of[j .. ":2"]
+      end
     end
   end
   local rest_key = set_key(rest)
@@ -765,6 +771,12 @@ local function filtered(n, m, specs, opts)
         end
         if s.right == x then
           claim[#claim + 1] = sink_of[j .. ":2"]
+        end
+        if not s.left then
+          open[#open + 1] = sink_of[j .. ":1"]
+        end
+        if not s.right then
+          open[#open + 1] = sink_of[j .. ":2"]
         end
       elseif s and not s.exclude then
         for _, y in ipairs(s.items or {}) do
@@ -872,10 +884,16 @@ local function filtered(n, m, specs, opts)
       local sides = {}
       local items = { s.left or false, s.right or false }
       for lane = 1, 2 do
-        local x = items[lane]
-        if x then
-          local id = new_lane(x, lane == 1 and "left" or "right")
-          edge(merge(sink_wires[sink_of[j .. ":" .. lane]]), port("lane_splitter", id, 1))
+        local x, other = items[lane], items[3 - lane]
+        local wires = sink_wires[sink_of[j .. ":" .. lane]]
+        if #wires > 0 then
+          local id
+          if x then
+            id = new_lane(x, lane == 1 and "left" or "right")
+          else -- open lane: the other lane's item is claimed, so all goes to this lane
+            id = new_lane(other, lane == 1 and "right" or "left")
+          end
+          edge(merge(wires), port("lane_splitter", id, 1))
           sides[#sides + 1] = port("lane_splitter", id, 1)
         end
       end

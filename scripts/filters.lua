@@ -15,7 +15,8 @@
 --   exclude   blacklist: the block's outputs take everything except these items (and except the
 --             items another block's whitelist claims).
 --   lanes     per lane: slot 1 goes on the left lane of every output of the block, slot 2 on the
---             right lane, nothing else (a whitelist per lane). Slots 3 to 5 and `exclude` are kept
+--             right lane (a whitelist per lane). A lane whose slot is empty takes everything else,
+--             as an output without a filter would. Slots 3 to 5 and `exclude` are kept
 --             but do nothing while it is on (the GUI locks them, and the group's balance-lanes
 --             checkbox in this block's window).
 -- Items are matched by name, any quality (a splitter filter without a quality, measured).

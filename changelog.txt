@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.1
+Date: 2026-11-19
+  Bugfixes:
+    - Per lane filters: a lane whose slot is empty now takes every other item, as an output without a filter. Before, it took nothing, so an item in one slot and the other slot empty blocked the balancer.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.0
 Date: 2026-11-18
   Features:

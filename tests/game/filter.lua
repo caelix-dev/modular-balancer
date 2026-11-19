@@ -153,6 +153,36 @@ describe("filter", function()
     end)
   end)
 
+  -- Per lane with an item nothing brings in slot 1 and slot 2 empty (a reported case: halve a
+  -- full mixed belt): the empty right lane takes everything, the left lane stays empty, nothing
+  -- blocks.
+  test("empty_lane_takes_the_rest", function()
+    async(1200)
+    local o, box = area(14, 12)
+    local a = H.block(o, 6, 3, H.TIER)
+    H.block(o, 6, 4, H.TIER)
+    local STOCK = 2000
+    H.feed(o, 6, 3, D.west, 3, { stock = STOCK, item = "iron-plate" })
+    H.feed(o, 6, 4, D.west, 3, { stock = STOCK, item = "copper-plate" })
+    local sa = H.sink(o, 6, 3, D.east, 3)
+    gui.set_filter(a, { items = { "deconstruction-planner", "" }, lanes = true, use = true })
+    balancer.flush()
+    local rec = assert(balancer.get(groups.of(a.unit_number)))
+    assert(rec.n == 2 and rec.m == 1, "network " .. rec.n .. ":" .. rec.m)
+    after_ticks(1000, function()
+      local t = lanes_of(sa.belts)
+      local iron, copper = chest_count(sa, "iron-plate"), chest_count(sa, "copper-plate")
+      H.report("filter empty lane: belt left %s right %s; chest iron %d copper %d", serpent.line(t[1]), serpent.line(t[2]), iron, copper)
+      assert(next(t[1]) == nil, "left lane: " .. serpent.line(t[1]))
+      assert((t[2]["iron-plate"] or 0) > 0 and (t[2]["copper-plate"] or 0) > 0, "right lane: " .. serpent.line(t[2]))
+      assert(iron > 50 and copper > 50, "blocked: iron " .. iron .. ", copper " .. copper)
+      for _, item in ipairs({ "iron-plate", "copper-plate" }) do
+        assert(H.count_box(box, item) == STOCK, item .. " lost or made: " .. H.count_box(box, item))
+      end
+      done()
+    end)
+  end)
+
   -- Removing a filter from a running balancer rebuilds it to the plain network with every item.
   test("filter_off_rebuilds_with_items", function()
     async(900)

@@ -2,7 +2,7 @@
 
 A Factorio 2.1 mod that adds a modular N:M belt balancer. Place 1x1 blocks in any connected shape and attach belts: every belt feeding a block is an input, every belt it feeds is an output, and the group works as an exact N:M balancer. Items are never lost or duplicated, and the steady state does no per-tick script work.
 
-Version 0.2.0, for Factorio 2.1. Space Age is optional. MIT License.
+Version 0.2.1, for Factorio 2.1. Space Age is optional. MIT License.
 
 ## Blocks
 
@@ -46,7 +46,7 @@ The lower part of the settings window is the clicked block's own item filter, la
 - **Use filters** turns the filter on. Off, it is kept but does nothing, and the slots, the switch and Per lane cannot be changed. Picking the first item on a block turns it on.
 - **Whitelist** (five slots): the block's outputs take only these items, and these items go only to blocks that list them, as with a vanilla filter splitter. Several blocks listing the same item share it equally. The other outputs of the balancer share everything else.
 - **Blacklist:** the block's outputs take everything except the listed items (and except items another block's filter claims).
-- **Per lane:** slot 1 goes on the left lane of the block's outputs and slot 2 on the right lane, nothing else. Only two slots are shown; slots 3 to 5, the Whitelist/Blacklist switch and, in that block's window, Balance lanes keep their values but are locked while it is on.
+- **Per lane:** slot 1 goes on the left lane of the block's outputs and slot 2 on the right lane. A lane whose slot is empty takes everything else, as an output without a filter would: an item nothing takes in slot 1 and an empty slot 2 puts all items on the right lane. Only two slots are shown; slots 3 to 5, the Whitelist/Blacklist switch and, in that block's window, Balance lanes keep their values but are locked while it is on.
 
 In alt mode a block shows its filter items, as an inserter does (crossed out for a blacklist).
 

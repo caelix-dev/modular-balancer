@@ -307,12 +307,23 @@ local function gui_info(player_index)
   return out
 end
 
+local TIPS = require("prototypes.tips_scenes")
 local functions = {
   gui_open = gui_open, input = input, click = click, setup_blueprint = setup_blueprint, info = info,
   gui_info = gui_info,
   build = build, count = count, block = block, bench_hidden = bench_hidden, bench_vanilla = bench_vanilla,
   groups_build = groups_build, groups_summary = groups_summary, groups_bridge = groups_bridge,
   groups_destroy = groups_destroy,
+  -- the init and update code of tips and tricks scene `name` (prototypes/tips_scenes.lua), to run
+  -- on a test server as the simulation runs it
+  tips_code = function(name)
+    for _, sc in ipairs(TIPS.SCENES) do
+      if sc.name == name then
+        local init, update = TIPS.code(sc)
+        return { init = init, update = update }
+      end
+    end
+  end,
 }
 -- UPS gate saves (Plan 3 Task 1): bench/builders.lua, docs/benchmarks.md.
 for name, fn in pairs(require("bench.builders")) do

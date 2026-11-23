@@ -2,7 +2,7 @@
 
 A Factorio 2.1 mod that adds a modular N:M belt balancer. Place 1x1 blocks in any connected shape and attach belts: every belt feeding a block is an input, every belt it feeds is an output, and the group works as an exact N:M balancer. Items are never lost or duplicated, and the steady state does no per-tick script work.
 
-Version 0.2.1, for Factorio 2.1. Space Age is optional. MIT License.
+Version 0.3.0, for Factorio 2.1. Space Age is optional. MIT License.
 
 ## Blocks
 
@@ -110,6 +110,17 @@ Other limits:
   - If that buffer cannot take more (very many kinds of items that do not stack together), the rest waits in the old network and a message says so. It moves over once there is room; nothing is lost.
 - An item that spoils into a creature (a biter or pentapod egg) and spoils inside a balancer vanishes: nothing hatches inside the hidden network, which cannot be damaged anyway.
 - **Removed tiers:** if a tier's belt no longer exists (for example turbo after Space Age is removed), its blocks are replaced by the fastest tier left, with their items.
+
+## Tips and tricks
+
+The game's Tips and tricks window (the light bulb button) has a Modular balancer category. Each entry runs a real balancer in a short simulation, with the items per second of every output lane written next to it:
+
+- **Balancing:** 2 full belts into 3 outputs, each output gets a third.
+- **Balance lanes:** an input on one lane, with the setting off and on.
+- **Redistribute unused shares:** one output blocked, with the setting off (its share goes to one neighbour) and on (the others stay equal).
+- **Filters:** a whitelist block takes copper plates from a mixed belt, the other blocks share the iron.
+- **Per lane filters:** a mixed belt comes out sorted, iron on the left lane and copper on the right.
+- **Half a belt with a per lane filter:** slot 1 holds an item that never comes on the belt (a deconstruction planner), so every item goes on the right lane and a full belt comes out as half a belt.
 
 ## Performance
 

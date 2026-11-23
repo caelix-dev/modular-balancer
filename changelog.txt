@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.3.0
+Date: 2026-11-23
+  Features:
+    - Tips and tricks: a Modular balancer category with a simulation of a real balancer for each use: balancing, Balance lanes (off and on), Redistribute unused shares (off and on, with a blocked output), filters, per lane filters, and half a belt from a per lane filter whose slot 1 holds an item that never comes on the belt. Each output lane shows its items per second.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.1
 Date: 2026-11-19
   Bugfixes:

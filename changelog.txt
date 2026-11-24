@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.3.1
+Date: 2026-11-24
+  Bugfixes:
+    - A belt ghost (belt, underground belt, splitter) could be placed over a block or a block ghost. It is now removed at once, and a block ghost placed on a belt ghost removes the belt ghost. Before, robots could build the belt first and the block was then refused, so the balancer was never built.
+---------------------------------------------------------------------------------------------------
 Version: 0.3.0
 Date: 2026-11-23
   Features:

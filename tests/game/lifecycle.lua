@@ -697,6 +697,39 @@ describe("lifecycle", function()
     assert(H.count_box(box, ITEM) == before, "items lost: " .. H.count_box(box, ITEM) .. " of " .. before)
   end)
 
+  -- Belt ghosts never overlap blocks (the block does not collide with belts, so the game lets
+  -- them): a belt-connectable ghost on a block or a block ghost is removed at once, whatever its
+  -- size; a block ghost on a belt ghost removes the belt ghost, as it replaces a belt.
+  test("belt_ghosts_never_overlap_blocks", function()
+    local o, box = area(12, 10)
+    local s = game.surfaces.nauvis
+    local function ghost(name, dx, dy, dir)
+      return s.create_entity({ name = "entity-ghost", inner_name = name, position = { o.x + dx, o.y + dy }, direction = dir, force = "player", raise_built = true })
+    end
+    local function gone(g, what)
+      assert(not (g and g.valid), what .. " was kept")
+    end
+    local blk = "mb-balancer-" .. H.TIER
+    H.block(o, 2, 2, H.TIER)
+    gone(ghost(H.BELT, 2, 2, D.east), "a belt ghost on a block")
+    local bg = ghost(blk, 5, 2)
+    gone(ghost(H.BELT, 5, 2, D.east), "a belt ghost on a block ghost")
+    gone(ghost("underground-belt", 5, 2, D.east), "an underground belt ghost on a block ghost")
+    -- a splitter facing east covers (6, 2) and (6, 3); only (6, 3) is a block ghost
+    ghost(blk, 6, 3)
+    local sg = ghost("splitter", 6, 2.5, D.east) -- o is a tile centre: this covers (6, 2) and (6, 3)
+    gone(sg, "a splitter ghost half on a block ghost")
+    assert(bg and bg.valid, "the block ghost was removed")
+    local beltg = ghost(H.BELT, 8, 6, D.east)
+    assert(beltg and beltg.valid, "a belt ghost on a free tile was refused")
+    local bg2 = ghost(blk, 8, 6)
+    assert(bg2 and bg2.valid, "the block ghost on a belt ghost was refused")
+    gone(beltg, "the belt ghost under a block ghost")
+    for _, g in ipairs(s.find_entities_filtered({ area = box, type = "entity-ghost" })) do
+      assert(not belt_io.IS_BELT_TYPE[g.ghost_type], "a " .. g.ghost_name .. " ghost is left at " .. serpent.line(g.position))
+    end
+  end)
+
   -- The upgrade planner on a block: a backed-up basic block marked for fast and upgraded (as a
   -- robot would: apply_upgrade raises destroy and built). The fast block joins a group (no overlap
   -- refusal), the network is rebuilt at the fast tier with every item, and it runs. The same

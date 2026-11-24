@@ -1,6 +1,6 @@
 {
   "name": "modular-balancer",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "title": "Modular Balancer",
   "author": "caelix",
   "description": "A modular N:M belt balancer: place 1x1 blocks in any connected shape and attach belts. Every belt feeding the group is an input, every belt it feeds is an output, and the outputs share exactly equally.",

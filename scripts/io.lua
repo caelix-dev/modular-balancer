@@ -651,6 +651,58 @@ function belt_io.on_block_tile(entity)
   return false
 end
 
+-- The block names of every tier that exists, for ghost searches.
+---@type string[]?
+local block_ghost_names
+local function block_names()
+  if not block_ghost_names then
+    local list = {}
+    for _, tier in ipairs(groups.TIERS) do
+      local name = "mb-balancer-" .. tier
+      ---@diagnostic disable-next-line: unnecessary-if
+      if prototypes.entity[name] then
+        list[#list + 1] = name
+      end
+    end
+    block_ghost_names = list
+  end
+  return block_ghost_names
+end
+
+-- True when the ghost `ghost` (of a belt-connectable) covers a tile holding a balancer block or a
+-- block ghost. The block does not collide with belts, so the game lets such ghosts overlap it.
+---@param ghost LuaEntity
+function belt_io.ghost_on_block(ghost)
+  local bb = ghost.bounding_box -- a returned box always has the named fields
+  local lt, rb = bb.left_top --[[@as {x: number, y: number}]], bb.right_bottom --[[@as {x: number, y: number}]]
+  local x1, y1 = math.floor(lt.x + 0.01), math.floor(lt.y + 0.01)
+  local x2, y2 = math.floor(rb.x - 0.01), math.floor(rb.y - 0.01)
+  local si = ghost.surface_index
+  for x = x1, x2 do
+    for y = y1, y2 do
+      if groups.block_at(si, x, y) then
+        return true
+      end
+    end
+  end
+  return ghost.surface.find_entities_filtered({
+    area = { { x1 + 0.1, y1 + 0.1 }, { x2 + 0.9, y2 + 0.9 } }, type = "entity-ghost", ghost_name = block_names(), limit = 1,
+  })[1] ~= nil
+end
+
+-- The belt-connectable ghosts (not the mod's own) covering block tile (x, y) of `s`.
+---@param s LuaSurface
+---@return LuaEntity[]
+function belt_io.belt_ghosts_on(s, x, y)
+  local list = {}
+  for _, g in ipairs(s.find_entities_filtered({ area = tile_area(x, y), type = "entity-ghost", ghost_type = belt_io.BELT_TYPES })) do
+    if not belt_io.is_ours(g.ghost_name) then
+      list[#list + 1] = g
+    end
+  end
+  return list
+end
+
 -- A belt-connectable on block tile (x, y) of `s` other than the mod's block-tile linked belts
 -- (edges count: a block cannot be built on an edge either), or nil.
 ---@param s LuaSurface

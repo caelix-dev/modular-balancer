@@ -99,6 +99,20 @@ local function built(entity, event)
       if belt and not belt.to_be_deconstructed() then
         belt.order_deconstruction(entity.force, player and game.get_player(player) or nil)
       end
+      -- belt ghosts there go: the block takes the tile, as it takes a belt's
+      for _, g in ipairs(belt_io.belt_ghosts_on(entity.surface, math.floor(p.x), math.floor(p.y))) do
+        g.destroy()
+      end
+    elseif belt_io.IS_BELT_TYPE[entity.ghost_type] and not belt_io.is_ours(entity.ghost_name) and belt_io.ghost_on_block(entity) then
+      -- a belt ghost on a block or a block ghost (the game lets it overlap): refused, as a belt
+      -- built there would be; otherwise a robot building the belt first would get the block refused
+      local s, pos = entity.surface, entity.position
+      entity.destroy()
+      local pl = player and game.get_player(player)
+      if pl and pl.valid then
+        pl.create_local_flying_text({ text = { "mb-message.belt-on-block" }, position = pos, surface = s })
+      end
+      return
     end
     if not lifecycle.unghost(entity, player) then
       lifecycle.replace_orphan_ghost(entity)
@@ -199,7 +213,11 @@ end
 function events.register()
   local f = filters()
   local fb = filters()
-  fb[#fb + 1] = { filter = "ghost_type", type = "linked-belt" }
+  -- belt-connectable ghosts: edge ghosts (linked belts) become belt ghosts, and belt ghosts on a
+  -- block are refused
+  for _, t in ipairs(belt_io.BELT_TYPES) do
+    fb[#fb + 1] = { filter = "ghost_type", type = t }
+  end
   for _, tier in ipairs(groups.TIERS) do
     ---@diagnostic disable-next-line: unnecessary-if
     if prototypes.entity["mb-balancer-" .. tier] then
